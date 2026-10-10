@@ -14,14 +14,23 @@ namespace ikaros
 // virtual functions.
 struct IkarosEngineBehaviour  : public te::EngineBehaviour
 {
-    // Recording isn't implemented yet, so don't open audio inputs. This also
-    // avoids opening a duplex device, which some ALSA→PipeWire setups crash on.
-    // TODO(milestone-2): open inputs when the user arms a track for recording.
-    bool shouldOpenAudioInputByDefault() override   { return false; }
+    bool shouldOpenAudioInputByDefault() override   { return true; }
 
     // We initialise the device manager ourselves (see AudioEngine::Impl) so we
-    // can ask for a plain stereo output instead of "every channel available".
+    // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
+
+    // Recorded audio goes to Documents/Ikaros Studio/Recordings rather than
+    // next to the session file: an untitled session lives in a temp folder,
+    // and takes recorded there would be lost.
+    // TODO: copy a session's recordings into its own folder on Save As.
+    juce::String getDefaultAudioRecordingFilePattern() override
+    {
+        auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                          .getChildFile ("Ikaros Studio").getChildFile ("Recordings");
+        folder.createDirectory();
+        return folder.getFullPathName() + "/%edit%_%track%_%date%_%time%_Take_%take%";
+    }
 };
 
 //==============================================================================
@@ -35,9 +44,10 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 {
     explicit Impl (AudioEngine& o) : owner (o)
     {
-        // 0 inputs, 2 outputs by default. The user can change devices in
-        // File > Audio & MIDI Settings, and Tracktion remembers the choice.
-        engine.getDeviceManager().initialise (0, 2);
+        // 2 inputs, 2 outputs by default. (Tracktion's default of "every
+        // channel" crashed PipeWire's ALSA plugin.) The user can change devices
+        // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
+        engine.getDeviceManager().initialise (2, 2);
 
         // Listen for MIDI devices being plugged in or removed so they can be
         // routed to the selected track.
@@ -131,6 +141,11 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     juce::uint32 lastMasterRead = 0;
     StereoLevel lastMasterLevel;
 
+    // Recording: the track the Record button armed for this take (disarmed
+    // again when recording stops) and where the take started.
+    TrackId autoArmedTrack = 0;
+    double recordStartBeats = 0.0;
+
     //==============================================================================
     // After a session is created or opened, Tracktion finishes setting up on
     // the message loop (plugin init, device routing, its own undo-grouping
@@ -138,11 +153,13 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     // be able to "undo" invisible setup, so once things settle we start from a
     // clean history, unless the user has already started working.
     bool userHasMadeChanges = false;
+    juce::uint32 cleanSlateStart = 0, lastModelChange = 0;
 
     void startFromCleanSlateSoon()
     {
         userHasMadeChanges = false;
-        startTimer (600);   // longer than Tracktion's 350 ms undo-grouping timer
+        cleanSlateStart = lastModelChange = juce::Time::getMillisecondCounter();
+        startTimer (100);
     }
 
 private:
@@ -174,11 +191,19 @@ private:
 
     void handleAsyncUpdate() override
     {
+        lastModelChange = juce::Time::getMillisecondCounter();
         owner.sendChangeMessage();
     }
 
     void timerCallback() override
     {
+        // Wait until setup has gone quiet for 500 ms (longer than Tracktion's
+        // 350 ms undo-grouping timer), but no more than 3 s in total.
+        const auto now = juce::Time::getMillisecondCounter();
+
+        if (now - lastModelChange < 500 && now - cleanSlateStart < 3000)
+            return;
+
         stopTimer();
 
         if (edit != nullptr && ! userHasMadeChanges)
@@ -356,7 +381,35 @@ void AudioEngine::play()
 
 void AudioEngine::stop()
 {
-    impl->edit->getTransport().stop (false, false);
+    auto& transport = impl->edit->getTransport();
+    const bool wasRecording = transport.isRecording();
+
+    if (wasRecording)
+        beginUndoStep ("Record");   // the new region is added as one undo step
+
+    transport.stop (false, false);   // false = keep the recording
+
+    if (wasRecording && impl->autoArmedTrack != 0)
+        trackController->setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
+}
+
+void AudioEngine::toggleRecord()
+{
+    auto& transport = impl->edit->getTransport();
+
+    if (transport.isRecording())
+    {
+        stop();
+        return;
+    }
+
+    impl->autoArmedTrack = trackController->armForRecording();
+
+    if (trackController->getArmedTrack() == 0)
+        return;   // no track to record onto
+
+    impl->recordStartBeats = impl->edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
+    transport.record (false);
 }
 
 void AudioEngine::togglePlay()
@@ -440,6 +493,8 @@ TransportState AudioEngine::getTransportState() const
     auto pos = transport.getPosition();
 
     s.playing = transport.isPlaying();
+    s.recording = transport.isRecording();
+    s.recordStartBeats = impl->recordStartBeats;
     s.looping = transport.looping.get();
     s.metronome = edit.clickTrackEnabled.get();
     s.positionSeconds = pos.inSeconds();

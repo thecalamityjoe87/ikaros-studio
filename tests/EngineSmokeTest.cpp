@@ -39,7 +39,10 @@ int main()
     {
         AudioEngine engine;
         auto& tracks = engine.getTracks();
-        pumpMessages();
+
+        // Let startup settle: the engine clears setup noise from the undo
+        // history once the session has been quiet for a moment.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
 
         std::cout << "New session\n";
         auto list = tracks.getTracks();
@@ -130,6 +133,71 @@ int main()
         check (tracks.getEffectChain (t2).size() == 3, "undo brings a removed effect back");
 
         pumpMessages();
+        std::cout << "Recording\n";
+        {
+            auto t3 = tracks.addInstrumentTrack();
+            tracks.setSelectedTrack (t3);
+            engine.goToStart();
+            pumpMessages();
+
+            engine.toggleRecord();   // nothing armed: arms the selected track for this take
+            pumpMessages();
+            check (engine.getTransportState().recording, "Record starts recording");
+            check (tracks.getArmedTrack() == t3, "the selected track is armed for the take");
+
+            for (int note : { 60, 64, 67 })
+            {
+                tracks.noteOn (note, 0.8f);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+                tracks.noteOff (note);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            }
+
+            engine.toggleRecord();   // stop
+            pumpMessages();
+            pumpMessages();
+            check (! engine.getTransportState().recording, "Record again stops");
+            check (tracks.getArmedTrack() == 0, "the take's automatic arm is released");
+
+            auto regions = tracks.getRegions (t3);
+            check (regions.size() == 1, "the take becomes a region");
+            check (! regions.empty() && regions[0].notes.size() == 3, "the region holds the played notes");
+
+            tracks.setArmed (t3, true);
+            check (tracks.getTrack (t3)->armed, "a track can be armed explicitly");
+            tracks.setArmed (t3, false);
+            tracks.deleteTrack (t3);
+            tracks.setSelectedTrack (t2);
+        }
+
+        std::cout << "Audio tracks\n";
+        {
+            auto inputs = tracks.getAudioInputs();
+            std::cout << "  (audio inputs: " << inputs.size() << ")\n";
+            auto a1 = tracks.addAudioTrack();
+            auto info = tracks.getTrack (a1);
+            check (info && info->kind == TrackKind::audio, "audio tracks can be added");
+            check (tracks.getSoundControls (a1).empty(), "audio tracks have no synth controls");
+            check (! tracks.getInstrument (a1).has_value(), "audio tracks have no instrument");
+
+            if (! inputs.empty())
+            {
+                check (tracks.getRecordingSettings (a1).inputId == inputs.front().id, "new audio tracks use the first input");
+                tracks.setTrackInput (a1, inputs.back().id);
+                check (tracks.getRecordingSettings (a1).inputId == inputs.back().id, "the input can be changed");
+            }
+
+            check (! tracks.getRecordingSettings (a1).monitoring, "monitoring starts off (no feedback)");
+            tracks.setMonitoring (a1, true);
+            check (tracks.getRecordingSettings (a1).monitoring, "monitoring can be turned on");
+
+            tracks.setArmed (a1, true);
+            check (tracks.getTrack (a1)->armed, "audio tracks can be armed");
+            tracks.setArmed (a1, false);
+            tracks.deleteTrack (a1);
+            tracks.setSelectedTrack (t2);
+        }
+
         std::cout << "Save\n";
         check (engine.hasUnsavedChanges(), "edits mark the session as changed");
         check (engine.saveSessionAs (file), "Save As writes the file");

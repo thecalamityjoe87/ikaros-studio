@@ -30,11 +30,33 @@ public:
 
     /** Adds an instrument track (Tracktion's built-in 4OSC synth) after the last track. */
     TrackId addInstrumentTrack();
+
+    /** Adds an audio track, for recording a microphone, guitar or other input. */
+    TrackId addAudioTrack();
     void deleteTrack (TrackId);
 
     /** The selected track is the one the on-screen and hardware keyboards play. */
     void setSelectedTrack (TrackId);
     TrackId getSelectedTrack() const noexcept   { return selectedTrack; }
+
+    /** Arms a track for recording (one at a time). An armed track also gets
+        the keyboards' input, even when another track is selected. */
+    void setArmed (TrackId, bool);
+    TrackId getArmedTrack() const noexcept      { return armedTrack; }
+
+    /** Used by the Record button: if no track is armed, arms the selected one
+        and returns it (so it can be disarmed after the take); otherwise 0. */
+    TrackId armForRecording();
+
+    //==============================================================================
+    // Audio inputs (audio tracks)
+    std::vector<AudioInput> getAudioInputs() const;
+    RecordingSettings getRecordingSettings (TrackId) const;
+    void setTrackInput (TrackId, const juce::String& inputId);
+    void setMonitoring (TrackId, bool);
+
+    /** Level of the input feeding an audio track (for the recording meter). */
+    StereoLevel getInputLevel (TrackId);
 
     void setMute (TrackId, bool);
     void setSolo (TrackId, bool);
@@ -84,8 +106,8 @@ public:
     void setEffectParameter (TrackId, PluginId, int parameterIndex, float normalised0to1);
 
     //==============================================================================
-    // Live MIDI (on-screen keyboard). Hardware keyboards are routed automatically
-    // to the selected track.
+    // Live MIDI (on-screen keyboard). Hardware keyboards are routed
+    // automatically to the armed track, or else the selected track.
     void noteOn (int noteNumber, float velocity0to1);
     void noteOff (int noteNumber);
     void allNotesOff();
@@ -99,8 +121,10 @@ private:
     std::unique_ptr<Impl> impl;
     AudioEngine& owner;
     TrackId selectedTrack = 0;
+    TrackId armedTrack = 0;
 
-    void routeMidiInputsToSelectedTrack();
+    void routeMidiInputs();
+    void routeAudioInputs();
 };
 
 } // namespace ikaros

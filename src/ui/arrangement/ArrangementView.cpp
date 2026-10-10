@@ -186,6 +186,37 @@ public:
         repaint();
     }
 
+    /** The take being recorded on this lane, from startBeat to the playhead
+        (nothing when endBeat <= startBeat). */
+    void setRecordingRange (double startBeat, double endBeat)
+    {
+        if (startBeat != recordStart || endBeat != recordEnd)
+        {
+            recordStart = startBeat;
+            recordEnd = endBeat;
+            repaint();
+        }
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (recordEnd <= recordStart)
+            return;
+
+        // A red region that grows with the playhead while recording.
+        auto& geo = owner.geometry;
+        auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
+        auto r = juce::Rectangle<float> (x1, 5.0f, juce::jmax (4.0f, x2 - x1), (float) getHeight() - 11.0f);
+
+        g.setColour (colour::record.withAlpha (0.25f));
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (colour::record);
+        g.drawRoundedRectangle (r, 8.0f, 1.5f);
+
+        g.setFont (fonts::uiBold (11.0f));
+        g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
+    }
+
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds();
@@ -242,6 +273,7 @@ private:
     const TrackId trackId;
     juce::Colour colour;
     bool selected = false, showFocusRing = false;
+    double recordStart = 0.0, recordEnd = 0.0;
     std::map<RegionId, std::unique_ptr<RegionComponent>> regions;
 };
 
@@ -343,7 +375,7 @@ class ArrangementView::Content  : public juce::Component
 public:
     explicit Content (ArrangementView& o) : owner (o)
     {
-        dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested(); };
+        dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested (&dropZone); };
         addAndMakeVisible (dropZone);
     }
 
@@ -386,6 +418,17 @@ public:
 
         headers = std::move (nextHeaders);
         lanes = std::move (nextLanes);
+    }
+
+    void setRecording (TrackId track, double startBeat, double endBeat)
+    {
+        for (auto& [id, lane] : lanes)
+        {
+            if (id == track)
+                lane->setRecordingRange (startBeat, endBeat);
+            else
+                lane->setRecordingRange (0.0, 0.0);
+        }
     }
 
     int getIdealHeight() const
@@ -498,6 +541,11 @@ void ArrangementView::updateTransport()
     auto state = engine.getTransportState();
     ruler->setLoop (state.looping, state.loopStartBeats, state.loopEndBeats);
     playhead->setX (geometry.beatToX (state.positionBeats));
+
+    if (state.recording)
+        content->setRecording (engine.getTracks().getArmedTrack(), state.recordStartBeats, state.positionBeats);
+    else
+        content->setRecording (0, 0.0, 0.0);
 }
 
 void ArrangementView::paint (juce::Graphics& g)

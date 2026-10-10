@@ -49,10 +49,12 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     else if (name == "Track")
     {
         add (CommandIDs::newTrack);
+        add (CommandIDs::newAudioTrack);
         add (CommandIDs::deleteTrack);
         m.addSeparator();
         add (CommandIDs::muteTrack);
         add (CommandIDs::soloTrack);
+        add (CommandIDs::armTrack);
     }
     else if (name == "Region")
     {
@@ -62,6 +64,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     else if (name == "Mix")
     {
         add (CommandIDs::togglePlay);
+        add (CommandIDs::toggleRecord);
         add (CommandIDs::goToStart);
         add (CommandIDs::toggleLoop);
         add (CommandIDs::toggleMetronome);

@@ -25,7 +25,7 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
 
     // invokeDirectly runs the command synchronously, same as picking it from a menu.
     libraryButton.onClick  = [this] { commands.invokeDirectly (CommandIDs::toggleLibrary, true); };
-    newTrackButton.onClick = [this] { commands.invokeDirectly (CommandIDs::newTrack, true); };
+    newTrackButton.onClick = [this] { if (onNewTrackRequested) onNewTrackRequested (&newTrackButton); };
     undoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::undo, true); };
 
     addAndMakeVisible (transport);

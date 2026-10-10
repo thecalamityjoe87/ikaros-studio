@@ -20,6 +20,10 @@ using TrackId  = std::uint64_t;
 using RegionId = std::uint64_t;
 using PluginId = std::uint64_t;
 
+// Instrument tracks play a synth from MIDI; audio tracks record a microphone,
+// guitar or other audio input.
+enum class TrackKind { instrument, audio };
+
 struct NoteInfo
 {
     int pitch = 60;            // MIDI note number
@@ -35,13 +39,15 @@ struct RegionInfo
     double startBeat = 0.0;    // position on the timeline, in beats (quarter notes)
     double lengthBeats = 0.0;
     bool isMidi = true;
-    std::vector<NoteInfo> notes;   // empty for audio regions
+    std::vector<NoteInfo> notes;   // MIDI regions only
+    std::vector<float> peaks;      // audio regions only: waveform, 0..1 per column across the region
 };
 
 struct TrackInfo
 {
     TrackId id = 0;
     int index = 0;
+    TrackKind kind = TrackKind::instrument;
     juce::String name;
     juce::String soundName;        // e.g. "Grand Piano" (the preset shown in the library)
     juce::String category;         // library category, used to pick the icon
@@ -49,6 +55,7 @@ struct TrackInfo
     bool muted = false;
     bool solo = false;
     bool silencedBySolo = false;   // another track is soloed, so this one is quiet
+    bool armed = false;            // record-enabled
     float volume = 0.75f;          // fader position 0..1 (Tracktion's slider curve)
     float volumeDb = 0.0f;
 };
@@ -93,6 +100,20 @@ struct ParameterInfo
     juce::String valueText;        // human readable, with units
 };
 
+// An audio input the user can record from, e.g. "Input 1".
+struct AudioInput
+{
+    juce::String id;               // stable ID, saved with the track
+    juce::String name;
+};
+
+// An audio track's recording settings (the inspector's Recording section).
+struct RecordingSettings
+{
+    juce::String inputId;
+    bool monitoring = false;       // hear the input through the speakers
+};
+
 // The "Show details" box. Advanced info, hidden by default.
 struct TrackDetails
 {
@@ -104,6 +125,8 @@ struct TrackDetails
 struct TransportState
 {
     bool playing = false;
+    bool recording = false;
+    double recordStartBeats = 0.0; // where the current take started
     bool looping = false;
     bool metronome = false;
     double positionBeats = 0.0;

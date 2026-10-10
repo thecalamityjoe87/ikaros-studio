@@ -103,24 +103,28 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
 
 void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    // TODO(milestone-2): draw the real waveform via Tracktion's SmartThumbnail,
-    // exposed through the engine layer. This is a placeholder shape.
-    juce::Path wave;
-    const float mid = area.getCentreY();
-    const float amp = area.getHeight() * 0.45f;
+    // info.peaks: loudness per slice of the region (0..1), from the engine.
+    // Drawn mirrored around the centre line, one column per pixel.
+    if (info.peaks.empty())
+        return;
 
+    const float mid = area.getCentreY();
+    const float halfHeight = area.getHeight() * 0.48f;
+    const auto numPeaks = (int) info.peaks.size();
+
+    juce::Path wave;
     wave.startNewSubPath (area.getX(), mid);
 
-    for (float x = 0; x <= area.getWidth(); x += 2.0f)
+    for (float x = 0.0f; x <= area.getWidth(); x += 1.0f)
     {
-        auto a = (0.25f + 0.75f * std::abs (std::sin (x / 4.3f) * std::sin (x / 9.1f))) * amp;
-        wave.lineTo (area.getX() + x, mid - a);
+        auto index = juce::jlimit (0, numPeaks - 1, (int) (x / area.getWidth() * (float) numPeaks));
+        wave.lineTo (area.getX() + x, mid - info.peaks[(size_t) index] * halfHeight);
     }
 
-    for (float x = area.getWidth(); x >= 0; x -= 2.0f)
+    for (float x = area.getWidth(); x >= 0.0f; x -= 1.0f)
     {
-        auto a = (0.25f + 0.75f * std::abs (std::sin (x / 4.3f) * std::sin (x / 9.1f))) * amp;
-        wave.lineTo (area.getX() + x, mid + a);
+        auto index = juce::jlimit (0, numPeaks - 1, (int) (x / area.getWidth() * (float) numPeaks));
+        wave.lineTo (area.getX() + x, mid + info.peaks[(size_t) index] * halfHeight);
     }
 
     wave.closeSubPath();

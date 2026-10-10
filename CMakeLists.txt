@@ -105,6 +105,9 @@ set(IKAROS_UI_SOURCES
     # state: UI state shared between areas
     src/ui/state/Selection.h
 
+    # dialogs shown over the window
+    src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+
     # one folder per area of the window
     src/ui/titlebar/MenuBar.h               src/ui/titlebar/MenuBar.cpp
     src/ui/titlebar/WindowControls.h        src/ui/titlebar/WindowControls.cpp
@@ -121,7 +124,8 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
-    src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp)
+    src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp
+    src/ui/bottompanel/RecordingView.h      src/ui/bottompanel/RecordingView.cpp)
 
 target_sources(IkarosStudio PRIVATE
     ${IKAROS_APP_SOURCES}

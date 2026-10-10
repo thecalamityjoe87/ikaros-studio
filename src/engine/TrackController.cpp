@@ -17,6 +17,11 @@ namespace
     // .tracktionedit files for free.
     const juce::Identifier soundNameProp ("ikarosSound");
     const juce::Identifier categoryProp  ("ikarosCategory");
+    const juce::Identifier kindProp      ("ikarosKind");      // "audio" for audio tracks
+    const juce::Identifier inputProp     ("ikarosInput");     // audio input device ID
+    const juce::Identifier monitorProp   ("ikarosMonitor");   // hear the input live
+
+    bool isAudioTrack (const te::AudioTrack& t)   { return t.state.getProperty (kindProp).toString() == "audio"; }
 
     // Track colours from the design tokens: blue, orange, green, purple, yellow.
     // They live here (not in the UI tokens) because a track's colour is part of
@@ -175,13 +180,47 @@ struct TrackController::Impl
 {
     std::map<TrackId, std::unique_ptr<MeterTap>> meters;
 
-    // Identifies our on-screen keyboard as a MIDI source to Tracktion.
+    // The on-screen keyboard plays through a Tracktion "virtual" MIDI input,
+    // so its notes go through the same path as a hardware keyboard and can be
+    // recorded. Created once and remembered in Tracktion's settings.
+    std::shared_ptr<te::MidiInputDevice> keyboardDevice;
     te::MPESourceID keyboardSource = te::createUniqueMPESourceID();
 
-    // Which track each held note went to, so a note-off always reaches the
-    // same synth even if the selection changed while the key was down.
-    std::array<TrackId, 128> heldNotes {};
+    std::array<bool, 128> heldNotes {};   // keys currently down on the on-screen keyboard
+
+    // Input meter for the Recording section. WeakReference: input devices
+    // can be rebuilt when the audio device changes.
+    juce::WeakReference<te::LevelMeasurer> inputMeasurer;
+    te::LevelMeasurer::Client inputClient;
+
+    // Waveform peaks per recorded file and clip range, so audio files are
+    // read once, not on every refresh.
+    std::map<juce::String, std::vector<float>> peakCache;
+
+    void detachInputMeter()
+    {
+        if (auto* m = inputMeasurer.get())
+            m->removeClient (inputClient);
+
+        inputMeasurer = nullptr;
+    }
+
+    ~Impl()   { detachInputMeter(); }
 };
+
+namespace
+{
+    const juce::String keyboardDeviceName ("Ikaros On-Screen Keyboard");
+
+    // The MIDI inputs we route to tracks: hardware keyboards and our own
+    // on-screen keyboard. (Tracktion's "All MIDI Ins" merges the hardware
+    // ones, so routing it too would double every note.)
+    bool isRoutedMidiInput (te::InputDevice& d)
+    {
+        return d.getDeviceType() == te::InputDevice::physicalMidiDevice
+            || (d.getDeviceType() == te::InputDevice::virtualMidiDevice && d.getName() == keyboardDeviceName);
+    }
+}
 
 //==============================================================================
 TrackController::TrackController (AudioEngine& o)
@@ -202,8 +241,9 @@ static te::AudioTrack* findTrack (te::Edit* edit, TrackId id)
 void TrackController::sessionChanged()
 {
     impl->meters.clear();
-    impl->heldNotes.fill (0);
+    impl->heldNotes.fill (false);
     selectedTrack = 0;
+    armedTrack = 0;
 }
 
 //==============================================================================
@@ -229,12 +269,25 @@ std::vector<TrackInfo> TrackController::getTracks() const
         info.id = t->itemID.getRawID();
         info.index = index++;
         info.name = t->getName();
+        info.kind = isAudioTrack (*t) ? TrackKind::audio : TrackKind::instrument;
         info.soundName = t->state.getProperty (soundNameProp, "Basic Synth").toString();
         info.category = t->state.getProperty (categoryProp, "Synths").toString();
+
+        if (info.kind == TrackKind::audio)
+        {
+            // Show the input it records from, e.g. "Input 1".
+            info.soundName = "No input";
+            auto inputId = getRecordingSettings (info.id).inputId;
+
+            for (auto& in : getAudioInputs())
+                if (in.id == inputId)
+                    info.soundName = in.name;
+        }
         info.colour = t->getColour();
         info.muted = t->isMuted (false);
         info.solo = t->isSolo (false);
         info.silencedBySolo = anySolo && ! info.solo;
+        info.armed = info.id == armedTrack;
 
         if (auto* vol = t->getVolumePlugin())
         {
@@ -300,12 +353,49 @@ TrackId TrackController::addInstrumentTrack()
     return track->itemID.getRawID();
 }
 
+TrackId TrackController::addAudioTrack()
+{
+    auto* edit = owner.getEdit();
+    owner.beginUndoStep ("Add Audio Track");
+
+    auto existing = te::getAudioTracks (*edit);
+    te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
+    auto track = edit->insertNewAudioTrack (te::TrackInsertPoint (nullptr, last), nullptr);
+
+    if (track == nullptr)
+        return 0;
+
+    auto& um = edit->getUndoManager();
+    int audioCount = 1;
+
+    for (auto* t : existing)
+        if (isAudioTrack (*t))
+            ++audioCount;
+
+    track->setName ("Audio " + juce::String (audioCount));
+    track->setColour (juce::Colour (trackPalette[(size_t) existing.size() % trackPalette.size()]));
+    track->state.setProperty (kindProp, "audio", &um);
+    track->state.setProperty (categoryProp, "Audio Files", &um);
+
+    // Record from the first input by default, without monitoring (a
+    // microphone near the speakers would otherwise feed back).
+    auto inputs = getAudioInputs();
+    track->state.setProperty (inputProp, inputs.empty() ? juce::String() : inputs.front().id, &um);
+    track->state.setProperty (monitorProp, false, &um);
+
+    return track->itemID.getRawID();
+}
+
 void TrackController::deleteTrack (TrackId id)
 {
     if (auto* track = findTrack (owner.getEdit(), id))
     {
         owner.beginUndoStep ("Delete Track");
         impl->meters.erase (id);
+
+        if (armedTrack == id)
+            armedTrack = 0;
+
         owner.getEdit()->deleteTrack (track);
 
         if (selectedTrack == id)
@@ -318,11 +408,18 @@ void TrackController::deleteTrack (TrackId id)
 
 void TrackController::setSelectedTrack (TrackId id)
 {
-    selectedTrack = findTrack (owner.getEdit(), id) != nullptr ? id : 0;
-    routeMidiInputsToSelectedTrack();
+    const auto newSelection = findTrack (owner.getEdit(), id) != nullptr ? id : TrackId {};
+
+    // With nothing armed, the input follows the selection: release held keys
+    // first so the previous track's synth doesn't keep sounding.
+    if (armedTrack == 0 && newSelection != selectedTrack)
+        allNotesOff();
+
+    selectedTrack = newSelection;
+    routeMidiInputs();
 }
 
-void TrackController::routeMidiInputsToSelectedTrack()
+void TrackController::routeMidiInputs()
 {
     auto* edit = owner.getEdit();
 
@@ -331,8 +428,26 @@ void TrackController::routeMidiInputsToSelectedTrack()
 
     auto& dm = owner.getTeEngine().getDeviceManager();
 
-    // Enable every hardware MIDI input and make it audible without arming
-    // (MonitorMode::on). Recording is a later milestone.
+    // Our on-screen keyboard device: create it the first time the app runs.
+    if (impl->keyboardDevice == nullptr)
+    {
+        auto findKeyboard = [&dm]
+        {
+            for (auto& d : dm.getMidiInDevices())
+                if (d->getDeviceType() == te::InputDevice::virtualMidiDevice && d->getName() == keyboardDeviceName)
+                    return d;
+
+            return std::shared_ptr<te::MidiInputDevice>();
+        };
+
+        impl->keyboardDevice = findKeyboard();
+
+        if (impl->keyboardDevice == nullptr && dm.createVirtualMidiDevice (keyboardDeviceName).wasOk())
+            impl->keyboardDevice = findKeyboard();
+    }
+
+    // Enable every MIDI input and make it audible without arming
+    // (MonitorMode::on), so playing always makes sound.
     for (auto& midiIn : dm.getMidiInDevices())
     {
         midiIn->setEnabled (true);
@@ -340,13 +455,35 @@ void TrackController::routeMidiInputsToSelectedTrack()
     }
 
     // The playback context creates an InputDeviceInstance per enabled device.
+    // If a device was added after the context was built, rebuild it.
     edit->getTransport().ensureContextAllocated();
 
-    auto* track = findTrack (edit, selectedTrack);
+    auto hasInstanceFor = [edit] (te::InputDevice* device)
+    {
+        for (auto* instance : edit->getAllInputDevices())
+            if (&instance->getInputDevice() == device)
+                return true;
+
+        return false;
+    };
+
+    if (impl->keyboardDevice != nullptr && ! hasInstanceFor (impl->keyboardDevice.get()))
+        edit->getTransport().ensureContextAllocated (true);
+
+    // MIDI goes to an instrument track: the armed one (so it records),
+    // otherwise the selected one (so you can just play).
+    auto* armed = findTrack (edit, armedTrack);
+    auto* selected = findTrack (edit, selectedTrack);
+    te::AudioTrack* track = nullptr;
+
+    if (armed != nullptr && ! isAudioTrack (*armed))
+        track = armed;
+    else if (selected != nullptr && ! isAudioTrack (*selected))
+        track = selected;
 
     for (auto* instance : edit->getAllInputDevices())
     {
-        if (instance->getInputDevice().getDeviceType() != te::InputDevice::physicalMidiDevice)
+        if (! isRoutedMidiInput (instance->getInputDevice()))
             continue;
 
         for (auto target : instance->getTargets())
@@ -354,8 +491,206 @@ void TrackController::routeMidiInputsToSelectedTrack()
                 (void) instance->removeTarget (target, nullptr);   // (void) = deliberately ignore the [[nodiscard]] result
 
         if (track != nullptr)
+        {
             (void) instance->setTarget (track->itemID, true, nullptr);
+            instance->setRecordingEnabled (track->itemID, track->itemID.getRawID() == armedTrack);
+        }
     }
+
+    routeAudioInputs();
+}
+
+void TrackController::routeAudioInputs()
+{
+    auto* edit = owner.getEdit();
+    auto& dm = owner.getTeEngine().getDeviceManager();
+
+    // Microphones and guitars are mono, so offer each input channel on its
+    // own ("Input 1", "Input 2") rather than Tracktion's default stereo pairs.
+    // TODO: offer stereo pairs for stereo sources (keyboards, mixers).
+    bool devicesChanged = false;
+
+    for (auto* in : dm.getWaveInputDevices())
+    {
+        if (in->getChannels().getNumChannels() != 1)
+        {
+            dm.setAllWaveInputsToNumChannels (1);
+            devicesChanged = true;
+            break;
+        }
+    }
+
+    // Tracktion makes an input for every channel the driver advertises (with
+    // PipeWire that can be dozens), but only the channels the audio device
+    // actually opened carry audio. Switch the others off.
+    int numOpenInputs = 0;
+
+    if (auto* device = dm.deviceManager.getCurrentAudioDevice())
+        numOpenInputs = device->getActiveInputChannels().countNumberOfSetBits();
+
+    for (auto* in : dm.getWaveInputDevices())
+    {
+        if (in->getDeviceType() != te::InputDevice::waveDevice)
+            continue;
+
+        bool allChannelsOpen = true;
+
+        for (auto& ci : in->getChannels())
+            allChannelsOpen = allChannelsOpen && ci.indexInDevice < numOpenInputs;
+
+        if (in->isEnabled() != allChannelsOpen)
+        {
+            in->setEnabled (allChannelsOpen);
+            devicesChanged = true;
+        }
+    }
+
+    if (devicesChanged)
+        edit->getTransport().ensureContextAllocated (true);
+
+    // Audio goes to an audio track: the armed one, otherwise the selected one.
+    auto* armed = findTrack (edit, armedTrack);
+    auto* selected = findTrack (edit, selectedTrack);
+    te::AudioTrack* track = nullptr;
+
+    if (armed != nullptr && isAudioTrack (*armed))
+        track = armed;
+    else if (selected != nullptr && isAudioTrack (*selected))
+        track = selected;
+
+    const auto settings = track != nullptr ? getRecordingSettings (track->itemID.getRawID()) : RecordingSettings {};
+
+    for (auto* instance : edit->getAllInputDevices())
+    {
+        auto& device = instance->getInputDevice();
+
+        if (device.getDeviceType() != te::InputDevice::waveDevice)
+            continue;
+
+        const bool isTrackInput = track != nullptr && device.getDeviceID() == settings.inputId;
+
+        for (auto target : instance->getTargets())
+            if (! isTrackInput || target != track->itemID)
+                (void) instance->removeTarget (target, nullptr);
+
+        if (isTrackInput)
+        {
+            (void) instance->setTarget (track->itemID, true, nullptr);
+            instance->setRecordingEnabled (track->itemID, track->itemID.getRawID() == armedTrack);
+            device.setMonitorMode (settings.monitoring ? te::InputDevice::MonitorMode::on
+                                                       : te::InputDevice::MonitorMode::off);
+        }
+    }
+}
+
+//==============================================================================
+// Recording
+void TrackController::setArmed (TrackId id, bool shouldArm)
+{
+    // Only one armed track at a time keeps it simple: it's the one that records.
+    const auto newArmed = shouldArm && findTrack (owner.getEdit(), id) != nullptr ? id : TrackId {};
+
+    if (! shouldArm && armedTrack != id)
+        return;
+
+    if (newArmed != armedTrack)
+    {
+        allNotesOff();
+        armedTrack = newArmed;
+        routeMidiInputs();
+        owner.notifyModelChanged();
+    }
+}
+
+TrackId TrackController::armForRecording()
+{
+    if (armedTrack != 0)
+        return 0;
+
+    setArmed (selectedTrack, true);
+    return armedTrack;
+}
+
+//==============================================================================
+// Audio inputs
+std::vector<AudioInput> TrackController::getAudioInputs() const
+{
+    std::vector<AudioInput> result;
+    auto& dm = owner.getTeEngine().getDeviceManager();
+
+    // Inputs for channels the audio device has open (routeAudioInputs()
+    // switches the rest off).
+    int index = 0;
+
+    for (auto* in : dm.getWaveInputDevices())
+        if (in->getDeviceType() == te::InputDevice::waveDevice && in->isEnabled())
+            result.push_back ({ in->getDeviceID(), "Input " + juce::String (++index) });
+
+    return result;
+}
+
+RecordingSettings TrackController::getRecordingSettings (TrackId id) const
+{
+    RecordingSettings r;
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        r.inputId = t->state.getProperty (inputProp).toString();
+        r.monitoring = (bool) t->state.getProperty (monitorProp, false);
+    }
+
+    return r;
+}
+
+void TrackController::setTrackInput (TrackId id, const juce::String& inputId)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        owner.beginUndoStep ("Change Input");
+        t->state.setProperty (inputProp, inputId, &owner.getEdit()->getUndoManager());
+        routeMidiInputs();
+    }
+}
+
+void TrackController::setMonitoring (TrackId id, bool shouldMonitor)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        owner.beginUndoStep (shouldMonitor ? "Monitoring On" : "Monitoring Off");
+        t->state.setProperty (monitorProp, shouldMonitor, &owner.getEdit()->getUndoManager());
+        routeMidiInputs();
+    }
+}
+
+StereoLevel TrackController::getInputLevel (TrackId id)
+{
+    auto inputId = getRecordingSettings (id).inputId;
+    te::InputDevice* device = nullptr;
+
+    for (auto* in : owner.getTeEngine().getDeviceManager().getWaveInputDevices())
+        if (in->getDeviceID() == inputId)
+            device = in;
+
+    auto* measurer = device != nullptr ? &device->levelMeasurer : nullptr;
+
+    if (measurer != impl->inputMeasurer.get())
+    {
+        impl->detachInputMeter();
+
+        if (measurer != nullptr)
+        {
+            measurer->addClient (impl->inputClient);
+            impl->inputMeasurer = measurer;
+        }
+    }
+
+    if (impl->inputMeasurer == nullptr)
+        return {};
+
+    // Mono inputs report one channel; show it on both meter bars.
+    auto left = impl->inputClient.getAndClearAudioLevel (0).dB;
+    auto right = impl->inputClient.getNumChannelsUsed() > 1 ? impl->inputClient.getAndClearAudioLevel (1).dB : left;
+    return { left, right };
 }
 
 void TrackController::setMute (TrackId id, bool mute)
@@ -420,7 +755,50 @@ StereoLevel TrackController::getTrackLevel (TrackId id)
 }
 
 //==============================================================================
-static RegionInfo makeRegionInfo (te::Clip& clip)
+// Waveform overview for an audio clip: the loudest sample in each of
+// `numColumns` slices of the part of the file the clip plays.
+static std::vector<float> computePeaks (te::WaveAudioClip& clip, int numColumns,
+                                       std::map<juce::String, std::vector<float>>& cache)
+{
+    auto file = clip.getAudioFile().getFile();
+    auto pos = clip.getPosition();
+    auto key = file.getFullPathName() + ":" + juce::String (file.getSize())
+             + ":" + juce::String (pos.offset.inSeconds()) + ":" + juce::String (pos.getLength().inSeconds());
+
+    if (auto it = cache.find (key); it != cache.end())
+        return it->second;
+
+    std::vector<float> peaks;
+    auto& formats = clip.edit.engine.getAudioFileFormatManager().readFormatManager;
+
+    // unique_ptr: the reader is deleted automatically when we're done.
+    if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (file) })
+    {
+        const auto start = (juce::int64) (pos.offset.inSeconds() * reader->sampleRate);
+        const auto length = (juce::int64) (pos.getLength().inSeconds() * reader->sampleRate);
+        const auto step = juce::jmax ((juce::int64) 1, length / numColumns);
+        std::vector<juce::Range<float>> levels ((size_t) reader->numChannels);
+
+        for (int i = 0; i < numColumns; ++i)
+        {
+            reader->readMaxLevels (start + i * step, step, levels.data(), (int) reader->numChannels);
+            float peak = 0.0f;
+
+            for (auto& r : levels)
+                peak = juce::jmax (peak, std::abs (r.getStart()), std::abs (r.getEnd()));
+
+            peaks.push_back (juce::jmin (1.0f, peak));
+        }
+
+        // Don't cache a file that's still being written.
+        if (! clip.edit.getTransport().isRecording())
+            cache[key] = peaks;
+    }
+
+    return peaks;
+}
+
+static RegionInfo makeRegionInfo (te::Clip& clip, std::map<juce::String, std::vector<float>>& peakCache)
 {
     RegionInfo r;
     r.id = clip.itemID.getRawID();
@@ -445,7 +823,9 @@ static RegionInfo makeRegionInfo (te::Clip& clip)
     else
     {
         r.isMidi = false;
-        // TODO(milestone-2): audio regions — expose a waveform thumbnail.
+
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
+            r.peaks = computePeaks (*wave, 256, peakCache);
     }
 
     return r;
@@ -457,7 +837,7 @@ std::vector<RegionInfo> TrackController::getRegions (TrackId id) const
 
     if (auto* t = findTrack (owner.getEdit(), id))
         for (auto* clip : t->getClips())
-            result.push_back (makeRegionInfo (*clip));
+            result.push_back (makeRegionInfo (*clip, impl->peakCache));
 
     return result;
 }
@@ -466,7 +846,7 @@ std::optional<RegionInfo> TrackController::getRegion (RegionId id) const
 {
     if (auto* edit = owner.getEdit())
         if (auto* clip = te::findClipForID (*edit, te::EditItemID::fromRawID (id)))
-            return makeRegionInfo (*clip);
+            return makeRegionInfo (*clip, impl->peakCache);
 
     return std::nullopt;
 }
@@ -560,6 +940,9 @@ std::vector<SoundControl> TrackController::getSoundControls (TrackId id) const
 {
     std::vector<SoundControl> result;
     auto* t = findTrack (owner.getEdit(), id);
+
+    if (t != nullptr && isAudioTrack (*t))
+        return result;   // audio tracks have no instrument to control
     auto* synth = t != nullptr ? findSynth (*t) : nullptr;
 
     for (auto& k : knobMappings)
@@ -765,11 +1148,24 @@ TrackDetails TrackController::getDetails (TrackId id) const
     if (t == nullptr)
         return d;
 
-    d.pluginName = findSynth (*t) != nullptr ? juce::String ("4OSC (built-in synth)") : juce::String ("None");
     d.outputName = t->getOutput().getOutputName();
 
+    if (isAudioTrack (*t))
+    {
+        d.pluginName = "None (audio track)";
+        auto inputId = getRecordingSettings (id).inputId;
+
+        for (auto& in : getAudioInputs())
+            if (in.id == inputId)
+                d.midiInputs.add (in.name);   // shown as this track's input
+
+        return d;
+    }
+
+    d.pluginName = findSynth (*t) != nullptr ? juce::String ("4OSC (built-in synth)") : juce::String ("None");
+
     for (auto* instance : edit->getAllInputDevices())
-        if (instance->getInputDevice().getDeviceType() == te::InputDevice::physicalMidiDevice)
+        if (isRoutedMidiInput (instance->getInputDevice()))
             if (instance->getTargets().contains (t->itemID))
                 d.midiInputs.add (instance->getInputDevice().getName());
 
@@ -779,31 +1175,28 @@ TrackDetails TrackController::getDetails (TrackId id) const
 //==============================================================================
 void TrackController::noteOn (int note, float velocity)
 {
-    if (! juce::isPositiveAndBelow (note, 128))
+    if (! juce::isPositiveAndBelow (note, 128) || impl->keyboardDevice == nullptr)
         return;
 
-    if (auto* t = findTrack (owner.getEdit(), selectedTrack))
-    {
-        impl->heldNotes[(size_t) note] = selectedTrack;
-        t->injectLiveMidiMessage (juce::MidiMessage::noteOn (1, note, velocity), impl->keyboardSource);
-    }
+    impl->heldNotes[(size_t) note] = true;
+    impl->keyboardDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOn (1, note, velocity), impl->keyboardSource);
 }
 
 void TrackController::noteOff (int note)
 {
-    if (! juce::isPositiveAndBelow (note, 128))
+    if (! juce::isPositiveAndBelow (note, 128) || impl->keyboardDevice == nullptr)
         return;
 
-    auto id = std::exchange (impl->heldNotes[(size_t) note], TrackId {});
-
-    if (auto* t = findTrack (owner.getEdit(), id))
-        t->injectLiveMidiMessage (juce::MidiMessage::noteOff (1, note), impl->keyboardSource);
+    impl->heldNotes[(size_t) note] = false;
+    impl->keyboardDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOff (1, note), impl->keyboardSource);
 }
 
 void TrackController::allNotesOff()
 {
+    // Release held keys before the input moves to another track, so the old
+    // track's synth doesn't keep sounding.
     for (int n = 0; n < 128; ++n)
-        if (impl->heldNotes[(size_t) n] != 0)
+        if (impl->heldNotes[(size_t) n])
             noteOff (n);
 }
 

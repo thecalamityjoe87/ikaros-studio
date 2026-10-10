@@ -28,11 +28,10 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     playButton.setIconSize (20.0f);
     addAndMakeVisible (playButton);
 
-    recordButton.setIconColour (colour::record);
+    // Red dot normally; lit red with a white dot while recording.
+    recordButton.setColours ({ colour::raised, colour::record, colour::record, juce::Colours::white });
     recordButton.setIconSize (16.0f);
-    // TODO(milestone-2): audio + MIDI recording. Disabled until then.
-    recordButton.setEnabled (false);
-    recordButton.setTooltip ("Record (coming in a later version)");
+    recordButton.setTooltip ("Record (R)");
 
     // Toggle buttons: setClickingTogglesState flips the toggle on click, and
     // the engine is updated from onClick. update() keeps them in sync if the
@@ -42,6 +41,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
     toStartButton.onClick   = [this] { engine.goToStart(); };
     playButton.onClick      = [this] { engine.togglePlay(); };
+    recordButton.onClick    = [this] { engine.toggleRecord(); };
     loopButton.onClick      = [this] { engine.setLooping (loopButton.getToggleState()); };
     metronomeButton.onClick = [this] { engine.setMetronomeEnabled (metronomeButton.getToggleState()); };
 
@@ -69,6 +69,8 @@ void TransportBar::update()
         playButton.setTooltip (state.playing ? "Pause (Space)" : "Play (Space)");
     }
 
+    recordButton.setToggleState (state.recording, juce::dontSendNotification);
+    recordButton.setTitle (state.recording ? "Stop recording" : "Record");
     loopButton.setToggleState (state.looping, juce::dontSendNotification);
     metronomeButton.setToggleState (state.metronome, juce::dontSendNotification);
     lcd.setState (state, engine.getKeyName());

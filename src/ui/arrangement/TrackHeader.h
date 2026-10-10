@@ -31,6 +31,7 @@ private:
 
     IconButton muteButton { "Mute", std::nullopt, "M" };
     IconButton soloButton { "Solo", std::nullopt, "S" };
+    IconButton armButton  { "Arm for recording", Icon::record };
     juce::Slider volume { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
 
     juce::Rectangle<int> iconArea, nameArea, soundArea;

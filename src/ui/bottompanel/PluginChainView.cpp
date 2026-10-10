@@ -257,7 +257,7 @@ int PluginChainView::getIdealHeight() const
         return 60;
 
     int h = 8 + 34 + 8;                                     // hint text
-    h += labelHeight + rowHeight + 12;                      // instrument
+    h += instrument.has_value() ? labelHeight + rowHeight + 12 : 0;   // instrument (not on audio tracks)
     h += labelHeight + (int) chain.size() * (rowHeight + rowGap);
     h += (int) chain.size() < TrackController::maxEffectsPerTrack ? rowHeight : 0;
     return h + 14;
@@ -286,18 +286,22 @@ void PluginChainView::paint (juce::Graphics& g)
         g.drawText (text, area, juce::Justification::centredLeft);
     };
 
-    drawLabel (instrumentLabelArea, "INSTRUMENT");
     drawLabel (effectsLabelArea, "EFFECTS");
 
-    // Instrument row (not changeable yet).
-    g.setColour (colour::cardBg);
-    g.fillRoundedRectangle (instrumentArea.toFloat(), size::radius);
-    auto r = instrumentArea.reduced (10, 0);
-    icons::draw (g, Icon::synths, r.removeFromLeft (18).toFloat(), trackColour, 16.0f);
-    r.removeFromLeft (8);
-    g.setColour (colour::text);
-    g.setFont (fonts::ui (13.0f));
-    g.drawText (instrument.has_value() ? instrument->name : juce::String ("None"), r, juce::Justification::centredLeft, true);
+    // Instrument row (instrument tracks only; not changeable yet).
+    if (instrument.has_value())
+    {
+        drawLabel (instrumentLabelArea, "INSTRUMENT");
+
+        g.setColour (colour::cardBg);
+        g.fillRoundedRectangle (instrumentArea.toFloat(), size::radius);
+        auto r = instrumentArea.reduced (10, 0);
+        icons::draw (g, Icon::synths, r.removeFromLeft (18).toFloat(), trackColour, 16.0f);
+        r.removeFromLeft (8);
+        g.setColour (colour::text);
+        g.setFont (fonts::ui (13.0f));
+        g.drawText (instrument->name, r, juce::Justification::centredLeft, true);
+    }
 
     // Insertion line while dragging an effect.
     if (dragFromIndex >= 0 && dropIndex >= 0)
@@ -316,9 +320,12 @@ void PluginChainView::resized()
     hintArea = r.removeFromTop (34);
     r.removeFromTop (8);
 
-    instrumentLabelArea = r.removeFromTop (labelHeight);
-    instrumentArea = r.removeFromTop (rowHeight);
-    r.removeFromTop (12);
+    if (instrument.has_value())
+    {
+        instrumentLabelArea = r.removeFromTop (labelHeight);
+        instrumentArea = r.removeFromTop (rowHeight);
+        r.removeFromTop (12);
+    }
 
     effectsLabelArea = r.removeFromTop (labelHeight);
     r.removeFromTop (2);

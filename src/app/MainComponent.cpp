@@ -1,5 +1,6 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
+#include "ui/dialogs/NewTrackDialog.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Tokens.h"
 
@@ -19,7 +20,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     addAndMakeVisible (bottomPanel);
 
     arrangement.onOpenRegionInEditor = [this] (RegionId) { bottomPanel.setTab (BottomPanel::Tab::editor); };
-    arrangement.onAddTrackRequested = [this] { commands.invokeDirectly (CommandIDs::newTrack, true); };
+    arrangement.onAddTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
+    toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
 
     // Commands: register everything this component can do, make it the
@@ -116,9 +118,10 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
                                    CommandIDs::saveSessionAs, CommandIDs::audioSettings,
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
-                                   CommandIDs::newTrack, CommandIDs::deleteTrack, CommandIDs::muteTrack, CommandIDs::soloTrack,
+                                   CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
+                                   CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
                                    CommandIDs::newRegion, CommandIDs::deleteRegion,
-                                   CommandIDs::togglePlay, CommandIDs::goToStart, CommandIDs::toggleLoop, CommandIDs::toggleMetronome,
+                                   CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop, CommandIDs::toggleMetronome,
                                    CommandIDs::toggleLibrary, CommandIDs::showSoundTab, CommandIDs::showEditorTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::about,
@@ -183,6 +186,15 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("New Instrument Track", "Add a track with the built-in synth", "Track", 0);
             info.addDefaultKeypress ('n', cmd | shift);
             break;
+        case CommandIDs::newAudioTrack:
+            info.setInfo ("New Audio Track", "Add a track for recording a microphone or guitar", "Track", 0);
+            info.addDefaultKeypress ('a', cmd | shift);
+            break;
+        case CommandIDs::armTrack:
+            info.setInfo ("Arm for Recording", "Record onto the selected track", "Track", 0);
+            info.setActive (hasTrack && ! transport.recording);
+            info.setTicked (hasTrack && track->armed);
+            break;
         case CommandIDs::deleteTrack:
             info.setInfo ("Delete Track", "Delete the selected track", "Track", 0);
             info.setActive (hasTrack);
@@ -211,6 +223,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case CommandIDs::togglePlay:
             info.setInfo (transport.playing ? "Stop" : "Play", "Start or stop playback", "Transport", 0);
             info.addDefaultKeypress (juce::KeyPress::spaceKey, 0);
+            break;
+        case CommandIDs::toggleRecord:
+            info.setInfo (transport.recording ? "Stop Recording" : "Record", "Record onto the armed or selected track", "Transport", 0);
+            info.setActive (hasTrack);
+            info.addDefaultKeypress ('r', 0);
             break;
         case CommandIDs::goToStart:
             info.setInfo ("Go to Start", "Move the playhead to the beginning", "Transport", 0);
@@ -303,6 +320,16 @@ bool MainComponent::perform (const InvocationInfo& info)
                 selection.selectTrack (id);
             break;
 
+        case CommandIDs::newAudioTrack:
+            if (auto id = tracks.addAudioTrack())
+                selection.selectTrack (id);
+            break;
+
+        case CommandIDs::armTrack:
+            if (auto t = tracks.getTrack (trackId))
+                tracks.setArmed (trackId, ! t->armed);
+            break;
+
         case CommandIDs::deleteTrack:     tracks.deleteTrack (trackId); break;
 
         case CommandIDs::muteTrack:
@@ -323,6 +350,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::deleteRegion:    tracks.deleteRegion (selection.getRegion()); break;
 
         case CommandIDs::togglePlay:      engine.togglePlay(); break;
+        case CommandIDs::toggleRecord:    engine.toggleRecord(); break;
         case CommandIDs::goToStart:       engine.goToStart(); break;
         case CommandIDs::toggleLoop:      engine.setLooping (! engine.getTransportState().looping); break;
         case CommandIDs::toggleMetronome: engine.setMetronomeEnabled (! engine.getTransportState().metronome); break;
@@ -351,6 +379,13 @@ bool MainComponent::perform (const InvocationInfo& info)
 
     commands.commandStatusChanged();
     return true;
+}
+
+//==============================================================================
+void MainComponent::showNewTrackDialog()
+{
+    // Like GarageBand: choose Software Instrument or Real Instrument first.
+    NewTrackDialog::show (*this, engine, [this] (TrackId id) { selection.selectTrack (id); });
 }
 
 //==============================================================================

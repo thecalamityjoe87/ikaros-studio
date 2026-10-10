@@ -26,6 +26,9 @@ public:
     /** Called by the owner's ~30 Hz timer. */
     void update (bool libraryVisible);
 
+    /** "+ New Track" was clicked: the owner shows the track-type menu. */
+    std::function<void (juce::Component*)> onNewTrackRequested;
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

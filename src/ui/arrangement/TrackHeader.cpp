@@ -23,6 +23,17 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     setupToggle (muteButton, colour::mute);
     setupToggle (soloButton, colour::solo);
 
+    // Record-arm: grey dot when off, white dot on red when armed.
+    armButton.setColours ({ colour::controlFill, colour::textSecondary, colour::record, juce::Colours::white });
+    armButton.setCornerRadius (size::radiusSmall);
+    armButton.setIconSize (12.0f);
+    armButton.onClick = [this]
+    {
+        selection.selectTrack (info.id);
+        engine.getTracks().setArmed (info.id, ! info.armed);
+    };
+    addAndMakeVisible (armButton);
+
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };
     soloButton.onClick = [this] { engine.getTracks().setSolo (info.id, ! info.solo); };
 
@@ -43,6 +54,8 @@ void TrackHeader::updateAccessibleNames()
     muteButton.setTooltip ("Mute " + info.name);
     soloButton.setTitle ("Solo " + info.name);
     soloButton.setTooltip ("Solo " + info.name);
+    armButton.setTitle ((info.armed ? "Disarm " : "Arm ") + info.name + " for recording");
+    armButton.setTooltip (info.armed ? "Armed: Record records here" : "Arm for recording");
     volume.setTitle (info.name + " volume");
     setTitle (info.name + " track");
 }
@@ -54,6 +67,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
 
     muteButton.setToggleState (t.muted, juce::dontSendNotification);
     soloButton.setToggleState (t.solo, juce::dontSendNotification);
+    armButton.setToggleState (t.armed, juce::dontSendNotification);
 
     // Don't fight the user: only move the slider if they aren't dragging it.
     if (! volume.isMouseButtonDown())
@@ -104,6 +118,8 @@ void TrackHeader::resized()
     r.removeFromLeft (10);
 
     auto top = r.removeFromTop (22);
+    armButton.setBounds (top.removeFromRight (24));
+    top.removeFromRight (4);
     soloButton.setBounds (top.removeFromRight (24));
     top.removeFromRight (4);
     muteButton.setBounds (top.removeFromRight (24));

@@ -40,7 +40,7 @@ public:
     void updateTransport();
 
     std::function<void (RegionId)> onOpenRegionInEditor;
-    std::function<void()> onAddTrackRequested;
+    std::function<void (juce::Component*)> onAddTrackRequested;   // shows the track-type menu at this component
 
     void paint (juce::Graphics&) override;
     void resized() override;

@@ -23,6 +23,8 @@ namespace CommandIDs
         deleteSelection,
 
         newTrack,
+        newAudioTrack,
+        armTrack,
         deleteTrack,
         muteTrack,
         soloTrack,
@@ -31,6 +33,7 @@ namespace CommandIDs
         deleteRegion,
 
         togglePlay,
+        toggleRecord,
         goToStart,
         toggleLoop,
         toggleMetronome,

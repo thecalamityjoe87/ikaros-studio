@@ -2,7 +2,7 @@
 
 A simple music studio for Linux, Windows and macOS, in the spirit of GarageBand. Built with JUCE and Tracktion Engine.
 
-Early development. You can make instrument tracks, add MIDI regions, play them back, add effects, and save sessions. Recording, audio files and plug-in hosting aren't in yet.
+Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone or a guitar, add effects, and save sessions. Importing audio files and third-party plug-ins aren't in yet. Recordings are kept in `Documents/Ikaros Studio/Recordings`.
 
 ## Building
 

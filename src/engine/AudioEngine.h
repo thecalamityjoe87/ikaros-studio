@@ -54,6 +54,12 @@ public:
     void play();
     void stop();
     void togglePlay();
+
+    /** Starts recording onto the armed track (arming the selected track for
+        this take if none is armed), or stops recording. Recorded MIDI becomes
+        a region when recording stops.
+        TODO(milestone-2): count-in, audio recording on audio tracks. */
+    void toggleRecord();
     void goToStart();
     void setPositionBeats (double beats);
     void setLooping (bool shouldLoop);

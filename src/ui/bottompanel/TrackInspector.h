@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/bottompanel/PluginChainView.h"
+#include "ui/bottompanel/RecordingView.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/CollapsibleSection.h"
 
@@ -12,8 +13,8 @@ namespace ikaros
     The left column of the bottom panel: settings for the selected track,
     grouped in collapsible sections (like GarageBand's track inspector).
 
-      Plug-ins   the instrument and effect chain (expanded by default)
-      Recording  placeholder until recording exists (collapsed)
+      Recording  input, monitoring and input level (audio tracks)
+      Plug-ins   the instrument and effect chain
 
     New sections (noise gate, sends to master reverb/echo, ...) slot in here.
 */
@@ -24,6 +25,7 @@ public:
     ~TrackInspector() override;
 
     void refresh();
+    void update();   // ~30 Hz: the input meter
 
     /** Forwarded from the Plug-ins section: show an effect's settings. */
     std::function<void (PluginId)> onOpenEffect;
@@ -36,13 +38,11 @@ public:
     static constexpr int preferredWidth = tokens::size::trackHeaderWidth;
 
 private:
-    class RecordingPlaceholder;
-
+    RecordingView recording;
     PluginChainView plugins;
-    std::unique_ptr<RecordingPlaceholder> recording;
 
+    CollapsibleSection recordingSection;
     CollapsibleSection pluginsSection;
-    std::unique_ptr<CollapsibleSection> recordingSection;
 
     juce::Viewport viewport;
     juce::Component sectionHolder;

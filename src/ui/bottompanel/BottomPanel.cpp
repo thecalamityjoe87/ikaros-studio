@@ -44,6 +44,14 @@ public:
         auto& tc = engine.getTracks();
         auto arc = track.has_value() ? track->colour : colour::accent;
 
+        // Audio tracks have no synth: no knobs or keyboard, just a pointer
+        // to where their settings are.
+        isAudioTrack = track.has_value() && track->kind == TrackKind::audio;
+        keyboard.setVisible (! isAudioTrack);
+
+        for (auto* k : knobs)
+            k->setVisible (! isAudioTrack);
+
         auto controls = tc.getSoundControls (id);
 
         for (int i = 0; i < knobs.size() && i < (int) controls.size(); ++i)
@@ -61,6 +69,23 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        if (isAudioTrack)
+        {
+            auto r = getLocalBounds().reduced (18, 14).withWidth (5 * (Knob::preferredWidth + 14));
+            g.setColour (colour::cardBg);
+            g.fillRoundedRectangle (r.withHeight (Knob::preferredHeight).toFloat(), 12.0f);
+
+            auto text = r.withHeight (Knob::preferredHeight).reduced (20, 16);
+            g.setColour (colour::text);
+            g.setFont (fonts::uiBold (15.0f));
+            g.drawText ("Audio track", text.removeFromTop (24), juce::Justification::centredLeft);
+            g.setColour (colour::textSecondary);
+            g.setFont (fonts::ui (13.0f));
+            g.drawFittedText ("Choose the input and monitoring under Recording on the left, and shape the sound "
+                              "with Plug-ins. Press R or the Record button to record.",
+                              text, juce::Justification::topLeft, 3, 1.0f);
+        }
+
         if (detailsVisible)
         {
             auto r = detailsArea;
@@ -78,7 +103,7 @@ public:
                                                      : details.midiInputs.joinIntoString (", ");
             g.drawText ("Plugin: " + details.pluginName, r.removeFromTop (20), juce::Justification::centredLeft, true);
             g.drawText ("Output: " + details.outputName, r.removeFromTop (20), juce::Justification::centredLeft, true);
-            g.drawText ("MIDI input: " + midi, r.removeFromTop (20), juce::Justification::centredLeft, true);
+            g.drawText ((isAudioTrack ? "Input: " : "MIDI input: ") + midi, r.removeFromTop (20), juce::Justification::centredLeft, true);
             // TODO(milestone-3): "Open plugin window" for hosted VST3/AU instruments.
         }
     }
@@ -110,6 +135,7 @@ private:
 
     TrackDetails details;
     bool detailsVisible = false;
+    bool isAudioTrack = false;
     juce::Rectangle<int> detailsArea;
 
     void refreshKnobText()
@@ -300,6 +326,8 @@ void BottomPanel::refresh()
 
 void BottomPanel::update()
 {
+    inspector.update();
+
     if (tab == Tab::mixer)
         mixer.updateMeters();
     else if (tab == Tab::editor)

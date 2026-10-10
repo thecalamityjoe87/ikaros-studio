@@ -73,6 +73,7 @@ private:
     void saveSessionAs (std::function<void (bool saved)> afterSave = nullptr);
     void confirmDiscardChanges (std::function<void()> thenDo);
     void showAudioSettings();
+    void showNewTrackDialog();
     void showAbout();
     void showError (const juce::String& title, const juce::String& message);
 
