@@ -78,7 +78,7 @@ namespace size
     inline constexpr int toolbarHeight     = 64;
     inline constexpr int sidebarWidth      = 264;   // 250–280 in the spec
     inline constexpr int rulerHeight       = 30;
-    inline constexpr int trackHeaderWidth  = 240;
+    inline constexpr int trackHeaderWidth  = 260;   // also the width of the track inspector below, so they line up
     inline constexpr int trackRowHeight    = 76;
     inline constexpr int bottomPanelHeight = 290;
     inline constexpr int minHitTarget      = 44;

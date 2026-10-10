@@ -32,9 +32,86 @@ namespace
         return t.pluginList.findFirstPluginOfType<te::FourOscPlugin>();
     }
 
-    te::CompressorPlugin* findCompressor (te::AudioTrack& t)
+    // The built-in effects offered in the "+ Add effect" menu, with the names
+    // and groups the user sees. Order here = order in the menu.
+    const std::vector<EffectType>& builtInEffects()
     {
-        return t.pluginList.findFirstPluginOfType<te::CompressorPlugin>();
+        static const std::vector<EffectType> effects {
+            { te::CompressorPlugin::xmlTypeName, "Compressor",            "Dynamics" },
+            { te::EqualiserPlugin::xmlTypeName,  "EQ",                    "EQ & Filter" },
+            { te::LowPassPlugin::xmlTypeName,    "Low/High-Pass Filter",  "EQ & Filter" },
+            { te::ReverbPlugin::xmlTypeName,     "Reverb",                "Space" },
+            { te::DelayPlugin::xmlTypeName,      "Echo",                  "Space" },
+            { te::ChorusPlugin::xmlTypeName,     "Chorus",                "Modulation" },
+            { te::PhaserPlugin::xmlTypeName,     "Phaser",                "Modulation" },
+            { te::PitchShiftPlugin::xmlTypeName, "Pitch Shift",           "Pitch" },
+        };
+        return effects;
+    }
+
+    juce::String displayNameFor (te::Plugin& p)
+    {
+        for (auto& e : builtInEffects())
+            if (e.type == p.getPluginType())
+                return e.name;
+
+        if (dynamic_cast<te::FourOscPlugin*> (&p) != nullptr)
+            return "4OSC Synth";
+
+        return p.getName();
+    }
+
+    // Effects are every plugin on the track except the instrument and the
+    // track's own volume/meter plugins (which Tracktion keeps at the end).
+    bool isEffect (te::Plugin& p)
+    {
+        return ! p.isSynth()
+            && dynamic_cast<te::VolumeAndPanPlugin*> (&p) == nullptr
+            && dynamic_cast<te::LevelMeterPlugin*> (&p) == nullptr;
+    }
+
+    std::vector<te::Plugin*> effectsOn (te::AudioTrack& t)
+    {
+        std::vector<te::Plugin*> result;
+
+        for (auto* p : t.pluginList)
+            if (isEffect (*p))
+                result.push_back (p);
+
+        return result;
+    }
+
+    te::Plugin* findEffect (te::AudioTrack& t, PluginId id)
+    {
+        for (auto* p : effectsOn (t))
+            if (p->itemID.getRawID() == id)
+                return p;
+
+        return nullptr;
+    }
+
+    PluginSlot makeSlot (te::Plugin& p)
+    {
+        return { p.itemID.getRawID(), p.getPluginType(), displayNameFor (p), p.isEnabled() };
+    }
+
+    // Where in the track's plugin list effect number `position` should go:
+    // before the existing effect at that position, or (for "the end") just
+    // before the volume plugin.
+    int pluginListIndexForPosition (te::AudioTrack& t, int position)
+    {
+        auto effects = effectsOn (t);
+
+        if (juce::isPositiveAndBelow (position, (int) effects.size()))
+            return t.pluginList.indexOf (effects[(size_t) position]);
+
+        if (! effects.empty())
+            return t.pluginList.indexOf (effects.back()) + 1;
+
+        if (auto* vol = t.getVolumePlugin())
+            return t.pluginList.indexOf (vol);
+
+        return t.pluginList.size();
     }
 
     // Sets a plugin parameter so that Undo can restore it.
@@ -219,14 +296,7 @@ TrackId TrackController::addInstrumentTrack()
         track->pluginList.insertPlugin (synthPtr, 0, nullptr);
     }
 
-    // A compressor after the synth, switched off until the user turns it on
-    // from the Effects list.
-    if (auto comp = edit->getPluginCache().createNewPlugin (te::CompressorPlugin::xmlTypeName, {}))
-    {
-        track->pluginList.insertPlugin (comp, 1, nullptr);
-        comp->setEnabled (false);
-    }
-
+    // No effects by default; the user adds them from the Plug-ins inspector.
     return track->itemID.getRawID();
 }
 
@@ -538,38 +608,151 @@ void TrackController::setSoundControl (TrackId id, int index, float value)
         }
 }
 
-std::vector<EffectInfo> TrackController::getEffects (TrackId id) const
+//==============================================================================
+// Plug-ins
+std::optional<PluginSlot> TrackController::getInstrument (TrackId id) const
 {
-    auto* t = findTrack (owner.getEdit(), id);
-    auto* synth = t != nullptr ? findSynth (*t) : nullptr;
-    auto* comp = t != nullptr ? findCompressor (*t) : nullptr;
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : t->pluginList)
+            if (p->isSynth())
+                return makeSlot (*p);
 
-    return {
-        { "Reverb",     synth != nullptr && synth->reverbOnValue.get() },
-        { "Compressor", comp  != nullptr && comp->isEnabled() },
-        { "Echo",       synth != nullptr && synth->delayOnValue.get() },
-    };
+    return std::nullopt;
 }
 
-void TrackController::setEffectEnabled (TrackId id, int index, bool enabled)
+std::vector<PluginSlot> TrackController::getEffectChain (TrackId id) const
+{
+    std::vector<PluginSlot> result;
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : effectsOn (*t))
+            result.push_back (makeSlot (*p));
+
+    return result;
+}
+
+std::vector<EffectType> TrackController::getAvailableEffects()
+{
+    return builtInEffects();
+}
+
+PluginId TrackController::addEffect (TrackId id, const juce::String& type, int position)
+{
+    auto* edit = owner.getEdit();
+    auto* t = findTrack (edit, id);
+
+    if (t == nullptr || (int) effectsOn (*t).size() >= maxEffectsPerTrack)
+        return 0;
+
+    owner.beginUndoStep ("Add Effect");
+
+    auto plugin = edit->getPluginCache().createNewPlugin (type, {});
+
+    if (plugin == nullptr)
+        return 0;
+
+    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (*t, position), nullptr);
+    return plugin->itemID.getRawID();
+}
+
+PluginId TrackController::replaceEffect (TrackId id, PluginId pluginId, const juce::String& newType)
+{
+    auto* edit = owner.getEdit();
+    auto* t = findTrack (edit, id);
+    auto* old = t != nullptr ? findEffect (*t, pluginId) : nullptr;
+
+    if (old == nullptr)
+        return 0;
+
+    auto plugin = edit->getPluginCache().createNewPlugin (newType, {});
+
+    if (plugin == nullptr)
+        return 0;
+
+    // Remove + insert in one undo step, at the same position.
+    owner.beginUndoStep ("Replace Effect");
+    const auto index = t->pluginList.indexOf (old);
+    old->removeFromParent();
+    t->pluginList.insertPlugin (plugin, index, nullptr);
+    return plugin->itemID.getRawID();
+}
+
+void TrackController::removeEffect (TrackId id, PluginId pluginId)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        if (auto* p = findEffect (*t, pluginId))
+        {
+            owner.beginUndoStep ("Remove Effect");
+            p->removeFromParent();
+        }
+    }
+}
+
+void TrackController::moveEffect (TrackId id, PluginId pluginId, int newPosition)
 {
     auto* t = findTrack (owner.getEdit(), id);
 
     if (t == nullptr)
         return;
 
-    owner.beginUndoStep ("Effect");
+    // Keep a reference while it's briefly out of the list. (Plugin::Ptr is
+    // ref-counted, so the plugin isn't deleted when it's removed.)
+    te::Plugin::Ptr plugin = findEffect (*t, pluginId);
 
-    // TODO(milestone-3): real per-track effect slots instead of 4OSC's built-ins.
-    if (index == 1)
+    if (plugin == nullptr)
+        return;
+
+    auto effects = effectsOn (*t);
+    const auto oldPosition = (int) std::distance (effects.begin(), std::find (effects.begin(), effects.end(), plugin.get()));
+
+    if (oldPosition == newPosition)
+        return;
+
+    owner.beginUndoStep ("Move Effect");
+    plugin->removeFromParent();
+    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (*t, newPosition), nullptr);
+}
+
+void TrackController::setEffectEnabled (TrackId id, PluginId pluginId, bool enabled)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
     {
-        if (auto* comp = findCompressor (*t))
-            comp->setEnabled (enabled);
+        if (auto* p = findEffect (*t, pluginId))
+        {
+            owner.beginUndoStep (enabled ? "Turn Effect On" : "Turn Effect Off");
+            p->setEnabled (enabled);
+        }
     }
-    else if (auto* synth = findSynth (*t))
+}
+
+std::vector<ParameterInfo> TrackController::getEffectParameters (TrackId id, PluginId pluginId) const
+{
+    std::vector<ParameterInfo> result;
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        if (auto* p = findEffect (*t, pluginId))
+            for (auto* param : p->getAutomatableParameters())
+                result.push_back ({ param->getParameterName(),
+                                    param->getCurrentNormalisedValue(),
+                                    param->getCurrentValueAsStringWithLabel() });
+
+    return result;
+}
+
+void TrackController::setEffectParameter (TrackId id, PluginId pluginId, int index, float value)
+{
+    // No beginUndoStep() here: the UI starts one on knob drag start.
+    if (auto* t = findTrack (owner.getEdit(), id))
     {
-        if (index == 0)  synth->reverbOnValue = enabled;
-        if (index == 2)  synth->delayOnValue = enabled;
+        if (auto* p = findEffect (*t, pluginId))
+        {
+            auto params = p->getAutomatableParameters();
+
+            if (auto* param = params[index])
+                setParameterUndoably (*p, *param, param->paramID,
+                                      param->valueRange.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, value)));
+        }
     }
 }
 

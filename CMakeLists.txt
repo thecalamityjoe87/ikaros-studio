@@ -100,6 +100,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
 
     # state: UI state shared between areas
     src/ui/state/Selection.h
@@ -117,7 +118,10 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
-    src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp)
+    src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
+    src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
+    src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
+    src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp)
 
 target_sources(IkarosStudio PRIVATE
     ${IKAROS_APP_SOURCES}

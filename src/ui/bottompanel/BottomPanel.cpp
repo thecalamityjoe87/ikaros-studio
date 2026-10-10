@@ -34,19 +34,6 @@ public:
             addAndMakeVisible (knob);
         }
 
-        for (int i = 0; i < 3; ++i)
-        {
-            auto* pill = effectPills.add (new IconButton ("Effect", std::nullopt, "OFF"));
-            pill->setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
-            pill->setCornerRadius (6.0f);
-            pill->setFont (fonts::uiBold (11.0f));
-            pill->onClick = [this, i, pill]
-            {
-                engine.getTracks().setEffectEnabled (selection.getTrack(), i, ! pill->getToggleState());
-            };
-            addAndMakeVisible (pill);
-        }
-
         addAndMakeVisible (keyboard);
     }
 
@@ -67,19 +54,6 @@ public:
             knobs[i]->setEnabled (track.has_value());
         }
 
-        effects = tc.getEffects (id);
-
-        for (int i = 0; i < effectPills.size() && i < (int) effects.size(); ++i)
-        {
-            auto& fx = effects[(size_t) i];
-            auto* pill = effectPills[i];
-            pill->setToggleState (fx.enabled, juce::dontSendNotification);
-            pill->setText (fx.enabled ? "ON" : "OFF");
-            pill->setTitle (fx.name + (fx.enabled ? " on" : " off"));
-            pill->setTooltip ("Turn " + fx.name + (fx.enabled ? " off" : " on"));
-            pill->setEnabled (track.has_value());
-        }
-
         details = tc.getDetails (id);
         resized();
         repaint();
@@ -87,21 +61,6 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        // Effects card
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::uiBold (11.0f).withExtraKerningFactor (0.1f));
-        g.drawText ("EFFECTS", effectsArea.withHeight (14), juce::Justification::centredLeft);
-
-        for (int i = 0; i < (int) effects.size() && i < effectRows.size(); ++i)
-        {
-            auto row = effectRows.getReference (i);
-            g.setColour (colour::cardBg);
-            g.fillRoundedRectangle (row.toFloat(), size::radius);
-            g.setColour (colour::text);
-            g.setFont (fonts::ui (14.0f));
-            g.drawText (effects[(size_t) i].name, row.reduced (10, 0), juce::Justification::centredLeft);
-        }
-
         if (detailsVisible)
         {
             auto r = detailsArea;
@@ -139,19 +98,6 @@ public:
             top.removeFromLeft (14);
         }
 
-        top.removeFromLeft (6);
-        effectsArea = top.removeFromLeft (220);
-        auto rows = effectsArea.withTrimmedTop (22);
-        effectRows.clearQuick();
-
-        for (auto* pill : effectPills)
-        {
-            auto row = rows.removeFromTop (30);
-            rows.removeFromTop (6);
-            effectRows.add (row);
-            pill->setBounds (row.reduced (6, 3).removeFromRight (48));
-        }
-
         top.removeFromLeft (20);
         detailsArea = top.withHeight (112);
     }
@@ -160,14 +106,11 @@ private:
     AudioEngine& engine;
     Selection& selection;
     juce::OwnedArray<Knob> knobs;
-    juce::OwnedArray<IconButton> effectPills;
     PianoKeyboard keyboard;
 
-    std::vector<EffectInfo> effects;
     TrackDetails details;
     bool detailsVisible = false;
-    juce::Rectangle<int> effectsArea, detailsArea;
-    juce::Array<juce::Rectangle<int>> effectRows;
+    juce::Rectangle<int> detailsArea;
 
     void refreshKnobText()
     {
@@ -180,9 +123,14 @@ private:
 
 //==============================================================================
 BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
-    : engine (e), selection (s), mixer (e, s)
+    : engine (e), selection (s), inspector (e, s), mixer (e, s)
 {
     setTitle ("Track controls");
+    addAndMakeVisible (inspector);
+    inspector.onOpenEffect = [this] (PluginId id) { openEffect (id); };
+
+    effectViewport.setScrollBarsShown (true, false);
+    addChildComponent (effectViewport);
 
     soundPage = std::make_unique<SoundPage> (engine, selection);
     addAndMakeVisible (*soundPage);
@@ -226,11 +174,79 @@ BottomPanel::~BottomPanel() = default;
 void BottomPanel::setTab (Tab t)
 {
     tab = t;
-    soundPage->setVisible (tab == Tab::sound);
-    pianoRoll.setVisible (tab == Tab::editor);
-    mixer.setVisible (tab == Tab::mixer);
-    updateTabButtons();
+
+    if (isShowingEffect())
+        closeEffect();   // picking a tab leaves the effect settings
+
+    showTabPage();
     refresh();
+}
+
+void BottomPanel::showTabPage()
+{
+    const bool effect = isShowingEffect();
+    soundPage->setVisible (! effect && tab == Tab::sound);
+    pianoRoll.setVisible (! effect && tab == Tab::editor);
+    mixer.setVisible (! effect && tab == Tab::mixer);
+    effectViewport.setVisible (effect);
+    updateTabButtons();
+}
+
+//==============================================================================
+void BottomPanel::openEffect (PluginId id)
+{
+    auto t = engine.getTracks().getTrack (selection.getTrack());
+
+    if (! t.has_value())
+        return;
+
+    if (isShowingEffect() && effectEditor->getPluginId() == id)
+        return;
+
+    effectViewport.setViewedComponent (nullptr, false);
+    effectEditor = std::make_unique<PluginEditor> (engine, t->id, id, t->colour);
+
+    // onClose runs from inside the editor (its Done button or its timer), so
+    // the editor can't be deleted right there; close on the next message-loop
+    // turn instead. SafePointer guards against this panel going away first.
+    effectEditor->onClose = [safeThis = SafePointer<BottomPanel> (this), id]
+    {
+        juce::MessageManager::callAsync ([safeThis, id]
+        {
+            if (safeThis != nullptr && safeThis->isShowingEffect() && safeThis->effectEditor->getPluginId() == id)
+                safeThis->closeEffect();
+        });
+    };
+
+    effectViewport.setViewedComponent (effectEditor.get(), false);
+    inspector.setOpenEffect (id);
+    showTabPage();
+    layoutEffectEditor();
+
+    if (onViewStateChanged)
+        onViewStateChanged();
+}
+
+void BottomPanel::closeEffect()
+{
+    effectViewport.setViewedComponent (nullptr, false);
+    effectEditor.reset();
+    inspector.setOpenEffect (0);
+    showTabPage();
+
+    if (onViewStateChanged)
+        onViewStateChanged();
+}
+
+void BottomPanel::layoutEffectEditor()
+{
+    effectViewport.setBounds (contentArea);
+
+    if (effectEditor != nullptr)
+    {
+        const int w = effectViewport.getMaximumVisibleWidth();
+        effectEditor->setSize (w, juce::jmax (effectEditor->getIdealHeight (w), effectViewport.getMaximumVisibleHeight()));
+    }
 }
 
 void BottomPanel::setDetailsVisible (bool shouldShow)
@@ -245,9 +261,11 @@ void BottomPanel::setDetailsVisible (bool shouldShow)
 
 void BottomPanel::updateTabButtons()
 {
-    soundTab.setToggleState (tab == Tab::sound, juce::dontSendNotification);
-    editorTab.setToggleState (tab == Tab::editor, juce::dontSendNotification);
-    mixerTab.setToggleState (tab == Tab::mixer, juce::dontSendNotification);
+    // While an effect's settings are showing, no tab is highlighted.
+    const bool effect = isShowingEffect();
+    soundTab.setToggleState (! effect && tab == Tab::sound, juce::dontSendNotification);
+    editorTab.setToggleState (! effect && tab == Tab::editor, juce::dontSendNotification);
+    mixerTab.setToggleState (! effect && tab == Tab::mixer, juce::dontSendNotification);
 }
 
 void BottomPanel::refresh()
@@ -255,6 +273,11 @@ void BottomPanel::refresh()
     auto& tc = engine.getTracks();
     track = tc.getTrack (selection.getTrack());
 
+    // Switching tracks leaves the previous track's effect settings.
+    if (isShowingEffect() && effectEditor->getTrackId() != selection.getTrack())
+        closeEffect();
+
+    inspector.refresh();
     soundPage->refresh (track, detailsVisible);
 
     // Editor: the selected region, or else the selected track's first MIDI region.
@@ -289,7 +312,7 @@ void BottomPanel::paint (juce::Graphics& g)
     g.setColour (colour::divider);
     g.fillRect (getLocalBounds().removeFromTop (1));
     g.setColour (colour::wellBg);
-    g.fillRect (0, headerHeight, getWidth(), 1);
+    g.fillRect (inspector.getRight(), headerHeight, getWidth() - inspector.getRight(), 1);
 
     auto r = headerArea;
 
@@ -324,6 +347,10 @@ void BottomPanel::paint (juce::Graphics& g)
 void BottomPanel::resized()
 {
     auto r = getLocalBounds();
+
+    // Track inspector: full-height column on the left, visible on every tab.
+    inspector.setBounds (r.removeFromLeft (TrackInspector::preferredWidth).withTrimmedTop (1));
+
     auto header = r.removeFromTop (headerHeight).withTrimmedTop (1).reduced (14, 8);
 
     tabsArea = header.withSizeKeepingCentre (tabWidth * 3, 32);
@@ -336,9 +363,11 @@ void BottomPanel::resized()
     headerArea = header.withRight (tabsArea.getX() - 12);
 
     r.removeFromTop (1);
+    contentArea = r;
     soundPage->setBounds (r);
     pianoRoll.setBounds (r);
     mixer.setBounds (r);
+    layoutEffectEditor();
 }
 
 } // namespace ikaros

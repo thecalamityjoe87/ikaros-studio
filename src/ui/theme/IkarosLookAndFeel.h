@@ -25,6 +25,8 @@ public:
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
     juce::Font getLabelFont (juce::Label&) override;
     juce::Font getPopupMenuFont() override;
+    void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardMenuItemHeight,
+                                    int& idealWidth, int& idealHeight) override;
     juce::Font getMenuBarFont (juce::MenuBarComponent&, int itemIndex, const juce::String& itemText) override;
 
     // Buttons
@@ -50,6 +52,10 @@ public:
     // Window frame (we draw our own title bar, so the window border is ours too)
     void drawResizableWindowBorder (juce::Graphics&, int width, int height,
                                     const juce::BorderSize<int>&, juce::ResizableWindow&) override;
+
+    // Popovers (CallOutBox), e.g. the effect settings
+    void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics&, const juce::Path&, juce::Image&) override;
+    float getCallOutBoxCornerSize (const juce::CallOutBox&) override   { return 10.0f; }
 
     // Text fields
     void fillTextEditorBackground (juce::Graphics&, int width, int height, juce::TextEditor&) override;

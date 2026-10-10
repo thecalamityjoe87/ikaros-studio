@@ -96,9 +96,38 @@ int main()
         pumpMessages();
         std::cout << "Sound\n";
         tracks.setSound (t2, "Keyboards", "Grand Piano");
-        tracks.setEffectEnabled (t2, 1, true);
         check (tracks.getTrack (t2)->soundName == "Grand Piano", "preset assigns to the track");
-        check (tracks.getEffects (t2)[1].enabled, "compressor can be turned on");
+
+        std::cout << "Plug-ins\n";
+        check (tracks.getInstrument (t2).has_value(), "track has an instrument");
+        check (tracks.getEffectChain (t2).empty(), "new tracks start with no effects");
+        auto reverb = tracks.addEffect (t2, "reverb");
+        auto comp = tracks.addEffect (t2, "compressor");
+        auto eq = tracks.addEffect (t2, "4bandEq", 0);   // insert at the top
+        auto chain = tracks.getEffectChain (t2);
+        check (reverb != 0 && comp != 0 && eq != 0, "effects can be added");
+        check (chain.size() == 3 && chain[0].id == eq && chain[1].id == reverb && chain[2].id == comp, "effects go where asked");
+        tracks.moveEffect (t2, comp, 0);
+        chain = tracks.getEffectChain (t2);
+        check (chain.size() == 3 && chain[0].id == comp && chain[1].id == eq, "effects can be reordered");
+        tracks.setEffectEnabled (t2, comp, false);
+        check (! tracks.getEffectChain (t2)[0].enabled, "effects can be bypassed");
+        auto echo = tracks.replaceEffect (t2, eq, "delay");
+        chain = tracks.getEffectChain (t2);
+        check (echo != 0 && chain.size() == 3 && chain[1].id == echo && chain[1].name == "Echo", "effects can be replaced in place");
+        tracks.removeEffect (t2, reverb);
+        check (tracks.getEffectChain (t2).size() == 2, "effects can be removed");
+        auto params = tracks.getEffectParameters (t2, echo);
+        check (! params.empty(), "effects expose parameters");
+        engine.beginUndoStep ("Effect setting");
+        tracks.setEffectParameter (t2, echo, 0, 0.25f);
+        check (std::abs (tracks.getEffectParameters (t2, echo)[0].value - 0.25f) < 0.02f, "effect parameters can be set");
+        pumpMessages();
+        engine.undo();   // the effect setting
+        pumpMessages();
+        engine.undo();   // removing the reverb
+        pumpMessages();
+        check (tracks.getEffectChain (t2).size() == 3, "undo brings a removed effect back");
 
         pumpMessages();
         std::cout << "Save\n";
@@ -130,7 +159,8 @@ int main()
             check (t2.soundName == "Grand Piano", "sound name round-trips");
             check (t2.muted, "mute round-trips");
             check (regions.size() == 1 && regions[0].notes.size() == 28, "region and notes round-trip");
-            check (engine.getTracks().getEffects (t2.id)[1].enabled, "compressor state round-trips");
+            auto chain = engine.getTracks().getEffectChain (t2.id);
+            check (chain.size() == 3 && ! chain[0].enabled && chain[0].name == "Compressor", "effect chain round-trips");
         }
 
         check (std::abs (engine.getTransportState().bpm - 96.0) < 0.001, "tempo round-trips");

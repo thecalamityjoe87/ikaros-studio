@@ -95,6 +95,15 @@ juce::Font IkarosLookAndFeel::getPopupMenuFont()
     return fonts::ui (14.0f);
 }
 
+void IkarosLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardHeight,
+                                                   int& idealWidth, int& idealHeight)
+{
+    // Roomier menu items than JUCE's default (~18 px): easier to hit.
+    juce::LookAndFeel_V4::getIdealPopupMenuItemSize (text, isSeparator, isSeparator ? standardHeight : juce::jmax (standardHeight, 30),
+                                                     idealWidth, idealHeight);
+    idealWidth += 16;
+}
+
 juce::Font IkarosLookAndFeel::getMenuBarFont (juce::MenuBarComponent&, int, const juce::String&)
 {
     return fonts::ui (13.0f);
@@ -243,6 +252,20 @@ void IkarosLookAndFeel::drawResizableWindowBorder (juce::Graphics& g, int w, int
 
     g.setColour (colour::border);
     g.drawRect (0, 0, w, h, 1);
+}
+
+//==============================================================================
+void IkarosLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g,
+                                                  const juce::Path& path, juce::Image&)
+{
+    // A soft shadow, then the popover body in the toolbar colour with a border.
+    juce::DropShadow (juce::Colours::black.withAlpha (0.5f), 14, { 0, 4 }).drawForPath (g, path);
+
+    g.setColour (colour::toolbarBg);
+    g.fillPath (path);
+
+    g.setColour (colour::border);
+    g.strokePath (path, juce::PathStrokeType (1.0f));
 }
 
 //==============================================================================

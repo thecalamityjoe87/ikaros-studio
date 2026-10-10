@@ -34,6 +34,11 @@ namespace
             case Icon::windowMaximise: return "M6 6h12v12H6z";
             case Icon::windowRestore:  return "M6 9h9v9H6z M9 9V6h9v9h-3";
             case Icon::windowClose:    return "M6 6l12 12 M18 6L6 18";
+
+            case Icon::power:          return "M12 4v8 M7.5 7a7 7 0 1 0 9 0";
+            case Icon::more:           return "M5.5 12h.5 M12 12h.5 M18.5 12h.5";   // three dots (round caps)
+            case Icon::chevronDown:    return "M7 10l5 5 5-5";
+            case Icon::chevronRight:   return "M10 7l5 5-5 5";
         }
 
         return "";

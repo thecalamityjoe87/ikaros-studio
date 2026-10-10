@@ -18,6 +18,7 @@ namespace ikaros
 // We pass the raw number around; 0 means "none".
 using TrackId  = std::uint64_t;
 using RegionId = std::uint64_t;
+using PluginId = std::uint64_t;
 
 struct NoteInfo
 {
@@ -67,10 +68,29 @@ struct SoundControl
     juce::String valueText;        // human readable, e.g. "62%" or "0.8 s"
 };
 
-struct EffectInfo
+// One plug-in on a track: the instrument, or an effect in the chain.
+struct PluginSlot
+{
+    PluginId id = 0;
+    juce::String type;             // Tracktion's plugin type, e.g. "reverb"
+    juce::String name;             // what the user sees, e.g. "Reverb"
+    bool enabled = true;           // false = bypassed
+};
+
+// An effect the user can add from the "+ Add effect" menu.
+struct EffectType
+{
+    juce::String type;             // Tracktion's plugin type
+    juce::String name;             // what the user sees
+    juce::String category;         // menu group, e.g. "Space"
+};
+
+// One adjustable setting of a plug-in (shown as a knob in the effect editor).
+struct ParameterInfo
 {
     juce::String name;
-    bool enabled = false;
+    float value = 0.0f;            // normalised 0..1
+    juce::String valueText;        // human readable, with units
 };
 
 // The "Show details" box. Advanced info, hidden by default.
