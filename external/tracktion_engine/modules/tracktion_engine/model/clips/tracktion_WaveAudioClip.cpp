@@ -1,0 +1,608 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+WaveAudioClip::WaveAudioClip (const juce::ValueTree& v, EditItemID clipID, ClipOwner& co)
+    : AudioClipBase (v, clipID, Type::wave, co)
+{
+}
+
+WaveAudioClip::~WaveAudioClip()
+{
+    notifyListenersOfDeletion();
+}
+
+//==============================================================================
+void WaveAudioClip::initialise()
+{
+    AudioClipBase::initialise();
+
+    if (getTakesTree().isValid())
+        callBlocking ([this]
+                      {
+                          getCompManager();
+                          sourceMediaChanged();
+                      });
+}
+
+void WaveAudioClip::cloneFrom (Clip* c)
+{
+    if (auto other = dynamic_cast<WaveAudioClip*> (c))
+    {
+        AudioClipBase::cloneFrom (other);
+        auto takes = state.getChildWithName (IDs::TAKES);
+        copyValueTree (takes, other->state.getChildWithName (IDs::TAKES), nullptr);
+
+        Selectable::changed();
+    }
+}
+
+//==============================================================================
+juce::String WaveAudioClip::getSelectableDescription()
+{
+    return TRANS("Audio Clip") + " - \"" + getName() + "\"";
+}
+
+TimeDuration WaveAudioClip::getSourceLength() const
+{
+    if (sourceLength == 0s)
+    {
+        // If we're using clip effects the audio file may currently be invalid
+        // However, we know that the effects will produce an audio file of the same length as the originial so we'll return this
+        // This could however be a problem with standard warp time, Edit clips and reverse etc...
+
+        sourceLength = TimeDuration::fromSeconds (clipEffects != nullptr || isReversed ? AudioFile (edit.engine, getOriginalFile()).getLength()
+                                                                                       : getAudioFile().getLength());
+    }
+
+    jassert (sourceLength >= 0s);
+    return sourceLength;
+}
+
+void WaveAudioClip::sourceMediaChanged()
+{
+    AudioClipBase::sourceMediaChanged();
+
+    if (compManager != nullptr && isCurrentTakeComp())
+        setCurrentSourceFile (compManager->getCurrentCompFile());
+
+    sourceLength = 0s;
+    markAsDirty();
+
+    if (needsRender())
+        updateSourceFile();
+}
+
+juce::File WaveAudioClip::getOriginalFile() const
+{
+    if (hasAnyTakes() && compManager != nullptr && compManager->isCurrentTakeComp())
+        return compManager->getCurrentCompFile();
+
+    return sourceFileReference.getFile();
+}
+
+bool WaveAudioClip::needsRender() const
+{
+    if (! edit.shouldPlay())
+        return false;
+
+    return ! isUsingARA()
+        && (isReversed || (warpTime && canUseProxy()) || (clipEffects != nullptr && canHaveEffects()))
+        && AudioFile (edit.engine, getOriginalFile()).isValid();
+}
+
+HashCode WaveAudioClip::getHash() const
+{
+    return AudioFile (edit.engine, getOriginalFile()).getHash()
+             ^ static_cast<HashCode> (getWarpTime() ? getWarpTimeManager().getHash() : 0)
+             ^ static_cast<HashCode> (getIsReversed() * 768)
+             ^ static_cast<HashCode> ((clipEffects == nullptr || ! canHaveEffects())  ? 0 : clipEffects->getHash());
+}
+
+void WaveAudioClip::renderComplete()
+{
+    sourceLength = 0s;
+    AudioClipBase::renderComplete();
+}
+
+void WaveAudioClip::setLoopDefaults()
+{
+    auto& ts = edit.tempoSequence;
+    auto pos = getPosition();
+
+    if (loopInfo.getNumerator() == 0)
+        loopInfo.setNumerator (ts.getTimeSigAt (pos.getStart()).numerator);
+
+    if (loopInfo.getDenominator() == 0)
+        loopInfo.setDenominator (ts.getTimeSigAt (pos.getStart()).denominator);
+
+    if (loopInfo.getNumBeats() == 0.0)
+        loopInfo.setNumBeats (getSourceLength().inSeconds() * (ts.getTempoAt (pos.getStart()).getBpm() / 60.0));
+}
+
+void WaveAudioClip::reassignReferencedItem (const ReferencedItem& item,
+                                            ProjectItemRef newRef, double newStartTime)
+{
+    if (hasAnyTakes())
+    {
+        auto indexInList = getReferencedItems().indexOf (item);
+
+        if (indexInList < 0)
+        {
+            jassertfalse;
+            return;
+        }
+
+        if (newRef.isProjectItemID())
+        {
+            auto newItemID = *newRef.getProjectItemID();
+
+            if (indexInList == getCurrentTake())
+                sourceFileReference.setToProjectFileReference (ProjectItemRef (newItemID));
+
+            auto take = getTakesTree().getChild (indexInList);
+
+            if (take.isValid())
+                take.setProperty (IDs::source, newItemID.toString(), getUndoManager());
+
+            if (indexInList == 0)
+            {
+                auto startOffset = TimeDuration::fromSeconds (newStartTime);
+
+                if (! isLooping())
+                    setOffset (getPosition().getOffset() - (startOffset / getSpeedRatio()));
+                else
+                    loopStart = loopStart - (startOffset / getSpeedRatio());
+            }
+        }
+        else
+        {
+            auto newFile = newRef.resolve (edit.engine);
+            auto path = SourceFileReference::findPathFromFile (edit, newFile, true);
+
+            if (indexInList == getCurrentTake())
+                sourceFileReference.setToFile (newFile, SourceFileReference::PathStyle::chooseBest, false);
+
+            auto take = getTakesTree().getChild (indexInList);
+
+            if (take.isValid())
+                take.setProperty (IDs::source, path, getUndoManager());
+        }
+    }
+    else
+    {
+        AudioClipBase::reassignReferencedItem (item, newRef, newStartTime);
+    }
+}
+
+//==============================================================================
+void WaveAudioClip::addTake (ProjectItemRef id)
+{
+    auto um = getUndoManager();
+    auto takesTree = state.getOrCreateChildWithName (IDs::TAKES, um);
+
+    juce::ValueTree take (IDs::TAKE);
+    take.setProperty (IDs::source, id.toString(), um);
+    takesTree.addChild (take, -1, um);
+}
+
+void WaveAudioClip::addTake (const juce::File& f)
+{
+    auto um = getUndoManager();
+    auto takesTree = state.getOrCreateChildWithName (IDs::TAKES, um);
+
+    juce::ValueTree take (IDs::TAKE);
+
+    {
+        SourceFileReference sfr (edit, take, IDs::source);
+        sfr.setToFile (f, SourceFileReference::PathStyle::chooseBest, true);
+    }
+
+    takesTree.addChild (take, -1, um);
+}
+
+int WaveAudioClip::getNumTakes (bool includeComps)
+{
+    if (includeComps)
+        return getTakesTree().getNumChildren();
+
+    return hasAnyTakes() ? getCompManager().getNumTakes() : 0;
+}
+
+juce::Array<ProjectItemRef> WaveAudioClip::getTakes() const
+{
+    juce::Array<ProjectItemRef> takes;
+
+    auto takesTree = state.getChildWithName (IDs::TAKES);
+
+    for (auto t : takesTree)
+        if (t.hasProperty (IDs::source))
+            takes.add (ProjectItemRef (t.getProperty (IDs::source).toString()));
+
+    return takes;
+}
+
+void WaveAudioClip::clearTakes()
+{
+    if (getNumTakes (true) != 0)
+    {
+        state.removeChild (getTakesTree(), getUndoManager());
+        compManager = nullptr;
+        changed();
+    }
+}
+
+int WaveAudioClip::getCurrentTake() const
+{
+    if (currentTakeIndex == takeIndexNeedsUpdating)
+    {
+        currentTakeIndex = -1;
+
+        auto takesTree = getTakesTree();
+        auto pid = sourceFileReference.getSourceProjectItemRef().toString();
+
+        for (int i = takesTree.getNumChildren(); --i >= 0;)
+        {
+            if (takesTree.getChild (i).getProperty (IDs::source) == pid)
+            {
+                currentTakeIndex = i;
+                break;
+            }
+        }
+    }
+
+    return currentTakeIndex;
+}
+
+void WaveAudioClip::invalidateCurrentTake() noexcept
+{
+    currentTakeIndex = takeIndexNeedsUpdating;
+}
+
+void WaveAudioClip::invalidateCurrentTake (const juce::ValueTree& parentState) noexcept
+{
+    if (parentState.hasType (IDs::TAKES))
+        invalidateCurrentTake();
+}
+
+void WaveAudioClip::valueTreePropertyChanged (juce::ValueTree& treeWhosePropertyHasChanged,
+                                              const juce::Identifier& property)
+{
+    AudioClipBase::valueTreePropertyChanged (treeWhosePropertyHasChanged, property);
+
+    if (property == IDs::source)
+        invalidateCurrentTake();
+}
+
+void WaveAudioClip::valueTreeChildAdded (juce::ValueTree& p, juce::ValueTree& c)
+{
+    AudioClipBase::valueTreeChildAdded (p, c);
+    invalidateCurrentTake (p);
+}
+
+void WaveAudioClip::valueTreeChildRemoved (juce::ValueTree& p, juce::ValueTree& c, int oldIndex)
+{
+    AudioClipBase::valueTreeChildRemoved (p, c, oldIndex);
+    invalidateCurrentTake (p);
+}
+
+void WaveAudioClip::valueTreeChildOrderChanged (juce::ValueTree& p, int oldIndex, int newIndex)
+{
+    AudioClipBase::valueTreeChildOrderChanged (p, oldIndex, newIndex);
+    invalidateCurrentTake (p);
+}
+
+void WaveAudioClip::setCurrentTake (int takeIndex)
+{
+    CRASH_TRACER
+    auto takesTree = getTakesTree();
+    auto numTakes = takesTree.getNumChildren();
+    jassert (juce::isPositiveAndBelow (takeIndex, numTakes));
+    takeIndex = juce::jlimit (0, numTakes - 1, takeIndex);
+
+    auto take = takesTree.getChild (takeIndex);
+    jassert (take.isValid());
+
+    auto takeSourceRef = ProjectItemRef (take.getProperty (IDs::source).toString());
+    auto mo = edit.engine.getProjectManager().getProjectItem (takeSourceRef);
+    invalidateCurrentTake();
+
+    if (mo != nullptr || getCompManager().isTakeComp (takeIndex))
+        sourceFileReference.setToProjectFileReference (takeSourceRef);
+    else
+        takesTree.removeChild (take, getUndoManager());
+
+    getCompManager().setActiveTakeIndex (takeIndex);
+}
+
+bool WaveAudioClip::isCurrentTakeComp()
+{
+    if (hasAnyTakes())
+        return getCompManager().isCurrentTakeComp();
+
+    return false;
+}
+
+juce::StringArray WaveAudioClip::getTakeDescriptions() const
+{
+    CRASH_TRACER
+    auto takes = getTakes();
+    juce::StringArray s;
+    int numTakes = 0;
+
+    for (int i = 0; i < takes.size(); ++i)
+    {
+        if (compManager == nullptr || ! compManager->isTakeComp (i))
+        {
+            if (auto projectItem = edit.engine.getProjectManager().getProjectItem (takes.getReference (i)))
+                s.add (juce::String (i + 1) + ". " + projectItem->getName());
+            else
+                s.add (juce::String (i + 1) + ". <" + TRANS("Deleted") + ">");
+
+            ++numTakes;
+        }
+        else
+        {
+            s.add (juce::String (i + 1) + ". " + TRANS("Comp") + " #" + juce::String (i + 1 - numTakes));
+        }
+    }
+
+    return s;
+}
+
+void WaveAudioClip::deleteAllUnusedTakesConfirmingWithUser (bool)
+{
+    CRASH_TRACER
+
+    auto showWarningAsync = [] (const juce::String& title, const juce::String& message,
+                                std::function<void (bool okPressed, bool delFiles)> callback)
+    {
+        auto w = std::shared_ptr<juce::AlertWindow> (juce::LookAndFeel::getDefaultLookAndFeel()
+                                                        .createAlertWindow (title, message,
+                                                                            {}, {}, {},
+                                                                            juce::AlertWindow::QuestionIcon, 0, nullptr));
+
+        auto delFilesButton = std::make_shared<juce::ToggleButton> (TRANS("Delete Source Files?"));
+        delFilesButton->setSize (400, 20);
+        delFilesButton->setName ({});
+        w->addCustomComponent (delFilesButton.get());
+        w->addTextBlock (TRANS("(This will also delete these from any other Edits in this project)"));
+        w->addButton (TRANS("OK"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton (TRANS("Cancel"), 2, juce::KeyPress (juce::KeyPress::escapeKey));
+
+        w->enterModalState (true, juce::ModalCallbackFunction::create (
+            [w, delFilesButton, cb = std::move (callback)] (int res)
+            {
+                if (cb)
+                    cb (res == 1, delFilesButton->getToggleState());
+            }));
+    };
+
+    if (getCompManager().isCurrentTakeComp())
+    {
+        showWarningAsync (TRANS("Flatten Takes"),
+                          TRANS("This will permanently remove all takes in this clip, replacing it with"
+                                " the current comp. This operation can not be undone.")
+                          + "\n\n"
+                          + TRANS("Are you sure you want to do this?"),
+                          [this] (bool okPressed, bool delFiles)
+                          {
+                              if (okPressed)
+                                  getCompManager().flattenTake (getCurrentTake(), delFiles);
+                          });
+        return;
+    }
+
+    showWarningAsync (TRANS("Delete Unused Takes"),
+                      TRANS("This will permanently delete all wave files that are listed as takes in this "
+                            "clip, apart from the ones currently being used.")
+                       + "\n\n"
+                       + TRANS("Are you sure you want to do this?"),
+                      [this] (bool okPressed, bool delFiles)
+                      {
+                          if (okPressed)
+                              deleteAllUnusedTakes (delFiles);
+                      });
+}
+
+static bool isTakeInUse (const WaveAudioClip& clip, const ProjectItemRef& takeRef)
+{
+    for (auto t : getClipTracks (clip.edit))
+    {
+        for (auto& c : t->getClips())
+        {
+            if (c->getSourceFileReference().getSourceProjectItemRef() == takeRef)
+                return true;
+
+            if (auto wac = dynamic_cast<WaveAudioClip*> (c))
+                if (wac != &clip && wac->getTakes().contains (takeRef))
+                    return true;
+        }
+    }
+
+    return false;
+}
+
+void WaveAudioClip::deleteAllUnusedTakes (bool deleteSourceFiles)
+{
+    CRASH_TRACER
+
+    auto takes = getTakes();
+    bool errors = false;
+
+    if (auto proj = getProjectForEdit (edit))
+    {
+        for (int i = takes.size(); --i >= 0;)
+        {
+            auto takeRef = takes.getReference (i);
+
+            if (! isTakeInUse (*this, takeRef))
+            {
+                bool removedOk = ! deleteSourceFiles
+                                  || proj->getProjectItemFor (takeRef) == nullptr
+                                  || proj->removeProjectItem (takeRef, true);
+
+                if (removedOk)
+                {
+                    for (auto child : state)
+                    {
+                        if (ProjectItemRef (child.getProperty (IDs::source).toString()) == takeRef)
+                        {
+                            state.removeChild (child, getUndoManager());
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    errors = true;
+                }
+            }
+        }
+
+        clearTakes();
+
+        if (errors)
+            edit.engine.getUIBehaviour().showWarningAlert (TRANS("Delete Unused Takes"),
+                                                           TRANS("Some of the wave files couldn't be deleted"));
+    }
+
+    if (! hasAnyTakes())
+        compManager = nullptr;
+}
+
+Clip::Array WaveAudioClip::unpackTakes (bool toNewTracks)
+{
+    CRASH_TRACER
+    Clip::Array newClips;
+
+    if (Track::Ptr t = getTrack())
+    {
+        const bool shouldBeShowingTakes = isShowingTakes();
+
+        if (shouldBeShowingTakes)
+            AudioClipBase::setShowingTakes (false);
+
+        auto clipNode = state.createCopy();
+
+        if (! clipNode.isValid())
+            return newClips;
+
+        clipNode.removeChild (clipNode.getChildWithName (IDs::TAKES), nullptr);
+
+        int trackIndex = t->getIndexInEditTrackList();
+        auto allTracks = getAllTracks (t->edit);
+        auto takes = getTakes();
+
+        for (int i = 0; i < takes.size(); ++i)
+        {
+            if (compManager->isTakeComp (i))
+                continue;
+
+            AudioTrack::Ptr targetTrack (dynamic_cast<AudioTrack*> (allTracks[++trackIndex]));
+
+            if (toNewTracks || targetTrack == nullptr)
+                targetTrack = t->edit.insertNewAudioTrack (TrackInsertPoint (t->getParentTrack(), t.get()), nullptr);
+
+            if (targetTrack != nullptr)
+                newClips.add (targetTrack->insertWaveClip (getTakeDescriptions()[i], takes[i], getPosition(), false).get());
+
+            t = targetTrack;
+        }
+
+        if (shouldBeShowingTakes)
+            AudioClipBase::setShowingTakes (true);
+    }
+
+    return newClips;
+}
+
+WaveCompManager& WaveAudioClip::getCompManager()
+{
+    jassert (hasAnyTakes());
+
+    if (compManager == nullptr)
+    {
+        CRASH_TRACER
+        auto ptr = edit.engine.getCompFactory().getCompManager (*this);
+        compManager = dynamic_cast<WaveCompManager*> (ptr.get());
+
+        if (compManager != nullptr)
+            compManager->initialise();
+        else
+            jassertfalse;
+    }
+
+    return *compManager;
+}
+
+//==============================================================================
+RenderManager::Job::Ptr WaveAudioClip::getRenderJob (const AudioFile& destFile)
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+
+    // do this here so we don't end up creating a multiple copies of a File
+    if (auto existing = edit.engine.getRenderManager().getRenderJobWithoutCreating (destFile))
+        return existing;
+
+    if (clipEffects != nullptr && canHaveEffects())
+    {
+        auto j = clipEffects->createRenderJob (AudioFile (*destFile.engine, destFile.getFile()), AudioFile (*destFile.engine, getOriginalFile()));
+        j->setName (TRANS("Rendering Clip Effects") + ": " + getName());
+        return j;
+    }
+
+    if (getIsReversed())
+    {
+        auto j = ReverseRenderJob::getOrCreateRenderJob (edit.engine, getOriginalFile(), destFile.getFile());
+        j->setName (TRANS("Reversing") + ": " + getName());
+        return j;
+    }
+
+    if (getWarpTime())
+    {
+        auto j = WarpTimeRenderJob::getOrCreateRenderJob (*this, getOriginalFile(), destFile.getFile());
+        j->setName (TRANS("Warping") + ": " + getName());
+        return j;
+    }
+
+    return {};
+}
+
+juce::String WaveAudioClip::getRenderMessage()
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+
+    if (renderJob == nullptr || getAudioFile().isValid())
+        return {};
+
+    const float progress = renderJob == nullptr ? 1.0f : renderJob->getCurrentTaskProgress();
+    juce::String m (clipEffects != nullptr ? TRANS("Rendering effects")
+                                           : (getWarpTime() ? TRANS("Warping") : TRANS("Reversing")));
+
+    if (progress < 0.0f)
+        return m + "...";
+
+    return m + ": " + juce::String (juce::roundToInt (progress * 100.0f)) + "%";
+}
+
+bool WaveAudioClip::isUsingFile (const AudioFile& af)
+{
+    if (AudioClipBase::isUsingFile (af))
+        return true;
+
+    if (hasAnyTakes() && getCompManager().getCurrentCompFile() == af.getFile())
+        return true;
+
+    return false;
+}
+
+} // namespace tracktion::inline engine

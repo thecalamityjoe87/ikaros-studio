@@ -1,0 +1,2807 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+//==============================================================================
+/**
+    Performs a tempo detection task on a background thread.
+*/
+class AudioClipBase::TempoDetectTask   : public ThreadPoolJobWithProgress
+{
+public:
+    /** Creates a task for a given file. */
+    TempoDetectTask (Engine& e, const juce::File& file)
+        : ThreadPoolJobWithProgress (TRANS("Detecting tempo")),
+          engine (e), sourceFile (file)
+    {
+    }
+
+    /** Returns the bpm after a successful detection. */
+    float getBpm()                                      { return bpm; }
+
+    /** Returns true if the result was within a sensible range. */
+    bool isResultSensible()                             { return isSensible; }
+
+    //==============================================================================
+    /** Performs the actual detection. */
+    JobStatus runJob() override
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (AudioFileUtils::createReaderFor (engine, sourceFile));
+
+        if (reader == nullptr)
+            return jobHasFinished;
+
+        auto numChannels = (int) reader->numChannels;
+        auto numSamples = reader->lengthInSamples;
+        auto sampleRate = reader->sampleRate;
+
+        if (numSamples <= 0)
+            return jobHasFinished;
+
+        // main detection loop
+        {
+            TempoDetect detector (numChannels, sampleRate);
+            const int blockSize = 65536;
+            const bool useRightChan = numChannels > 1;
+
+            // can't use an AudioScratchBuffer yet
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+
+            auto numLeft = numSamples;
+            SampleCount startSample = 0;
+
+            while (numLeft > 0)
+            {
+                if (shouldExit())
+                    return jobHasFinished;
+
+                auto numThisTime = (int) std::min ((SampleCount) numLeft, (SampleCount) blockSize);
+                reader->read (&buffer, 0, numThisTime, startSample, true, useRightChan);
+                detector.processSection (buffer, numThisTime);
+
+                startSample += numThisTime;
+                numLeft -= numThisTime;
+                progress = float (numLeft) / float (numSamples);
+            }
+
+            bpm = detector.finishAndDetect();
+            isSensible = bpm > 0;
+        }
+
+        return jobHasFinished;
+    }
+
+    /** Returns the current progress. */
+    float getCurrentTaskProgress() override             { return progress; }
+
+private:
+    //==============================================================================
+    Engine& engine;
+    juce::File sourceFile;
+    float progress = 0;
+    bool isSensible = false;
+    float bpm = 12.0f;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TempoDetectTask)
+};
+
+
+//==============================================================================
+class ProxyGeneratorJob  : public AudioProxyGenerator::GeneratorJob
+{
+public:
+    ProxyGeneratorJob (const AudioFile& o, const AudioFile& p,
+                       AudioClipBase& acb, bool renderTimestretched)
+        : GeneratorJob (p), engine (acb.edit.engine), original (o)
+    {
+        setName (TRANS("Creating Proxy") + ": " + acb.getName());
+
+        if (renderTimestretched)
+            proxyInfo = acb.createProxyRenderingInfo();
+    }
+
+    ~ProxyGeneratorJob() override
+    {
+        prepareForJobDeletion();
+    }
+
+private:
+    Engine& engine;
+    AudioFile original;
+    std::unique_ptr<AudioClipBase::ProxyRenderingInfo> proxyInfo;
+
+    bool render() override
+    {
+        CRASH_TRACER
+
+        AudioFile tempFile (engine, proxy.getFile()
+                                     .getSiblingFile ("temp_proxy_" + juce::String::toHexString (juce::Random().nextInt64()))
+                                     .withFileExtension (proxy.getFile().getFileExtension()));
+
+        bool ok = render (tempFile);
+
+        if (ok)
+        {
+            ok = proxy.deleteFile();
+            (void) ok;
+            jassert (ok);
+            ok = tempFile.getFile().moveFileTo (proxy.getFile());
+            jassert (ok);
+        }
+
+        tempFile.deleteFile();
+
+        engine.getAudioFileManager().releaseFile (proxy);
+        return ok;
+    }
+
+    bool render (const AudioFile& tempFile)
+    {
+        CRASH_TRACER
+        AudioFileInfo sourceInfo (original.getInfo());
+
+        // need to strip AIFF metadata to write to wav files
+        if (sourceInfo.metadata.getValue ("MetaDataSource", "None") == "AIFF")
+            sourceInfo.metadata.clear();
+
+        auto wavFormat = engine.getAudioFileFormatManager().getWavFormat();
+
+        // If the specific format is supported, fallback to a discrete layout for proxies which is always supported
+        if (! wavFormat->isChannelLayoutSupported (sourceInfo.channelLayout))
+            sourceInfo.channelLayout = juce::AudioChannelSet::discreteChannels (sourceInfo.channelLayout.size());
+
+        AudioFileWriter writer (tempFile, wavFormat,
+                                sourceInfo.numChannels, sourceInfo.sampleRate,
+                                std::max (16, sourceInfo.bitsPerSample),
+                                sourceInfo.metadata, 0,
+                                sourceInfo.channelLayout);
+
+        return writer.isOpen()
+                && (proxyInfo != nullptr ? proxyInfo->render (engine, original, writer, this, progress)
+                                         : renderNormalSpeed  (writer));
+    }
+
+    bool renderNormalSpeed (AudioFileWriter& writer)
+    {
+        CRASH_TRACER
+        std::unique_ptr<juce::AudioFormatReader> reader (AudioFileUtils::createReaderFor (engine, original.getFile()));
+
+        if (reader == nullptr)
+            return false;
+
+        SampleCount sourceSample = 0;
+        auto samplesToDo = (SampleCount) reader->lengthInSamples;
+
+        while (! shouldExit())
+        {
+            auto numThisTime = (int) std::min (samplesToDo, (SampleCount) 65536);
+
+            if (numThisTime <= 0)
+                return true;
+
+            if (! writer.writeFromAudioReader (*reader, sourceSample, numThisTime))
+                break;
+
+            samplesToDo -= numThisTime;
+            sourceSample += numThisTime;
+
+            progress = juce::jlimit (0.0f, 1.0f, float (double (sourceSample) / double (reader->lengthInSamples)));
+        }
+
+        return false;
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProxyGeneratorJob)
+};
+
+//==============================================================================
+AudioClipBase::AudioClipBase (const juce::ValueTree& v, EditItemID id, Type t, ClipOwner& targetParent)
+    : Clip (v, targetParent, id, t),
+      loopInfo (edit.engine, state.getOrCreateChildWithName (IDs::LOOPINFO, nullptr), getUndoManager()),
+      pluginList (edit),
+      lastProxy (edit.engine)
+{
+    // N.B. Nothing in this constructor may write to the state via the UndoManager.
+    // A clip can be constructed whilst an undo is in progress (undoing a record or a
+    // clip deletion re-adds the clip's state), and UndoManager::perform refuses to
+    // re-enter, so any undoable write made here is silently discarded.
+    // Corrections to derived geometry and old-Edit migrations are made with a null
+    // UndoManager instead.
+    auto um = getUndoManager();
+
+    level->dbGain.referTo (state, IDs::gain, um);
+    level->pan.referTo (state, IDs::pan, um);
+    level->mute.referTo (state, IDs::mute, um);
+    channels.referTo (state, IDs::channels, um, {});
+
+    fadeIn.referTo (state, IDs::fadeIn, um);
+    fadeOut.referTo (state, IDs::fadeOut, um);
+
+    fadeInType.referTo (state, IDs::fadeInType, um, AudioFadeCurve::linear);
+    fadeOutType.referTo (state, IDs::fadeOutType, um, AudioFadeCurve::linear);
+    autoCrossfade.referTo (state, IDs::autoCrossfade, um);
+
+    fadeInBehaviour.referTo (state, IDs::fadeInBehaviour, um, gainFade);
+    fadeOutBehaviour.referTo (state, IDs::fadeOutBehaviour, um, gainFade);
+
+    loopStart.referTo (state, IDs::loopStart, um);
+    loopLength.referTo (state, IDs::loopLength, um);
+
+    loopStartBeats.referTo (state, IDs::loopStartBeats, um);
+    loopLengthBeats.referTo (state, IDs::loopLengthBeats, um);
+
+    resamplingQuality.referTo (state, IDs::resamplingQuality, um, ResamplingQuality::lagrange);
+    proxyAllowed.referTo (state, IDs::proxyAllowed, um, true);
+    transpose.referTo (state, IDs::transpose, um);
+    pitchChange.referTo (state, IDs::pitchChange, um);
+
+    beatSensitivity.referTo (state, IDs::beatSensitivity, um, 0.5f);
+
+    timeStretchMode.referTo (state, IDs::elastiqueMode, um);
+    elastiqueProOptions.referTo (state, IDs::elastiqueOptions, um);
+    araPluginDescription.referTo (state, IDs::araPluginDescription, um);
+
+    // Keep this in to handle old edits..
+    if (state.getProperty (IDs::timeStretch))
+        timeStretchMode.setValue (juce::VariantConverter<TimeStretcher::Mode>::fromVar (state.getProperty (IDs::stretchMode)), nullptr);
+
+    timeStretchMode.setValue (TimeStretcher::checkModeIsAvailable (timeStretchMode), nullptr);
+
+    autoPitch.referTo (state, IDs::autoPitch, um);
+    autoPitchMode.referTo (state, IDs::autoPitchMode, um);
+    autoTempo.referTo (state, IDs::autoTempo, um);
+    warpTime.referTo (state, IDs::warpTime, um);
+    isReversed.referTo (state, IDs::isReversed, um);
+    autoDetectBeats.referTo (state, IDs::autoDetectBeats, um);
+
+    level->pan.setValue (juce::jlimit (-1.0f, 1.0f, static_cast<float> (level->pan.get())), nullptr);
+    checkFadeLengthsForOverrun();
+
+    useClipLaunchQuantisation.referTo (state, IDs::useClipLaunchQuantisation, um);
+
+    clipEffectsVisible.referTo (state, IDs::effectsVisible, nullptr);
+    updateClipEffectsState();
+
+    pluginList.setTrackAndClip (getTrack(), this);
+    pluginList.initialise (state);
+
+    asyncFunctionCaller.addFunction (updateCrossfadesFlag, [this]           { updateAutoCrossfades (false); });
+    asyncFunctionCaller.addFunction (updateCrossfadesOverlappedFlag, [this] { updateAutoCrossfades (true); });
+
+    auto pgen = state.getChildWithName (IDs::PATTERNGENERATOR);
+
+    if (pgen.isValid())
+        patternGenerator = std::make_unique<PatternGenerator> (*this, pgen);
+}
+
+AudioClipBase::~AudioClipBase()
+{
+    if (renderJob != nullptr)
+        renderJob->removeListener (this);
+}
+
+void AudioClipBase::captureARAStateToValueTree()
+{
+   #if TRACKTION_ENABLE_ARA
+    if (auto proxy = getARAProxy(); proxy != nullptr && proxy->isValid())
+    {
+        auto araData = proxy->storeARAArchiveForCopy();
+
+        if (araData.getSize() > 0)
+        {
+            // NB: written without the undo manager - undo re-adds the same state tree
+            // object, so the archive travels with it and setupARA() restores it
+            state.setProperty (IDs::araArchive, araData.toBase64Encoding(), nullptr);
+            state.setProperty (IDs::araArchiveSourceID, proxy->getAudioSourcePersistentID(), nullptr);
+            state.setProperty (IDs::araArchiveModID, proxy->getAudioModificationPersistentID(), nullptr);
+            state.setProperty (IDs::araDocumentArchiveID, proxy->getDocumentArchiveID(), nullptr);
+        }
+    }
+   #endif
+}
+
+void AudioClipBase::tearDownARA()
+{
+   #if TRACKTION_ENABLE_ARA
+    if (araProxy != nullptr)
+    {
+        // Preserve the plugin's edits so switching back to ARA (or undoing) can restore them
+        captureARAStateToValueTree();
+
+        // NB: a retired playback graph may legitimately still hold a reference to the
+        // reader here - it'll be released when the old graph is reaped
+        araProxy = nullptr;
+    }
+   #endif
+}
+
+//==============================================================================
+void AudioClipBase::initialise()
+{
+    Clip::initialise();
+
+    setCurrentSourceFile (sourceFileReference.getFile());
+
+    stopTimer(); // prevent proxy generation unless we're actually going to be played.
+
+    if (shouldAttemptRender())
+    {
+        auto audioFile = RenderManager::getAudioFileForHash (edit.engine, edit.getTempDirectory (false), getHash());
+
+        if (currentSourceFile != audioFile.getFile())
+            setCurrentSourceFile (audioFile.getFile());
+    }
+
+    // Exception will be caught by Edit constructor
+    if (! edit.getUndoManager().isPerformingUndoRedo())
+        callBlocking ([this] { setLoopDefaults(); });
+}
+
+void AudioClipBase::cloneFrom (Clip* c)
+{
+    if (auto other = dynamic_cast<AudioClipBase*> (c))
+    {
+        Clip::cloneFrom (other);
+
+        const bool wasLooping = hasLoop (true) || hasLoop (false);
+
+        level->dbGain       .setValue (other->level->dbGain, nullptr);
+        level->pan          .setValue (other->level->pan, nullptr);
+        level->mute         .setValue (other->level->mute, nullptr);
+        channels            .setValue (other->channels, nullptr);
+        fadeIn              .setValue (other->fadeIn, nullptr);
+        fadeOut             .setValue (other->fadeOut, nullptr);
+        fadeInType          .setValue (other->fadeInType, nullptr);
+        fadeOutType         .setValue (other->fadeOutType, nullptr);
+        autoCrossfade       .setValue (other->autoCrossfade, nullptr);
+        fadeInBehaviour     .setValue (other->fadeInBehaviour, nullptr);
+        fadeOutBehaviour    .setValue (other->fadeOutBehaviour, nullptr);
+        loopStart           .setValue (other->loopStart, nullptr);
+        loopLength          .setValue (other->loopLength, nullptr);
+        loopStartBeats      .setValue (other->loopStartBeats, nullptr);
+        loopLengthBeats     .setValue (other->loopLengthBeats, nullptr);
+        transpose           .setValue (other->transpose, nullptr);
+        pitchChange         .setValue (other->pitchChange, nullptr);
+        beatSensitivity     .setValue (other->beatSensitivity, nullptr);
+        timeStretchMode     .setValue (other->timeStretchMode, nullptr);
+        elastiqueProOptions .setValue (other->elastiqueProOptions, nullptr);
+        araPluginDescription.setValue (other->araPluginDescription, nullptr);
+        autoPitch           .setValue (other->autoPitch, nullptr);
+        autoPitchMode       .setValue (other->autoPitchMode, nullptr);
+        autoTempo           .setValue (other->autoTempo, nullptr);
+        isReversed          .setValue (other->isReversed, nullptr);
+        autoDetectBeats     .setValue (other->autoDetectBeats, nullptr);
+        warpTime            .setValue (other->warpTime, nullptr);
+        proxyAllowed        .setValue (other->proxyAllowed, nullptr);
+        resamplingQuality   .setValue (other->resamplingQuality, nullptr);
+
+        copyValueTree (loopInfo.state, other->loopInfo.state, nullptr);
+
+        const bool isLooping = hasLoop (true) || hasLoop (false);
+
+        if (! isLooping && wasLooping)
+            disableLooping();
+
+        Selectable::changed();
+    }
+}
+
+void AudioClipBase::flushStateToValueTree()
+{
+    Clip::flushStateToValueTree();
+
+    if (clipEffects != nullptr)
+        clipEffects->flushStateToValueTree();
+
+   #if TRACKTION_ENABLE_ARA
+    // Persist the ARA IDs used for this save, so reloading can map them to the
+    // current IDs even if they've changed (e.g. the source file moved, which
+    // changes the path-hash-derived audio source ID)
+    if (auto proxy = getARAProxy(); proxy != nullptr && proxy->isValid())
+    {
+        state.setProperty (IDs::araSourceID, proxy->getAudioSourcePersistentID(), nullptr);
+        state.setProperty (IDs::araModID, proxy->getAudioModificationPersistentID(), nullptr);
+    }
+   #endif
+}
+
+PatternGenerator* AudioClipBase::getPatternGenerator()
+{
+    if (! state.getChildWithName (IDs::PATTERNGENERATOR).isValid())
+        state.addChild (juce::ValueTree (IDs::PATTERNGENERATOR), -1, &edit.getUndoManager());
+
+    jassert (patternGenerator != nullptr);
+    return patternGenerator.get();
+}
+
+//==============================================================================
+void AudioClipBase::setParent (ClipOwner* co)
+{
+   #if TRACKTION_ENABLE_ARA
+    if (co == nullptr && isUsingARA())
+    {
+        juce::MessageManager::callAsync ([safeRef = SafeSelectable<AudioClipBase> (this)]
+        {
+            if (auto clip = safeRef.get())
+                if (clip->getParent() == nullptr)
+                    hideARAWindow (*clip);
+        });
+    }
+   #endif
+
+    Clip::setParent (co);
+
+    pluginList.setTrackAndClip (nullptr, this);
+}
+
+bool AudioClipBase::canBeAddedTo (ClipOwner& co)
+{
+    return canContainAudio (co);
+}
+
+void AudioClipBase::changed()
+{
+    clearCachedAudioSegmentList();
+    Clip::changed();
+
+    createNewProxyAsync();
+
+    if (araProxy != nullptr)
+        araProxy->sourceClipChanged();
+}
+
+juce::Colour AudioClipBase::getDefaultColour() const
+{
+    return juce::Colours::red.withHue (0.0f);
+}
+
+//==============================================================================
+TimeDuration AudioClipBase::getMaximumLength()
+{
+    if (isLooping())
+        return Edit::getMaximumLength();
+
+    if (isUsingARA())
+        return Edit::getMaximumLength();
+
+    if (getSourceLength() <= 0_td)
+        return 100000.0_td;
+
+    if (getAutoTempo())
+        return edit.tempoSequence.toTime (getStartBeat() + BeatDuration::fromBeats (loopInfo.getNumBeats()))
+                 - getPosition().getStart();
+
+    return getSourceLength() / speedRatio;
+}
+
+//==============================================================================
+void AudioClipBase::setGainDB (float g)
+{
+    level->dbGain = juce::jlimit (-100.0f, 24.0f, g);
+}
+
+void AudioClipBase::setPan (float p)
+{
+    level->pan = std::abs (p) < 0.01 ? 0.0f
+                                     : juce::jlimit (-1.0f, 1.0f, p);
+}
+
+//==============================================================================
+ChannelConfiguration AudioClipBase::getSourceChannelConfiguration()
+{
+    auto info = getWaveInfo();
+
+    if (info.channelLayout.size() > 0 && ! info.channelLayout.isDiscreteLayout())
+        return ChannelConfiguration::fromChannelSet (info.channelLayout);
+
+    ChannelConfiguration config;
+    config.setNumChannels (info.numChannels);
+    return config;
+}
+
+ChannelConfiguration AudioClipBase::getActiveChannelConfiguration()
+{
+    auto sourceConfig = getSourceChannelConfiguration();
+    auto channelMask = channels.get().trim();
+
+    if (! channelMask.isEmpty())
+    {
+        ChannelConfiguration result;
+
+        if (channelMask.equalsIgnoreCase ("r"))         result = ChannelConfiguration::right (1);
+        else if (channelMask.equalsIgnoreCase ("l"))    result = ChannelConfiguration::left (0);
+        else if (channelMask.equalsIgnoreCase ("L R"))  result = ChannelConfiguration::stereo();
+        else result = ChannelConfiguration::fromString (channelMask.toStdString());
+
+        // Don't exceed the source file's actual channel count
+        // (but only if source info is available — numChannels == 0 means not loaded yet)
+        if (sourceConfig.getNumChannels() > 0
+            && result.getNumChannels() > sourceConfig.getNumChannels())
+            return sourceConfig;
+
+        return result;
+    }
+
+    // Empty config means all source channels are active
+    return sourceConfig;
+}
+
+void AudioClipBase::setActiveChannelConfiguration (const ChannelConfiguration& config)
+{
+    // Empty config means "all channels"
+    if (config.isEmpty())
+    {
+        channels = juce::String();
+        return;
+    }
+
+    auto sourceConfig = getSourceChannelConfiguration();
+    auto validated = config.intersection (sourceConfig);
+
+    // If no valid channels remain, keep the current config unchanged
+    if (validated.isEmpty())
+        return;
+
+    if (validated == sourceConfig)
+        channels = juce::String();
+    else
+        channels = validated.toString();
+}
+
+ChannelConfiguration AudioClipBase::getOutputChannelConfiguration()
+{
+    auto config = getActiveChannelConfiguration();
+
+    if (clipEffects != nullptr)
+        for (auto ce : clipEffects->objects)
+            if (ce->getType() == ClipEffect::EffectType::makeMono)
+                return ChannelConfiguration::mono();
+
+    return config;
+}
+
+//==============================================================================
+bool AudioClipBase::setFadeIn (TimeDuration in)
+{
+    auto len = getPosition().getLength();
+    in = juce::jlimit (TimeDuration(), len, in);
+
+    // check the fades don't overrun
+    if (in + fadeOut > len)
+    {
+        const double scale = len / (in + fadeOut);
+        fadeIn = in * scale;
+        fadeOut = fadeOut * scale;
+    }
+    else if (fadeIn != in)
+    {
+        fadeIn = in;
+        return false;
+    }
+
+    return false;
+}
+
+bool AudioClipBase::setFadeOut (TimeDuration out)
+{
+    auto len = getPosition().getLength();
+    out = juce::jlimit (TimeDuration(), len, out);
+
+    if (fadeIn + out > len)
+    {
+        const double scale = len / (fadeIn + out);
+        fadeIn = fadeIn * scale;
+        fadeOut = out * scale;
+    }
+    else if (fadeOut != out)
+    {
+        fadeOut = out;
+        return false;
+    }
+
+    return false;
+}
+
+TimeDuration AudioClipBase::getFadeIn() const
+{
+    asyncFunctionCaller.handleUpdateNowIfNeeded();
+
+    if (autoCrossfade && getOverlappingClip (ClipDirection::previous) != nullptr)
+        return autoFadeIn;
+
+    auto len = getPosition().getLength();
+
+    if (fadeIn + fadeOut > len)
+        return TimeDuration::fromSeconds (fadeIn * len.inSeconds() / (fadeIn + fadeOut));
+
+    return fadeIn;
+}
+
+TimeDuration AudioClipBase::getFadeOut() const
+{
+    asyncFunctionCaller.handleUpdateNowIfNeeded();
+
+    if (autoCrossfade && getOverlappingClip (ClipDirection::next) != nullptr)
+        return autoFadeOut;
+
+    auto len = getPosition().getLength();
+
+    if (fadeIn + fadeOut > len)
+        return TimeDuration::fromSeconds (fadeOut * len.inSeconds() / (fadeIn + fadeOut));
+
+    return fadeOut;
+}
+
+void AudioClipBase::setFadeInType (AudioFadeCurve::Type t)
+{
+    if (t != fadeInType)
+        fadeInType = t;
+    else
+        changed(); // keep this, in case they press a fade button twice
+}
+
+void AudioClipBase::setFadeOutType (AudioFadeCurve::Type t)
+{
+    if (t != fadeOutType)
+        fadeOutType = t;
+    else
+        changed(); // keep this, in case they press a fade button twice
+}
+
+//==============================================================================
+TimeStretcher::Mode AudioClipBase::getTimeStretchMode() const noexcept
+{
+    return timeStretchMode;
+}
+
+TimeStretcher::Mode AudioClipBase::getActualTimeStretchMode() const noexcept
+{
+    TimeStretcher::Mode ts = timeStretchMode;
+
+    if (ts == TimeStretcher::disabled && (getAutoPitch() || getAutoTempo() || getPitchChange() != 0.0f))
+        ts = TimeStretcher::defaultMode;
+
+    return ts;
+}
+
+//==============================================================================
+void AudioClipBase::reverseLoopPoints()
+{
+    // Arrh! Another horrible hack! Because we need to reverse the loop points BEFORE we've actually
+    // generated the new source file we don't have a valid WaveInfo object. We therefore have to bodge
+    // this like the EditClips to find the number of samples. A better approach would be to have the
+    // LoopInfo use only times, then they would be file agnostic and could be manipulated at any point.
+    AudioFileInfo wi = getWaveInfo();
+
+    if (isReversed)
+        wi = AudioFile (edit.engine, sourceFileReference.getFile()).getInfo();
+
+    if (wi.lengthInSamples == 0)
+        return;
+
+    auto ratio = getSpeedRatio();
+    const bool beatBased = getAutoTempo();
+
+    if (beatBased)
+    {
+        auto bps = edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart());
+        ratio = bps / std::max (1.0, loopInfo.getBeatsPerSecond (wi));
+    }
+
+    jassert (ratio >= 0.1);
+
+    // To find the new offset we need to work out the time in the source file at the end of the clip.
+    // Then we need to reverse that and set it as the new offset. This is complicated by the fact that
+    // the loop length could be beat based.
+
+    if (isLooping())
+    {
+        // Reverse white loop points...
+        auto sourceEnd = toPosition (getSourceLength() / ratio);
+        auto o = getLoopRange();
+        auto n = TimeRange::between (toPosition (sourceEnd - o.getEnd()),
+                                     toPosition (sourceEnd - o.getStart()));
+        setLoopRange (n);
+
+        // then the offset
+        if (o.getLength() > TimeDuration())
+        {
+            auto clipOffset = std::fmod (getPosition().getOffset().inSeconds(), sourceEnd.inSeconds());
+            auto numLoops = getPosition().getLength() / o.getLength();
+            numLoops += clipOffset / o.getLength().inSeconds();
+            numLoops = numLoops - (int) numLoops;
+
+            auto posAtEnd = o.getStart() + (o.getLength() * numLoops);
+            auto newOffset = sourceEnd - (posAtEnd - n.getStart());
+
+            setOffset (toDuration (newOffset));
+        }
+    }
+    else
+    {
+        // reverse offset
+        auto sourceEnd = toPosition (getSourceLength() / ratio);
+        auto newOffset = sourceEnd - toPosition (getPosition().getLength()) - getPosition().getOffset();
+        setOffset (newOffset);
+    }
+
+    // red in/out markers
+    const SampleCount newIn = loopInfo.getOutMarker() > -1 ? (wi.lengthInSamples - loopInfo.getOutMarker()) : 0;
+    const SampleCount newOut = loopInfo.getInMarker() == 0 ? -1 : (wi.lengthInSamples - loopInfo.getInMarker());
+
+    loopInfo.setInMarker (newIn);
+    loopInfo.setOutMarker (newOut);
+
+    // beat loop points e.g. REX files
+    for (int i = loopInfo.getNumLoopPoints(); --i >= 0;)
+    {
+        const LoopInfo::LoopPoint p = loopInfo.getLoopPoint (i);
+        loopInfo.changeLoopPoint (i, wi.lengthInSamples - p.pos, p.type);
+    }
+}
+
+void AudioClipBase::checkFadeLengthsForOverrun()
+{
+    auto len = getPosition().getLength();
+
+    // check the fades don't overrun
+    if (fadeIn + fadeOut > len)
+    {
+        const double scale = len / (fadeIn + fadeOut);
+
+        // This is derived geometry, not user data, and it can be corrected whilst a clip is
+        // being constructed. If that happens during an undo, an undoable write would re-enter
+        // UndoManager::perform, which refuses it and silently discards the correction.
+        fadeIn.setValue (fadeIn * scale, nullptr);
+        fadeOut.setValue (fadeOut * scale, nullptr);
+    }
+
+    // also check the auto fades
+    if (autoFadeIn + autoFadeOut > len)
+    {
+        const double scale = len / (autoFadeIn + autoFadeOut);
+        autoFadeIn = autoFadeIn * scale;
+        autoFadeOut = autoFadeOut * scale;
+    }
+}
+
+AudioClipBase* AudioClipBase::getOverlappingClip (ClipDirection direction) const
+{
+    CRASH_TRACER
+
+    if (auto ct = getParent())
+    {
+        const auto& clips = ct->getClips();
+        auto ourIndex = clips.indexOf (const_cast<AudioClipBase*> (this));
+
+        if (direction == ClipDirection::next)
+        {
+            for (int i = ourIndex + 1; i < clips.size(); ++i)
+                if (auto c = dynamic_cast<AudioClipBase*> (clips[i]))
+                    if (getPosition().time.contains (c->getPosition().getStart() + 0.001s)
+                         && ! getPosition().time.contains (c->getPosition().getEnd()))
+                        return c;
+        }
+        else if (direction == ClipDirection::previous)
+        {
+            for (int i = ourIndex; --i >= 0;)
+                if (auto c = dynamic_cast<AudioClipBase*> (clips[i]))
+                    if (getPosition().time.contains (c->getPosition().getEnd() - 0.001s)
+                         && ! getPosition().time.contains (c->getPosition().getStart()))
+                        return c;
+        }
+    }
+
+    return {};
+}
+
+void AudioClipBase::updateAutoCrossfadesAsync (bool updateOverlapped)
+{
+    asyncFunctionCaller.updateAsync (updateOverlapped ? updateCrossfadesOverlappedFlag
+                                                      : updateCrossfadesFlag);
+}
+
+void AudioClipBase::updateAutoCrossfades (bool updateOverlapped)
+{
+    CRASH_TRACER
+
+    auto prevClip = getOverlappingClip (ClipDirection::previous);
+    auto nextClip = getOverlappingClip (ClipDirection::next);
+
+    if (updateOverlapped)
+    {
+        if (prevClip != nullptr)
+            prevClip->updateAutoCrossfades (false);
+
+        if (nextClip != nullptr)
+            nextClip->updateAutoCrossfades (false);
+    }
+
+    if (autoCrossfade)
+    {
+        autoFadeIn  = (prevClip != nullptr) ? (prevClip->getPosition().getEnd() - getPosition().getStart()) : fadeIn;
+        autoFadeOut = (nextClip != nullptr) ? (getPosition().getEnd() - nextClip->getPosition().getStart()) : fadeOut;
+
+        checkFadeLengthsForOverrun();
+    }
+}
+
+void AudioClipBase::applyEdgeFades()
+{
+    const auto fade = TimeDuration::fromSeconds (0.005);
+
+    if (fadeIn < fade)  setFadeIn (fade);
+    if (fadeOut < fade) setFadeOut (fade);
+}
+
+void AudioClipBase::copyFadeToAutomation (bool useFadeIn, bool removeClipFade)
+{
+    CRASH_TRACER
+
+    TimeRange fadeTime (TimePosition(), useFadeIn ? getFadeIn() : getFadeOut());
+
+    if (useFadeIn)
+        fadeTime = fadeTime.movedToStartAt (getPosition().getStart());
+    else
+        fadeTime = fadeTime.movedToEndAt (getPosition().getEnd());
+
+    auto& ui = edit.engine.getUIBehaviour();
+
+    if (fadeTime.isEmpty())
+    {
+        ui.showWarningMessage (TRANS("Could not create automation.")
+                                + "\n\n"
+                                + TRANS("No fade found for this clip"));
+        return;
+    }
+
+    auto at = dynamic_cast<AudioTrack*> (getTrack());
+
+    if (at == nullptr)
+        return;
+
+    AutomatableParameter::Ptr param;
+
+    if (auto vol = at->getVolumePlugin())
+        param = vol->volParam;
+
+    if (param == nullptr)
+    {
+        ui.showWarningMessage (TRANS("Could not create automation.")
+                                 + "\n\n"
+                                 + TRANS("No volume plugin was found for this track, please insert one and try again"));
+        return;
+    }
+
+    auto& oldCurve = param->getCurve();
+
+    auto applyFadeCurve = [clipRef = Clip::Ptr (this), param, at, fadeTime, useFadeIn, removeClipFade]
+    {
+        if (auto clip = dynamic_cast<AudioClipBase*> (clipRef.get()))
+        {
+            auto& curve_oldCurve = param->getCurve();
+            auto um = clip->getUndoManager();
+
+            AutomationCurve curve (clip->edit, AutomationCurve::TimeBase::time);
+            curve.setParameterID (param->paramID);
+
+            auto defaultValue = param->getCurrentBaseValue();
+            auto curveType = useFadeIn ? clip->getFadeInType() : clip->getFadeOutType();
+            auto startValue = useFadeIn ? 0.0f : curve_oldCurve.getValueAt (fadeTime.getStart(), defaultValue);
+            auto endValue   = useFadeIn ? curve_oldCurve.getValueAt (fadeTime.getEnd(), defaultValue) : 0.0f;
+            auto valueLimits = juce::Range<float>::between (startValue, endValue);
+
+            switch (curveType)
+            {
+                case AudioFadeCurve::convex:
+                case AudioFadeCurve::concave:
+                case AudioFadeCurve::sCurve:
+                {
+                    for (int i = 0; i < 10; ++i)
+                    {
+                        auto alpha = float (i) / 9.0f;
+                        auto time = toPosition (fadeTime.getLength()) * alpha;
+
+                        if (! useFadeIn)
+                            alpha = 1.0f - alpha;
+
+                        auto volCurveGain = AudioFadeCurve::alphaToGainForType (curveType, alpha);
+                        auto value = valueLimits.getStart() + (volCurveGain * valueLimits.getLength());
+                        curve.addPoint (time, (float) value, 0.0f, um);
+                    }
+
+                    break;
+                }
+
+                case AudioFadeCurve::linear:
+                default:
+                {
+                    curve.addPoint (TimePosition(), useFadeIn ? valueLimits.getStart() : valueLimits.getLength(), 0.0f, um);
+                    curve.addPoint (toPosition (fadeTime.getLength()), useFadeIn ? valueLimits.getLength() : valueLimits.getStart(), 0.0f, um);
+                    break;
+                }
+            }
+
+            mergeCurve (curve_oldCurve, fadeTime,
+                        curve, 0_tp,
+                        param->getCurrentBaseValue(), 0_td,
+                        true, true);
+
+            // also need to remove the point just before the first one we added
+            if (useFadeIn && (curve_oldCurve.countPointsInRegion ({ {}, fadeTime.getStart() + (fadeTime.getLength() * 0.09) }) == 2))
+                curve_oldCurve.removePoint (0, um);
+
+            if (removeClipFade)
+            {
+                if (useFadeIn)
+                    clip->setFadeIn ({});
+                else
+                    clip->setFadeOut ({});
+            }
+
+            at->setCurrentlyShownAutoParam (param);
+        }
+    };
+
+    if (oldCurve.countPointsInRegion (fadeTime) > 0)
+    {
+        ui.showOkCancelAlertBoxAsync (TRANS("Overwrite Existing Automation?"),
+                                      TRANS("There is already automation in this region, applying the curve will overwrite it. Is this OK?"),
+                                      TRANS("OK"),
+                                      TRANS("Cancel"),
+                                      [applyFadeCurve] (bool okPressed)
+                                      {
+                                          if (okPressed)
+                                              applyFadeCurve();
+                                      });
+    }
+    else
+    {
+        applyFadeCurve();
+    }
+}
+
+void AudioClipBase::setLoopInfo (const LoopInfo& loopInfo_)
+{
+    loopInfo = loopInfo_;
+}
+
+void AudioClipBase::setNumberOfLoops (int num)
+{
+    if (! canLoop())
+        num = 0;
+
+    auto pos = getPosition();
+    auto len = std::min (getSourceLength() / speedRatio, pos.getLength());
+
+    if (len <= 0_td)
+        return;
+
+    if (autoTempo)
+    {
+        auto& ts = edit.tempoSequence;
+        auto newStart = BeatPosition::fromBeats (pos.getOffset().inSeconds() * ts.getBeatsPerSecondAt (pos.getStart()));
+        setLoopRangeBeats ({ newStart, newStart + getLengthInBeats() });
+        setLength (pos.getLength() * num, true);
+    }
+    else
+    {
+        setLoopRange ({ toPosition (pos.getOffset()), toPosition (pos.getOffset()) + len });
+        setLength (len * num, true);
+    }
+
+    setOffset ({});
+}
+
+void AudioClipBase::disableLooping()
+{
+    auto pos = getPosition();
+
+    if (autoTempo)
+    {
+        pos.time = pos.time.withEnd (getTimeOfRelativeBeat (loopLengthBeats));
+        pos.offset = toDuration (getTimeOfRelativeBeat (toDuration (loopStartBeats.get())) - toDuration (pos.getStart()));
+    }
+    else
+    {
+        pos.time = pos.time.withEnd (pos.time.getStart() + loopLength.get());
+        pos.offset = toDuration (loopStart);
+    }
+
+    setLoopRange ({});
+    setPosition (pos);
+
+    if (getPosition().getLength() > getMaximumLength())
+        setLength (getMaximumLength(), true);
+}
+
+TimeRange AudioClipBase::getLoopRange() const
+{
+    if (! beatBasedLooping())
+        return { loopStart, loopStart + loopLength };
+
+    auto bps = edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart());
+
+    return { TimePosition::fromSeconds (loopStartBeats.get().inBeats() / bps),
+             TimePosition::fromSeconds ((loopStartBeats + loopLengthBeats).inBeats() / bps) };
+}
+
+bool AudioClipBase::canLoop() const
+{
+    return loopInfo.isLoopable();
+}
+
+TimePosition AudioClipBase::getLoopStart() const
+{
+    if (! beatBasedLooping())
+        return loopStart;
+
+    return TimePosition::fromSeconds (loopStartBeats.get().inBeats() / edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart()));
+}
+
+TimeDuration AudioClipBase::getLoopLength() const
+{
+    if (! beatBasedLooping())
+        return loopLength;
+
+    return TimeDuration::fromSeconds (loopLengthBeats.get().inBeats() / edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart()));
+}
+
+BeatPosition AudioClipBase::getLoopStartBeats() const
+{
+    if (beatBasedLooping())
+        return loopStartBeats;
+
+    return BeatPosition::fromBeats (loopStart.get().inSeconds() * edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart()));
+}
+
+BeatDuration AudioClipBase::getLoopLengthBeats() const
+{
+    if (beatBasedLooping())
+        return loopLengthBeats;
+
+    return BeatDuration::fromBeats (loopLength.get().inSeconds() * edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart()));
+}
+
+static TimeRange clampTimeLoopRange (TimeRange range, TimeDuration sourceLen, double speedRatio)
+{
+    // limits the number of times longer than the source file length the loop length can be
+    const double maxMultiplesOfSourceLengthForLooping = 50.0;
+
+    auto start  = juce::jlimit (0_tp, toPosition (sourceLen) / speedRatio, range.getStart());
+    auto length = juce::jlimit (0_td, sourceLen * maxMultiplesOfSourceLengthForLooping / speedRatio, range.getLength());
+
+    return { start, start + length };
+}
+
+void AudioClipBase::setLoopRange (TimeRange newRange)
+{
+    if (autoTempo)
+    {
+        // Use the single tempo at the clip start, the same conversion as the loop getters,
+        // so setting the range they report leaves the loop unchanged
+        auto bps = edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart());
+        auto newStart  = BeatPosition::fromBeats (newRange.getStart().inSeconds() * bps);
+        auto newLength = BeatDuration::fromBeats (newRange.getLength().inSeconds() * bps);
+        setLoopRangeBeats ({ newStart, newStart + newLength });
+    }
+    else
+    {
+        auto sourceLen = getSourceLength();
+
+        if (sourceLen > 0s)
+        {
+            auto clamped   = clampTimeLoopRange (newRange, sourceLen, getSpeedRatio());
+            auto newStart  = clamped.getStart();
+            auto newLength = clamped.getLength();
+
+            if (loopStart != newStart || loopLength != newLength)
+            {
+                loopStart = newStart;
+                loopLength = newLength;
+            }
+        }
+    }
+}
+
+void AudioClipBase::setLoopRangeBeats (BeatRange newRangeBeats)
+{
+    auto newStartBeat  = juce::jlimit (0_bp, BeatPosition::fromBeats (loopInfo.getNumBeats()), newRangeBeats.getStart());
+    auto newLengthBeat = juce::jlimit (0_bd, BeatDuration::fromBeats (loopInfo.getNumBeats() * 2), newRangeBeats.getLength());
+
+    if (loopStartBeats != newStartBeat || loopLengthBeats != newLengthBeat)
+    {
+        Clip::setSpeedRatio (1.0);
+        setAutoTempo (true);
+
+        loopStartBeats  = newStartBeat;
+        loopLengthBeats = newLengthBeat;
+    }
+}
+
+void AudioClipBase::setAutoDetectBeats (bool b)
+{
+    autoDetectBeats = b;
+    setLoopInfo (autoDetectBeatMarkers (loopInfo, b, beatSensitivity));
+}
+
+void AudioClipBase::setBeatSensitivity (float s)
+{
+    beatSensitivity = s;
+    setLoopInfo (autoDetectBeatMarkers (loopInfo, autoDetectBeats, s));
+}
+
+void AudioClipBase::pitchTempoTrackChanged()
+{
+    clearCachedAudioSegmentList();
+    createNewProxyAsync();
+
+    if (araProxy != nullptr)
+        araProxy->sourceClipChanged();
+
+    // NB: the ARA musical context (tempo/key/chord content) is updated at document
+    // level by Edit::sendTempoOrPitchSequenceChangedUpdates, not per clip
+}
+
+void AudioClipBase::clearCachedAudioSegmentList()
+{
+    if (! edit.isLoading())
+        TRACKTION_ASSERT_MESSAGE_THREAD
+
+    audioSegmentList.reset();
+}
+
+const AudioSegmentList& AudioClipBase::getAudioSegmentList()
+{
+    if (! edit.isLoading())
+        TRACKTION_ASSERT_MESSAGE_THREAD
+
+    if (audioSegmentList == nullptr)
+        audioSegmentList = AudioSegmentList::create (*this, false, false);
+
+    return *audioSegmentList;
+}
+
+void AudioClipBase::setResamplingQuality (ResamplingQuality rq)
+{
+    resamplingQuality = rq;
+}
+
+ResamplingQuality AudioClipBase::getResamplingQuality() const
+{
+    return resamplingQuality;
+}
+
+//==============================================================================
+void AudioClipBase::setSpeedRatio (double r)
+{
+    if (! autoTempo)
+    {
+        auto factor = getSpeedRatio() / r;
+        auto newLoopStart = getLoopStart() * factor;
+        auto newLoopLen   = getLoopLength() * factor;
+
+        Clip::setSpeedRatio (r);
+        setLoopRange ({ newLoopStart, newLoopStart + newLoopLen });
+    }
+}
+
+bool AudioClipBase::isUsingARA() const
+{
+    return TimeStretcher::isARA (timeStretchMode);
+}
+
+void AudioClipBase::selectionStatusChanged (bool isNowSelected)
+{
+    Clip::selectionStatusChanged (isNowSelected);
+
+   #if TRACKTION_ENABLE_ARA
+    // Tell the ARA plugin's editor views about the new selection so their UI
+    // can follow the arrangement
+    if (isNowSelected && araProxy != nullptr && araProxy->isValid())
+        araProxy->notifyViewSelection();
+   #endif
+}
+
+TimeDuration AudioClipBase::getHead() const  { return araProxy != nullptr ? araProxy->getHead() : TimeDuration(); }
+TimeDuration AudioClipBase::getTail() const  { return araProxy != nullptr ? araProxy->getTail() : TimeDuration(); }
+
+void AudioClipBase::loadARAState()
+{
+    setupARA (true);
+}
+
+void showARAWindow (AudioClipBase& clip)
+{
+    if (auto proxy = clip.getARAProxy())
+        proxy->showPluginWindow();
+}
+
+void hideARAWindow (AudioClipBase& clip)
+{
+    if (auto proxy = clip.getARAProxy())
+        proxy->hidePluginWindow();
+}
+
+void araConvertToMIDI (AudioClipBase& clip)
+{
+    if (auto proxy = clip.getARAProxy())
+    {
+        juce::MidiMessageSequence m (proxy->getAnalysedMIDISequence());
+
+        if (m.getNumEvents() > 0)
+        {
+            juce::UndoManager* um = nullptr;
+
+            juce::ValueTree midiClip (IDs::MIDICLIP);
+            midiClip.setProperty (IDs::name, clip.getName(), um);
+            midiClip.setProperty (IDs::start, clip.getPosition().getStart().inSeconds(), um);
+            midiClip.setProperty (IDs::length, clip.getPosition().getLength().inSeconds(), um);
+
+            juce::ValueTree ms (IDs::SEQUENCE);
+            ms.setProperty (IDs::ver, 1, um);
+            ms.setProperty (IDs::channelNumber, 1, um);
+
+            midiClip.addChild (ms, -1, um);
+
+            auto& ts = clip.edit.tempoSequence;
+
+            for (int i = 0; i < m.getNumEvents(); ++i)
+            {
+                auto& e = *m.getEventPointer (i);
+
+                if (e.noteOffObject != nullptr)
+                {
+                    juce::ValueTree note (IDs::NOTE);
+                    note.setProperty ("p", e.message.getNoteNumber(), um);
+                    note.setProperty ("v", e.message.getVelocity(), um);
+                    note.setProperty ("b", ts.toBeats (TimePosition::fromSeconds (e.message.getTimeStamp())).inBeats(), um);
+                    note.setProperty ("l", (ts.toBeats (TimePosition::fromSeconds (e.noteOffObject->message.getTimeStamp()))
+                                            - ts.toBeats (TimePosition::fromSeconds (e.message.getTimeStamp()))).inBeats(), um);
+
+                    ms.addChild (note, -1, um);
+                }
+            }
+
+            if (auto t = clip.getClipTrack())
+                t->insertClipWithState (midiClip, clip.getName(), TrackItem::Type::midi,
+                                        { clip.getPosition().time, {} }, true, false);
+        }
+        else
+        {
+            clip.edit.engine.getUIBehaviour().showWarningMessage (TRANS("No MIDI notes were found by the plugin!"));
+        }
+    }
+}
+
+void AudioClipBase::setTimeStretchMode (TimeStretcher::Mode mode)
+{
+    timeStretchMode = TimeStretcher::checkModeIsAvailable (mode);
+
+    if (isLooping() && ! canLoop())
+        disableLooping();
+}
+
+WarpTimeManager& AudioClipBase::getWarpTimeManager() const
+{
+    if (warpTimeManager == nullptr)
+    {
+        CRASH_TRACER
+        WarpTimeManager::Ptr ptr = edit.engine.getWarpTimeFactory().getWarpTimeManager (*this);
+        warpTimeManager = dynamic_cast<WarpTimeManager*> (ptr.get());
+        jassert (warpTimeManager != nullptr);
+    }
+
+    return *warpTimeManager;
+}
+
+int AudioClipBase::getTransposeSemiTones (bool includeAutoPitch) const
+{
+    if (autoPitch && includeAutoPitch)
+    {
+        int pitch = edit.pitchSequence.getPitchAt (getPosition().getStart() + TimeDuration::fromSeconds (0.0001)).getPitch();
+        int transposeBase = pitch - loopInfo.getRootNote();
+
+        while (transposeBase > 6)  transposeBase -= 12;
+        while (transposeBase < -6) transposeBase += 12;
+
+        return transpose + transposeBase;
+    }
+
+    return transpose;
+}
+
+LoopInfo AudioClipBase::autoDetectBeatMarkers (const LoopInfo& current, bool autoBeat, float sens) const
+{
+    LoopInfo res = current;
+
+    for (int i = res.getNumLoopPoints(); --i >= 0;)
+        if (res.getLoopPoint(i).isAutomatic())
+            res.deleteLoopPoint (i);
+
+    if (autoBeat)
+    {
+        if (auto reader = std::unique_ptr<juce::AudioFormatReader> (AudioFileUtils::createReaderFor (edit.engine, getCurrentSourceFile())))
+        {
+            const auto start = loopInfo.getInMarker();
+            const auto end = (loopInfo.getOutMarker() == -1) ? reader->lengthInSamples
+                                                             : loopInfo.getOutMarker();
+
+            BeatDetect detect;
+            detect.setSensitivity (sens);
+            detect.setSampleRate (reader->sampleRate);
+
+            if (double (end - start) > reader->sampleRate)
+            {
+                auto blockLength = detect.getBlockSize();
+                auto blockSize = choc::buffer::Size::create (reader->numChannels, blockLength);
+                auto pos = start;
+
+                choc::buffer::ChannelArrayBuffer<float> buffer (blockSize);
+
+                while (pos + blockLength < end)
+                {
+                    if (! reader->read (buffer.getView().data.channels,
+                                        (int) reader->numChannels, pos, (int) blockLength))
+                        break;
+
+                    detect.audioProcess (buffer);
+                    pos += blockLength;
+                }
+
+                for (auto beat : detect.getBeats())
+                    res.addLoopPoint (start + beat, LoopInfo::LoopPointType::automatic);
+            }
+        }
+    }
+
+    return res;
+}
+
+bool AudioClipBase::performTempoDetect()
+{
+    TempoDetectTask tempoDetectTask (edit.engine, getCurrentSourceFile());
+
+    edit.engine.getUIBehaviour().runTaskWithProgressBar (tempoDetectTask);
+
+    if (! tempoDetectTask.isResultSensible())
+        return false;
+
+    const AudioFileInfo wi = AudioFile (edit.engine, getCurrentSourceFile()).getInfo();
+    loopInfo.setBpm (tempoDetectTask.getBpm(), wi);
+
+    return true;
+}
+
+juce::StringArray AudioClipBase::getRootNoteChoices (Engine& e)
+{
+    juce::StringArray s;
+    s.add ("<" + TRANS("None") + ">");
+
+    for (int i = 0; i < 12; ++i)
+        s.add (Pitch::getPitchAsString (e, i));
+
+    return s;
+}
+
+juce::StringArray AudioClipBase::getPitchChoices()
+{
+    juce::StringArray s;
+
+    const int numSemitones = isUsingARA() ? 12 : 24;
+
+    if (loopInfo.getRootNote() == -1)
+    {
+        for (int i = numSemitones; i >= 1; i--)
+            s.add ("+" + juce::String (i));
+
+        s.add ("0");
+
+        for (int i = 1; i <= numSemitones; ++i)
+            s.add ("-" + juce::String (i));
+    }
+    else
+    {
+        const int base = autoPitch ? edit.pitchSequence.getPitchAt (getPosition().getStart()).getPitch()
+                                   : loopInfo.getRootNote();
+
+        for (int i = numSemitones; i >= 1; i--)
+            s.add ("+" + juce::String (i) + " : " + Pitch::getPitchAsString (edit.engine, base + i));
+
+        s.add ("0 : " + Pitch::getPitchAsString (edit.engine, base));
+
+        for (int i = 1; i <= numSemitones; ++i)
+            s.add ("-" + juce::String (i) + " : " + Pitch::getPitchAsString (edit.engine, base - i));
+    }
+
+    return s;
+}
+
+void AudioClipBase::enableEffects (bool enable, bool warn)
+{
+    auto v = state.getChildWithName (IDs::EFFECTS);
+    auto um = getUndoManager();
+
+    if (enable)
+    {
+        setUsesProxy (true);
+        if (! v.isValid())
+        {
+            state.addChild (ClipEffects::create(), -1, um);
+            clipEffectsVisible = true;
+        }
+    }
+    else if (v.isValid())
+    {
+        if (! warn)
+        {
+            state.removeChild (v, um);
+            state.removeProperty (IDs::effectsVisible, um);
+        }
+        else
+        {
+            edit.engine.getUIBehaviour()
+                .showOkCancelAlertBoxAsync (TRANS("Remove Clip Effects"),
+                                            TRANS("Are you sure you want to remove all clip effects?"),
+                                            TRANS("OK"),
+                                            TRANS("Cancel"),
+                                            [clipRef = Clip::Ptr (this)] (bool okPressed)
+                                            {
+                                                if (okPressed)
+                                                    if (auto clip = dynamic_cast<AudioClipBase*> (clipRef.get()))
+                                                    {
+                                                        auto clipState = clip->state;
+                                                        auto effectsChild = clipState.getChildWithName (IDs::EFFECTS);
+
+                                                        if (effectsChild.isValid())
+                                                        {
+                                                            auto clipUm = clip->getUndoManager();
+                                                            clipState.removeChild (effectsChild, clipUm);
+                                                            clipState.removeProperty (IDs::effectsVisible, clipUm);
+                                                        }
+                                                    }
+                                            });
+        }
+    }
+}
+
+void AudioClipBase::addEffect (const juce::ValueTree& effectsTree)
+{
+    auto v = state.getChildWithName (IDs::EFFECTS);
+    jassert (v.isValid());
+
+    if (v.isValid())
+        v.addChild (effectsTree, -1, getUndoManager());
+}
+
+//==============================================================================
+TimePosition AudioClipBase::clipTimeToSourceFileTime (TimePosition t)
+{
+    if (getAutoTempo())
+    {
+        if (isLooping())
+        {
+            auto b = toPosition (getBeatOfRelativeTime (toDuration (t)) - getStartBeat());
+            const auto end = toPosition (getLoopLengthBeats());
+
+            while (b > end)
+                b = b - getLoopLengthBeats();
+
+            b = b + BeatDuration::fromBeats (getPosition().getOffset().inSeconds()) + toDuration (getLoopStartBeats());
+            return TimePosition::fromSeconds (b.inBeats() / loopInfo.getBeatsPerSecond (getAudioFile().getInfo()));
+        }
+
+        auto b = getBeatOfRelativeTime (toDuration (t)) - getStartBeat() + getOffsetInBeats();
+
+        return TimePosition::fromSeconds (b.inBeats() / loopInfo.getBeatsPerSecond (getAudioFile().getInfo()));
+    }
+
+    if (isLooping())
+    {
+        const auto end = toPosition (getLoopLength());
+
+        while (t > end)
+            t = t - getLoopLength();
+
+        return (t + getPosition().getOffset() + toDuration (getLoopStart())) * getSpeedRatio();
+    }
+
+    return (t + getPosition().getOffset()) * getSpeedRatio();
+}
+
+void AudioClipBase::addMark (TimePosition relCursorPos)
+{
+    if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+    {
+        auto marks = sourceItem->getMarkedPoints();
+        marks.add (clipTimeToSourceFileTime (relCursorPos));
+        sourceItem->setMarkedPoints (marks);
+    }
+}
+
+void AudioClipBase::moveMarkTo (TimePosition relCursorPos)
+{
+    if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+    {
+        auto marks = sourceItem->getMarkedPoints();
+
+        juce::Array<TimePosition> rescaled;
+        juce::Array<int> index;
+        getRescaledMarkPoints (rescaled, index);
+
+        int indexOfNearest = -1;
+        auto nearestDiff = Edit::getMaximumEditEnd();
+
+        for (int i = rescaled.size(); --i >= 0;)
+        {
+            auto diff = TimePosition::fromSeconds (std::abs ((rescaled[i] - toDuration (relCursorPos)).inSeconds()));
+
+            if (diff < nearestDiff)
+            {
+                nearestDiff = diff;
+                indexOfNearest = index[i];
+            }
+        }
+
+        if (indexOfNearest != -1)
+        {
+            marks.set (indexOfNearest, clipTimeToSourceFileTime (relCursorPos));
+            sourceItem->setMarkedPoints (marks);
+        }
+    }
+}
+
+void AudioClipBase::deleteMark (TimePosition relCursorPos)
+{
+    if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+    {
+        auto marks = sourceItem->getMarkedPoints();
+
+        juce::Array<TimePosition> rescaled;
+        juce::Array<int> index;
+        getRescaledMarkPoints (rescaled, index);
+
+        int indexOfNearest = -1;
+        auto nearestDiff = Edit::getMaximumEditEnd();
+
+        for (int i = rescaled.size(); --i >= 0;)
+        {
+            auto diff = TimePosition::fromSeconds (std::abs ((rescaled[i] - toDuration (relCursorPos)).inSeconds()));
+
+            if (diff < nearestDiff)
+            {
+                nearestDiff = diff;
+                indexOfNearest = index[i];
+            }
+        }
+
+        if (indexOfNearest != -1)
+        {
+            marks.remove (indexOfNearest);
+            sourceItem->setMarkedPoints (marks);
+        }
+    }
+}
+
+bool AudioClipBase::canSnapToOriginalBWavTime()
+{
+    return getAudioFile().getMetadata()[juce::WavAudioFormat::bwavTimeReference].isNotEmpty();
+}
+
+void AudioClipBase::snapToOriginalBWavTime()
+{
+    auto f = getAudioFile();
+    juce::String bwavTime (f.getMetadata()[juce::WavAudioFormat::bwavTimeReference]);
+
+    if (bwavTime.isNotEmpty())
+    {
+        auto t = TimePosition::fromSeconds (static_cast<double> (bwavTime.getLargeIntValue()) / f.getSampleRate());
+
+        setStart (t + getPosition().getOffset(), false, true);
+    }
+}
+
+//==============================================================================
+juce::Array<Exportable::ReferencedItem> AudioClipBase::getReferencedItems()
+{
+    auto results = Clip::getReferencedItems();
+
+    Exportable::ReferencedItem item;
+    item.firstTimeUsed = 0;
+    item.lengthUsed = 0;
+
+    if (! getAutoTempo())
+    {
+        auto speed = getSpeedRatio();
+
+        if (! isLooping())
+        {
+            item.firstTimeUsed = (getPosition().getOffset() * speed).inSeconds();
+            item.lengthUsed    = (getPosition().getLength() * speed).inSeconds();
+        }
+        else
+        {
+            item.firstTimeUsed = (getLoopStart() * speed).inSeconds();
+            item.lengthUsed    = (getLoopLength() * speed).inSeconds();
+        }
+    }
+
+    if (hasAnyTakes())
+    {
+        for (auto takeID : getTakes())
+        {
+            item.itemRef = takeID;
+            results.add (item);
+        }
+
+        jassert (! results.isEmpty());
+    }
+    else
+    {
+        item.itemRef = ProjectItemRef (sourceFileReference.source.get());
+        results.add (item);
+    }
+
+    if (getAutoTempo())
+    {
+        for (auto& ref : results)
+        {
+            auto wi = edit.engine.getAudioFileManager().getAudioFile (ref.itemRef).getInfo();
+
+            if (wi.sampleRate > 0)
+            {
+                ref.firstTimeUsed = 0;
+                ref.lengthUsed = wi.getLengthInSeconds();
+            }
+        }
+    }
+
+    return results;
+}
+
+void AudioClipBase::reassignReferencedItem (const ReferencedItem& item,
+                                            ProjectItemRef newRef, double newStartTime)
+{
+    Clip::reassignReferencedItem (item, newRef, newStartTime);
+
+    if (getReferencedItems().size() == 1 && item == getReferencedItems().getFirst())
+    {
+        if (newRef.isProjectItemID())
+        {
+            sourceFileReference.setToProjectFileReference (newRef);
+
+            if (! isLooping())
+                setOffset (getPosition().getOffset() - TimeDuration::fromSeconds ((newStartTime / getSpeedRatio())));
+            else
+                loopStart = loopStart - TimeDuration::fromSeconds ((newStartTime / getSpeedRatio()));
+        }
+        else
+        {
+            auto newFile = newRef.resolve (edit.engine);
+            sourceFileReference.setToFile (newFile, SourceFileReference::PathStyle::chooseBest, false);
+        }
+    }
+    else
+    {
+        jassertfalse;
+    }
+}
+
+juce::Array<ProjectItemRef> AudioClipBase::getTakes() const
+{
+    jassert (! hasAnyTakes());
+    return {};
+}
+
+//==============================================================================
+std::shared_ptr<LaunchHandle> AudioClipBase::getLaunchHandle()
+{
+    if (! launchHandle)
+        launchHandle = std::make_shared<LaunchHandle>();
+
+    return launchHandle;
+}
+
+LaunchQuantisation* AudioClipBase::getLaunchQuantisation()
+{
+    if (! launchQuantisation)
+        launchQuantisation = std::make_unique<LaunchQuantisation> (state, edit);
+
+    return launchQuantisation.get();
+}
+
+FollowActions* AudioClipBase::getFollowActions()
+{
+    if (! followActions)
+        followActions = std::make_unique<FollowActions> (state.getOrCreateChildWithName (IDs::FOLLOWACTIONS, getUndoManager()), getUndoManager());
+
+    return followActions.get();
+}
+
+
+//==============================================================================
+juce::String AudioClipBase::canAddClipPlugin (const Plugin::Ptr& p) const
+{
+    if (p != nullptr)
+    {
+        if (! p->canBeAddedToClip())
+            return TRANS("Can't add this kind of plugin to a clip!");
+
+        if (pluginList.size() >= edit.engine.getEngineBehaviour().getEditLimits().maxPluginsOnClip)
+            return TRANS("Can't add any more plugins to this clip!");
+    }
+
+    return {};
+}
+
+bool AudioClipBase::addClipPlugin (const Plugin::Ptr& p, SelectionManager& sm)
+{
+    if (canAddClipPlugin (p).isEmpty())
+    {
+        pluginList.insertPlugin (p, -1, &sm);
+        return true;
+    }
+
+    return false;
+}
+
+Plugin::Array AudioClipBase::getAllPlugins()
+{
+    return pluginList.getPlugins();
+}
+
+void AudioClipBase::sendMirrorUpdateToAllPlugins (Plugin& p) const
+{
+    pluginList.sendMirrorUpdateToAllPlugins (p);
+}
+
+//==============================================================================
+bool AudioClipBase::setupARA (bool dontPopupErrorMessages)
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+    static bool araReentrancyCheck = false;
+
+    if (araReentrancyCheck)
+        return true;
+
+    const juce::ScopedValueSetter<bool> svs (araReentrancyCheck, true);
+
+   #if TRACKTION_ENABLE_ARA
+    if (isUsingARA())
+    {
+        // If a previous setup attempt failed (e.g. the plugin wasn't available yet),
+        // discard the dead reader so we can try again
+        if (araProxy != nullptr && ! araProxy->isValid())
+            araProxy = nullptr;
+
+        if (araProxy == nullptr)
+        {
+            TRACKTION_LOG ("Created ARA reader!");
+            araProxy = new ARAFileReader (edit, *this);
+
+            // If the clip state carries a pending ARA archive (a deleted clip brought
+            // back by undo, or a clip whose ARA mode was switched off and on again),
+            // restore the plugin's edits into the new proxy
+            if (araProxy->isValid() && state.hasProperty (IDs::araArchive))
+            {
+                juce::MemoryBlock araData;
+                araData.fromBase64Encoding (state.getProperty (IDs::araArchive).toString());
+
+                auto sourceID = state.getProperty (IDs::araArchiveSourceID).toString();
+                auto modID = state.getProperty (IDs::araArchiveModID).toString();
+                auto docArchiveID = state.getProperty (IDs::araDocumentArchiveID).toString();
+
+                state.removeProperty (IDs::araArchive, nullptr);
+                state.removeProperty (IDs::araArchiveSourceID, nullptr);
+                state.removeProperty (IDs::araArchiveModID, nullptr);
+                state.removeProperty (IDs::araDocumentArchiveID, nullptr);
+
+                if (araData.getSize() > 0)
+                    araProxy->restoreARAArchiveForPaste (araData, sourceID, modID, docArchiveID);
+            }
+        }
+
+        if (araProxy != nullptr && araProxy->isValid())
+        {
+            // If a pending archive is still attached to a live proxy (e.g. the clip
+            // object was reused from the cache after an undo), it's a stale duplicate
+            // of the proxy's live state - drop it so it doesn't linger in saved edits
+            if (state.hasProperty (IDs::araArchive))
+            {
+                state.removeProperty (IDs::araArchive, nullptr);
+                state.removeProperty (IDs::araArchiveSourceID, nullptr);
+                state.removeProperty (IDs::araArchiveModID, nullptr);
+                state.removeProperty (IDs::araDocumentArchiveID, nullptr);
+            }
+
+            return true;
+        }
+
+        if (! dontPopupErrorMessages)
+        {
+            TRACKTION_LOG_ERROR ("Failed setting up ARA for audio clip!");
+
+            if (TimeStretcher::isARA (timeStretchMode)
+                  && edit.engine.getPluginManager().getARACompatiblePlugDescriptions().size() <= 0)
+            {
+                TRACKTION_LOG_ERROR ("No ARA-compatible plugins were found!");
+
+                edit.engine.getUIBehaviour().showWarningMessage (TRANS ("This audio clip is setup with Melodyne's time-stretching, but there aren't any ARA-compatible plugins available!")
+                                                                 + "\n\n"
+                                                                 + TRANS ("If you know you have ARA-compatible plugins installed, they must be scanned and part of the list of known plugins!"));
+            }
+        }
+    }
+   #endif
+
+    juce::ignoreUnused (dontPopupErrorMessages);
+    return false;
+}
+
+LiveClipLevel AudioClipBase::getLiveClipLevel()
+{
+    return { level };
+}
+
+//==============================================================================
+void AudioClipBase::markAsDirty()
+{
+    lastRenderJobFailed = false;
+    createNewProxyAsync(); // Do this asyncronously to avoid recursion
+}
+
+void AudioClipBase::updateSourceFile()
+{
+    CRASH_TRACER
+
+    if (! isInitialised)
+        return;
+
+    TRACKTION_ASSERT_MESSAGE_THREAD
+
+    // check to see if our source file already exists, it may have been created by another clip
+    // if it does exist, we will just use that, otherwise we need to start our own render operation
+    const AudioFile audioFile (RenderManager::getAudioFileForHash (edit.engine, edit.getTempDirectory (false), getHash()));
+
+    if (getCurrentSourceFile() != audioFile.getFile())
+        setCurrentSourceFile (audioFile.getFile());
+
+    if (renderJob != nullptr && renderJob->proxy == audioFile && (! renderJob->shouldExit()))
+        return;
+
+    if (! (audioFile.getFile().existsAsFile() || audioFile.isValid()))
+    {
+        renderSource();
+    }
+    else if (renderJob != nullptr)
+    {
+        renderJob->removeListener (this);
+        renderJob = nullptr;
+    }
+}
+
+void AudioClipBase::renderSource()
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+    jassert (isInitialised);
+
+    const AudioFile audioFile (edit.engine, getCurrentSourceFile());
+    const bool isValid = audioFile.isValid();
+
+    if (audioFile.getFile().existsAsFile() && isValid)
+        return;
+
+    if (! isValid)
+    {
+        // need to render
+        bool needsToChangeJob = renderJob == nullptr
+                                 || (renderJob != nullptr && (renderJob->proxy != audioFile));
+
+        if (needsToChangeJob)
+        {
+            if (renderJob != nullptr)
+                renderJob->removeListener (this);
+
+            renderJob = getRenderJob (audioFile);
+
+            if (renderJob != nullptr)
+                renderJob->addListener (this);
+
+            changed(); // updates the thumbnail progress
+        }
+    }
+    else
+    {
+        // either finished or file exists
+        if (renderJob != nullptr)
+        {
+            renderJob->removeListener (this);
+            renderJob = nullptr;
+        }
+
+        renderComplete();
+    }
+}
+
+void AudioClipBase::renderComplete()
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+    // Updates the thumbnail message
+    changed();
+
+    if (clipEffects != nullptr)
+        clipEffects->notifyListenersOfRenderCompletion();
+}
+
+//==============================================================================
+juce::Array<TimePosition> AudioClipBase::getRescaledMarkPoints() const
+{
+    juce::Array<TimePosition> rescaled;
+    juce::Array<int> index;
+    getRescaledMarkPoints (rescaled, index);
+    return rescaled;
+}
+
+void AudioClipBase::getRescaledMarkPoints (juce::Array<TimePosition>& times, juce::Array<int>& index) const
+{
+    if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+    {
+        if (getAutoTempo())
+        {
+            auto beats = sourceItem->getMarkedPoints();
+            auto afi = getAudioFile().getInfo();
+
+            for (int i = 0; i < beats.size(); ++i)
+                beats.set (i, beats[i] * loopInfo.getBeatsPerSecond (afi));
+
+            if (isLooping())
+            {
+                auto loopLen = getLoopLengthBeats();
+                auto clipLen = getLengthInBeats();
+                auto b = loopLen - getOffsetInBeats();
+
+                for (int i = 0; i < beats.size(); ++i)
+                {
+                    auto newB = BeatDuration::fromBeats (beats[i].inSeconds() - (toPosition (getOffsetInBeats()) - getLoopStartBeats()).inBeats());
+
+                    if (newB > BeatDuration() && newB < b)
+                    {
+                        times.add (getTimeOfRelativeBeat (newB));
+                        index.add (i);
+                    }
+                }
+
+                while (b < clipLen)
+                {
+                    for (int i = 0; i < beats.size(); ++i)
+                    {
+                        auto newB = BeatDuration::fromBeats (beats[i].inSeconds() + (toPosition (b) - getLoopStartBeats()).inBeats());
+
+                        if (newB >= b && newB < b + loopLen)
+                        {
+                            times.add (getTimeOfRelativeBeat (newB));
+                            index.add (i);
+                        }
+                    }
+
+                    b = b + loopLen;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < beats.size(); ++i)
+                {
+                    auto newT = getTimeOfRelativeBeat (BeatPosition::fromBeats (beats[i].inSeconds()) - toPosition (getOffsetInBeats()));
+
+                    if (newT >= TimePosition())
+                    {
+                        times.add (newT);
+                        index.add (i);
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (isLooping())
+            {
+                auto origTimes = sourceItem->getMarkedPoints();
+
+                for (int i = origTimes.size(); --i >= 0;)
+                    origTimes.set (i, origTimes[i] / speedRatio - getPosition().getOffset() - toDuration (getLoopStart()));
+
+                const auto loopLen = getLoopLength();
+                const auto clipLen = getPosition().getLength();
+                auto t = loopLen - getPosition().getOffset();
+
+                for (int i = 0; i < origTimes.size(); ++i)
+                {
+                    if (origTimes[i] >= TimePosition() && origTimes[i] < toPosition (t))
+                    {
+                        times.add(origTimes[i]);
+                        index.add(i);
+                    }
+                }
+
+                while (t < clipLen)
+                {
+                    for (int i = 0; i < origTimes.size(); ++i)
+                    {
+                        auto newT = toDuration (origTimes[i] + t + getPosition().getOffset());
+
+                        if (newT >= t && newT < t + loopLen)
+                        {
+                            times.add(toPosition (newT));
+                            index.add(i);
+                        }
+                    }
+
+                    t = t + loopLen;
+                }
+            }
+            else
+            {
+                times = sourceItem->getMarkedPoints();
+
+                for (int i = 0; i < times.size(); ++i)
+                {
+                    times.set(i, times[i] / speedRatio - getPosition().getOffset());
+                    index.add(i);
+                }
+            }
+        }
+    }
+}
+
+//==============================================================================
+bool AudioClipBase::isUsingFile (const AudioFile& af)
+{
+    if (getPlaybackFile() == af || getAudioFile() == af)
+        return true;
+
+    if (clipEffects != nullptr)
+        return clipEffects->isUsingFile (af);
+
+    return false;
+}
+
+void AudioClipBase::setUsesProxy (bool canUseProxy) noexcept
+{
+    proxyAllowed = canUseProxy;
+    stopTimer();
+}
+
+bool AudioClipBase::usesTimeStretchedProxy() const
+{
+    if (! proxyAllowed)
+        return false;
+
+    return getAutoTempo() || getAutoPitch()
+           || getPitchChange() != 0.0f
+           || isUsingARA()
+           || (std::abs (getSpeedRatio() - 1.0) > 0.00001
+               && TimeStretcher::canProcessFor (timeStretchMode));
+}
+
+AudioClipBase::ProxyRenderingInfo::ProxyRenderingInfo() {}
+AudioClipBase::ProxyRenderingInfo::~ProxyRenderingInfo() {}
+
+AudioFile AudioClipBase::getProxyFileToCreate (bool renderTimestretched)
+{
+    if (renderTimestretched)
+        return TemporaryFileManager::getFileForCachedClipRender (*this, getProxyHash());
+
+    return TemporaryFileManager::getFileForCachedFileRender (edit, getHash());
+}
+
+//==============================================================================
+struct StretchSegment
+{
+    static constexpr int maxNumChannels = 8;
+
+    StretchSegment (Engine& engine, const AudioFile& file,
+                    const AudioClipBase::ProxyRenderingInfo& info,
+                    double sampleRate, const AudioSegmentList::Segment& s)
+        : segment (s),
+          fileInfo (file.getInfo()),
+          crossfadeSamples ((int) tracktion::toSamples (info.audioSegmentList->getCrossfadeLength(), sampleRate)),
+          numChannelsToUse (juce::jlimit (1, maxNumChannels, fileInfo.numChannels))
+    {
+        CRASH_TRACER
+        reader = engine.getAudioFileManager().cache.createReader (file);
+
+        if (reader != nullptr)
+        {
+            auto sampleRange = segment.getSampleRange();
+
+            if (segment.isFollowedBySilence())
+            {
+                reader->setReadPosition (sampleRange.getStart());
+            }
+            else
+            {
+                reader->setLoopRange (sampleRange);
+                reader->setReadPosition (0);
+            }
+
+            timestretcher.initialise (fileInfo.sampleRate, outputBufferSize, numChannelsToUse,
+                                      info.mode, info.options, false);
+            jassert (timestretcher.isInitialised()); // Have you enabled a TimeStretcher mode?
+
+            timestretcher.setSpeedAndPitch ((float) (1.0 / segment.getStretchRatio()),
+                                            segment.getTranspose());
+        }
+    }
+
+    void renderNextBlock (juce::AudioBuffer<float>& buffer, TimeRange editTime, int numSamples)
+    {
+        if (reader == nullptr)
+            return;
+
+        CRASH_TRACER
+
+        auto loopRange = segment.getRange();
+
+        if (! editTime.overlaps (loopRange))
+            return;
+
+        int start = 0;
+
+        if (loopRange.getEnd() < editTime.getEnd())
+            numSamples = std::max (0, (int) (numSamples * (loopRange.getEnd() - editTime.getStart()).inSeconds()
+                                              / editTime.getLength().inSeconds()));
+
+        if (loopRange.getStart() > editTime.getStart())
+        {
+            auto skip = juce::jlimit (0, numSamples, (int) (numSamples * (loopRange.getStart() - editTime.getStart()).inSeconds() / editTime.getLength().inSeconds()));
+            start += skip;
+            numSamples -= skip;
+        }
+
+        while (numSamples > 0)
+        {
+            auto numReady = std::min (numSamples, readySamplesEnd - readySamplesStart);
+
+            if (numReady > 0)
+            {
+                for (int i = 0; i < buffer.getNumChannels(); ++i)
+                    buffer.addFrom (i, start, fifo,
+                                    std::min (i, fifo.getNumChannels() - 1),
+                                    readySamplesStart, numReady);
+
+                readySamplesStart += numReady;
+                start += numReady;
+                numSamples -= numReady;
+            }
+            else
+            {
+                auto blockSize = fillNextBlock();
+                renderFades (blockSize);
+
+                readySampleOutputPos += blockSize;
+            }
+        }
+    }
+
+    int fillNextBlock()
+    {
+        CRASH_TRACER
+        float* outs[maxNumChannels] = {};
+
+        for (int i = 0; i < numChannelsToUse; ++i)
+            outs[i] = fifo.getWritePointer (i);
+
+        const int needed = timestretcher.getFramesNeeded();
+        int numRead = 0;
+
+        if (needed >= 0)
+        {
+            AudioScratchBuffer scratch (numChannelsToUse, needed);
+            scratch.buffer.clear();
+            auto bufferChannels = ChannelConfiguration::canonical (numChannelsToUse);
+            auto sourceChannelsToUse = bufferChannels;
+
+            if (needed > 0)
+            {
+               #if JUCE_DEBUG
+                jassert (reader->readSamples (needed, scratch.buffer, bufferChannels, 0, sourceChannelsToUse, 5000));
+               #else
+                reader->readSamples (needed, scratch.buffer, bufferChannels, 0, sourceChannelsToUse, 5000);
+               #endif
+            }
+
+            const float* ins[maxNumChannels] = {};
+
+            for (int i = 0; i < numChannelsToUse; ++i)
+                ins[i] = scratch.buffer.getReadPointer (i);
+
+            numRead = timestretcher.processData (ins, needed, outs);
+        }
+        else
+        {
+            jassert (needed == -1);
+            numRead = timestretcher.flush (outs);
+        }
+
+        readySamplesStart = 0;
+        readySamplesEnd = numRead;
+
+        return numRead;
+    }
+
+    void renderFades (int numSamples)
+    {
+        CRASH_TRACER
+        auto renderedEnd = readySampleOutputPos + numSamples;
+
+        if (segment.hasFadeIn())
+            if (readySampleOutputPos < crossfadeSamples)
+                renderFade (0, crossfadeSamples, false, numSamples);
+
+        if (segment.hasFadeOut())
+        {
+            auto fadeOutStart = (SampleCount) (static_cast<double> (segment.getSampleRange().getLength()) / segment.getStretchRatio()) - crossfadeSamples;
+
+            if (renderedEnd > fadeOutStart)
+                renderFade (fadeOutStart, fadeOutStart + crossfadeSamples + 2, true, numSamples);
+        }
+    }
+
+    void renderFade (SampleCount start, SampleCount end, bool isFadeOut, int numSamples)
+    {
+        float alpha1 = 0.0f, alpha2 = 1.0f;
+        auto renderedEnd = readySampleOutputPos + numSamples;
+
+        if (end > renderedEnd)
+        {
+            alpha2 = static_cast<float> (renderedEnd - start) / (float) (end - start);
+            end = renderedEnd;
+        }
+
+        if (start < readySampleOutputPos)
+        {
+            alpha1 = alpha2 * static_cast<float> (readySampleOutputPos - start) / (float) (end - start);
+            start = readySampleOutputPos;
+        }
+
+        if (end > start)
+        {
+            if (isFadeOut)
+            {
+                alpha1 = 1.0f - alpha1;
+                alpha2 = 1.0f - alpha2;
+            }
+
+            AudioFadeCurve::applyCrossfadeSection (fifo,
+                                                   (int) (start - readySampleOutputPos),
+                                                   (int) (end - start),
+                                                   AudioFadeCurve::convex, alpha1, alpha2);
+        }
+    }
+
+    const AudioSegmentList::Segment& segment;
+    TimeStretcher timestretcher;
+
+    AudioFileInfo fileInfo;
+    AudioFileCache::Reader::Ptr reader;
+
+    const int outputBufferSize = 1024;
+    int readySamplesStart = 0, readySamplesEnd = 0;
+    SampleCount readySampleOutputPos = 0;
+    const int crossfadeSamples, numChannelsToUse;
+    juce::AudioBuffer<float> fifo { numChannelsToUse, outputBufferSize };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StretchSegment)
+};
+
+//==============================================================================
+std::unique_ptr<AudioClipBase::ProxyRenderingInfo> AudioClipBase::createProxyRenderingInfo()
+{
+    auto p = std::make_unique<ProxyRenderingInfo>();
+    p->audioSegmentList = AudioSegmentList::create (*this, true, true);
+    p->clipTime = getEditTimeRange();
+    p->speedRatio = getSpeedRatio();
+    p->mode = (timeStretchMode != TimeStretcher::disabled && timeStretchMode != TimeStretcher::ara)
+                 ? timeStretchMode
+                 : TimeStretcher::defaultMode;
+    p->options = elastiqueProOptions;
+
+    return p;
+}
+
+bool AudioClipBase::ProxyRenderingInfo::render (Engine& engine, const AudioFile& sourceFile, AudioFileWriter& writer,
+                                                juce::ThreadPoolJob* const& job, std::atomic<float>& progress) const
+{
+    CRASH_TRACER
+
+    if (audioSegmentList->getSegments().isEmpty() || ! sourceFile.isValid())
+        return false;
+
+    juce::OwnedArray<StretchSegment> segments;
+
+    auto sampleRate = sourceFile.getSampleRate();
+
+    for (auto& segment : audioSegmentList->getSegments())
+        segments.add (new StretchSegment (engine, sourceFile, *this, sampleRate, segment));
+
+    const int samplesPerBlock = 1024;
+    juce::AudioBuffer<float> buffer (sourceFile.getNumChannels(), samplesPerBlock);
+    double time = 0.0;
+
+    auto numBlocks = 1 + (int) (clipTime.getLength().inSeconds() * sampleRate / samplesPerBlock);
+
+    for (int i = 0; i < numBlocks; ++i)
+    {
+        if (job != nullptr && job->shouldExit())
+            return false;
+
+        buffer.clear();
+
+        auto endTime = time + samplesPerBlock / sampleRate;
+        const auto editTime = TimeRange (TimePosition::fromSeconds (time), TimePosition::fromSeconds (endTime));
+        time = endTime;
+
+        for (auto s : segments)
+            s->renderNextBlock (buffer, editTime, samplesPerBlock);
+
+        if (! writer.appendBuffer (buffer, samplesPerBlock))
+            return false;
+
+        progress = static_cast<float> (i) / (float) numBlocks;
+    }
+
+    return true;
+}
+
+AudioFile AudioClipBase::getPlaybackFile()
+{
+    // this needs to return the same file right from the first call, if it's a rendered file then obviously it won't exist but we need to return it anyway
+    const AudioFile af (getAudioFile());
+
+    if (canUseProxy() && ! af.isNull())
+    {
+        const bool timestretched = usesTimeStretchedProxy();
+
+        if (timestretched || af.getInfo().needsCachedProxy)
+            return getProxyFileToCreate (timestretched);
+    }
+
+    return af;
+}
+
+AudioFileInfo AudioClipBase::getWaveInfo()
+{
+    // if the source needs to render we'll just have to bodge return a WaveInfo so the AudioSegmentList gives us a consistent hash
+    // this is of course a massive hack because it assumes that the rendered file will have the same sample rate etc.
+
+    if (needsRender())
+        if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+            return AudioFile (edit.engine, sourceItem->getSourceFile()).getInfo();
+
+    return getAudioFile().getInfo();
+}
+
+HashCode AudioClipBase::getProxyHash()
+{
+    jassert (usesTimeStretchedProxy());
+
+    auto clipPos = getPosition();
+
+    HashCode hash = getHash()
+                     ^ static_cast<HashCode> (timeStretchMode.get())
+                     ^ elastiqueProOptions.get().toString().hashCode64()
+                     ^ (7342847 * static_cast<HashCode> (pitchChange * 199.0))
+                     ^ static_cast<HashCode> (clipPos.getLength().inSeconds() * 10005.0)
+                     ^ static_cast<HashCode> (clipPos.getOffset().inSeconds() * 9997.0)
+                     ^ static_cast<HashCode> (getLoopStart().inSeconds() * 8971.0)
+                     ^ static_cast<HashCode> (getLoopLength().inSeconds() * 7733.0)
+                     ^ static_cast<HashCode> (getSpeedRatio() * 877.0);
+
+    auto needsPlainStretch = [&]() { return std::abs (getSpeedRatio() - 1.0) > 0.00001 || (getPitchChange() != 0.0f); };
+
+    if (getAutoTempo() || getAutoPitch() || needsPlainStretch())
+    {
+        auto& segmentList = getAudioSegmentList();
+        int i = 0;
+
+        for (auto& segment : segmentList.getSegments())
+            hash ^= static_cast<HashCode> (static_cast<double> (segment.getHashCode()) * (i++ + 0.1));
+    }
+
+    return hash;
+}
+
+void AudioClipBase::beginRenderingNewProxyIfNeeded()
+{
+    if (! canUseProxy())
+        return;
+
+    if (isTimerRunning())
+    {
+        startTimer (1);
+        return;
+    }
+
+    const AudioFile playFile (getPlaybackFile());
+
+    if (playFile.isNull())
+        return;
+
+    auto original = getAudioFile();
+
+    if (shouldAttemptRender() && ! original.isValid())
+        createNewProxyAsync();
+
+    if (usesTimeStretchedProxy() || original.getInfo().needsCachedProxy)
+        if (playFile.getSampleRate() <= 0.0)
+            createNewProxyAsync();
+}
+
+bool AudioClipBase::isGeneratingPlaybackFile()
+{
+    // A source the clip renders itself (an EditClip, say) only exists once that render
+    // has run, and a failed render sets lastRenderJobFailed so we stop claiming it's coming
+    if (shouldAttemptRender() && ! getAudioFile().isValid())
+        return true;
+
+    if (! canUseProxy())
+        return false;
+
+    // Proxies are generated by the timer started in beginRenderingNewProxyIfNeeded, so the
+    // job may not exist yet - go by whether one is needed rather than whether one is running
+    return usesTimeStretchedProxy() || getAudioFile().getInfo().needsCachedProxy;
+}
+
+//==============================================================================
+void AudioClipBase::jobFinished (RenderManager::Job& job, bool completedOk)
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+
+    if (&job == renderJob.get())
+    {
+        lastRenderJobFailed = ! completedOk;
+        renderJob->removeListener (this);
+        renderJob = nullptr;
+
+        renderComplete();
+    }
+}
+
+//==============================================================================
+void AudioClipBase::createNewProxyAsync()
+{
+    if (canUseProxy() || requiresRenderingSource())
+        startTimer (600);
+}
+
+void AudioClipBase::cancelCurrentRender()
+{
+    if (renderJob != nullptr)
+        renderJob->cancelJob();
+}
+
+void AudioClipBase::timerCallback()
+{
+    if (edit.isLoading()
+         || ! edit.getTransport().isAllowedToReallocate())
+        return;
+
+    // if the source file hasn't been rendered yet we need to delay this
+    if (shouldAttemptRender())
+    {
+        updateSourceFile();
+
+        if (! getAudioFile().isValid())
+        {
+            createNewProxyAsync();
+            return;
+        }
+    }
+
+    stopTimer();
+
+    if (! canUseProxy())
+        return;
+
+    const AudioFile originalFile (getAudioFile());
+    const AudioFile newProxy (getPlaybackFile());
+
+    const bool proxyChanged = lastProxy != newProxy;
+
+    if (proxyChanged)
+    {
+        if (lastProxy != originalFile
+             && lastProxy.getFile().isAChildOf (edit.getTempDirectory (false))
+             && ! edit.areAnyClipsUsingFile (lastProxy))
+            edit.engine.getAudioFileManager().proxyGenerator.deleteProxy (lastProxy);
+
+        lastProxy = newProxy;
+    }
+
+    if (! newProxy.getFile().exists())
+    {
+        // Proxy doesn't exist yet — start render job if needed
+        if (proxyChanged)
+        {
+            const bool isTimeStretched = usesTimeStretchedProxy();
+
+            if (isTimeStretched || newProxy != originalFile)
+                edit.engine.getAudioFileManager().proxyGenerator
+                    .beginJob (new ProxyGeneratorJob (getAudioFile(), newProxy, *this, isTimeStretched));
+        }
+
+        // poll until the proxy is ready..
+        startTimer (100);
+        return;
+    }
+
+    // Proxy file exists — restart playback to use it
+    if (! proxyChanged)
+        edit.engine.getAudioFileManager().releaseFile (newProxy);
+
+    Selectable::changed();
+    edit.restartPlayback();
+}
+
+void AudioClipBase::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id)
+{
+    if (tree == state)
+    {
+        if (id == IDs::fadeInType || id == IDs::fadeOutType
+            || id == IDs::fadeInBehaviour || id == IDs::fadeOutBehaviour
+            || id == IDs::fadeIn || id == IDs::fadeOut
+            || id == IDs::loopStart || id == IDs::loopLength
+            || id == IDs::loopStartBeats || id == IDs::loopLengthBeats
+            || id == IDs::transpose || id == IDs::pitchChange
+            || id == IDs::elastiqueMode || id == IDs::autoPitch
+            || id == IDs::elastiqueOptions || id == IDs::warpTime
+            || id == IDs::effectsVisible || id == IDs::autoPitchMode
+            || id == IDs::resamplingQuality
+            || id == IDs::launchQuantisation || id == IDs::useClipLaunchQuantisation)
+        {
+            if (id == IDs::warpTime)
+            {
+                warpTime.forceUpdateOfCachedValue();
+
+                if (! getWarpTime())
+                {
+                    if (shouldAttemptRender())
+                        updateSourceFile();
+                    else
+                        setCurrentSourceFile (getOriginalFile());
+                }
+            }
+
+            changed();
+        }
+        else if (id == IDs::gain)
+        {
+            changed();
+        }
+        else if (id == IDs::pan || id == IDs::mute
+                 || id == IDs::autoCrossfade)
+        {
+            changed();
+
+            if (id == IDs::mute)
+            {
+                if (auto track = getTrack())
+                    if (auto f = track->getParentFolderTrack())
+                        f->setDirtyClips();
+            }
+            else if (id == IDs::autoCrossfade)
+            {
+                updateAutoCrossfadesAsync (true);
+            }
+        }
+        else if (id == IDs::autoTempo)
+        {
+            if (! getUndoManager()->isPerformingUndoRedo())
+            {
+                autoTempo.forceUpdateOfCachedValue();
+                updateAutoTempoState();
+            }
+        }
+        else if (id == IDs::isReversed)
+        {
+            isReversed.forceUpdateOfCachedValue();
+            updateReversedState();
+        }
+        else if (id == IDs::channels)
+        {
+            channels.forceUpdateOfCachedValue();
+            changed();
+        }
+        else if (id == IDs::proxyAllowed)
+        {
+            propertiesChanged();
+        }
+        else if (id == IDs::araPluginDescription)
+        {
+            // Tear the proxy down; a rebuild only makes sense if a valid
+            // new description is actually present and we're not currently
+            // inside an undo/redo (which would re-enter UndoManager::perform
+            // via the synchronous ExternalPlugin construction).
+            araProxy.reset();
+
+            if (isUsingARA()
+                && state.hasProperty (IDs::araPluginDescription)
+                && ! edit.getUndoManager().isPerformingUndoRedo())
+            {
+                loadARAState();
+            }
+
+            changed();
+        }
+        else
+        {
+            Clip::valueTreePropertyChanged (tree, id);
+        }
+    }
+    else if (tree.hasType (IDs::WARPMARKER))
+    {
+        if (id == IDs::warpTime || id == IDs::sourceTime)
+            changed();
+    }
+    else if (tree.hasType (IDs::LOOPINFO))
+    {
+        if (isInitialised)
+            changed();
+    }
+    else
+    {
+        Clip::valueTreePropertyChanged (tree, id);
+    }
+}
+
+void AudioClipBase::valueTreeChildAdded (juce::ValueTree& parentState, juce::ValueTree& child)
+{
+    if (parentState == state)
+    {
+        if (child.hasType (IDs::PLUGIN))
+            Selectable::changed();
+        else if (child.hasType (IDs::EFFECTS))
+            updateClipEffectsState();
+        else if (child.hasType (IDs::PATTERNGENERATOR))
+            patternGenerator = std::make_unique<PatternGenerator> (*this, child);
+        else if (child.hasType (IDs::LOOPINFO) && isInitialised)
+            loopInfo.state = child;
+    }
+    else if (parentState.hasType (IDs::LOOPINFO) || child.hasType (IDs::WARPMARKER))
+    {
+        changed();
+    }
+    else
+    {
+        Clip::valueTreeChildAdded (parentState, child);
+    }
+}
+
+void AudioClipBase::valueTreeChildRemoved (juce::ValueTree& parentState, juce::ValueTree& child, int oldIndex)
+{
+    if (parentState == state)
+    {
+        if (child.hasType (IDs::PLUGIN))
+            Selectable::changed();
+        else if (child.hasType (IDs::EFFECTS))
+            updateClipEffectsState();
+        else if (child.hasType (IDs::PATTERNGENERATOR))
+            patternGenerator = nullptr;
+        else if (child.hasType (IDs::LOOPINFO) && isInitialised)
+            copyValueTree (loopInfo.state, LoopInfo (edit.engine).state, nullptr); // Resets to default
+    }
+    else if (parentState.hasType (IDs::LOOPINFO) || child.hasType (IDs::WARPMARKER))
+    {
+        changed();
+    }
+    else
+    {
+        Clip::valueTreeChildRemoved (parentState, child, oldIndex);
+    }
+}
+
+void AudioClipBase::valueTreeChildOrderChanged (juce::ValueTree& parentState, int oldIndex, int newIndex)
+{
+    Clip::valueTreeChildOrderChanged (parentState, oldIndex, newIndex);
+}
+
+void AudioClipBase::valueTreeParentChanged (juce::ValueTree& child)
+{
+    updateAutoCrossfadesAsync (true);
+
+    Clip::valueTreeParentChanged (child);
+}
+
+void AudioClipBase::updateReversedState()
+{
+    setCurrentSourceFile (getOriginalFile());
+
+    if (isReversed)
+        updateSourceFile();
+
+    if (! getUndoManager()->isPerformingUndoRedo())
+        reverseLoopPoints();
+
+    changed();
+    SelectionManager::refreshAllPropertyPanels();
+}
+
+void AudioClipBase::updateAutoTempoState()
+{
+    // autoTempo has already been toggled by the time this is called, so the loop
+    // is held in the *other* representation (isLooping() would look at the new, empty one)
+    if (hasLoop (! autoTempo))
+    {
+        auto bps = edit.tempoSequence.getBeatsPerSecondAt (getPosition().getStart());
+
+        if (autoTempo)
+        {
+            // convert time based looping to beat based looping
+            // (uses a single tempo, the same as getLoopLength() etc., so the reported loop doesn't change)
+            loopStartBeats  = BeatPosition::fromBeats (loopStart.get().inSeconds()  * bps);
+            loopLengthBeats = BeatDuration::fromBeats (loopLength.get().inSeconds() * bps);
+
+            loopStart  = 0_tp;
+            loopLength = 0_td;
+        }
+        else
+        {
+            // convert beat based looping to time based looping
+            auto newStart  = TimePosition::fromSeconds (loopStartBeats.get().inBeats()  / bps);
+            auto newLength = TimeDuration::fromSeconds (loopLengthBeats.get().inBeats() / bps);
+            TimeRange range (newStart, newStart + newLength);
+
+            if (auto sourceLen = getSourceLength(); sourceLen > 0s)
+                range = clampTimeLoopRange (range, sourceLen, getSpeedRatio());
+
+            loopStart  = range.getStart();
+            loopLength = range.getLength();
+
+            loopStartBeats  = 0_bp;
+            loopLengthBeats = 0_bd;
+        }
+
+        changed();
+    }
+}
+
+void AudioClipBase::updateClipEffectsState()
+{
+    auto v = state.getChildWithName (IDs::EFFECTS);
+
+    if (v.isValid() && canHaveEffects())
+    {
+        if (clipEffects == nullptr)
+        {
+            clipEffects = std::make_unique<ClipEffects> (v, *this);
+            changed();
+        }
+    }
+    else if (clipEffects != nullptr)
+    {
+        clipEffects = nullptr;
+
+        if (auto sourceItem = sourceFileReference.getSourceProjectItem())
+            setCurrentSourceFile (sourceItem->getSourceFile());
+        else
+            setCurrentSourceFile (getOriginalFile());
+
+        // Force a re-parse of the source file's info and notify any SmartThumbnails listening to it,
+        // so stale cached info (e.g. channel count from the previous render-with-effects file) is refreshed.
+        edit.engine.getAudioFileManager().forceFileUpdate (AudioFile (edit.engine, getCurrentSourceFile()));
+
+        changed();
+    }
+
+    markAsDirty();
+}
+
+} // namespace tracktion::inline engine

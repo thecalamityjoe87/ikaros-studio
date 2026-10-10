@@ -1,0 +1,345 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+class HostedAudioDeviceInterface;
+
+
+//==============================================================================
+/**
+*/
+class DeviceManager     : public juce::ChangeBroadcaster,
+                          public juce::ChangeListener,
+                          private juce::AudioIODeviceCallback,
+                          private juce::AsyncUpdater,
+                          private juce::Timer
+{
+    friend class Engine;
+    DeviceManager (Engine&);
+
+public:
+    //==============================================================================
+    ~DeviceManager() override;
+
+    static constexpr int defaultNumChannelsToOpen = 512;
+
+    void initialise (int defaultNumInputChannelsToOpen  = defaultNumChannelsToOpen,
+                     int defaultNumOutputChannelsToOpen = defaultNumChannelsToOpen);
+    void closeDevices();
+    void saveSettings();
+
+    void resetToDefaults (bool deviceSettings,
+                          bool resetInputDevices,
+                          bool resetOutputDevices,
+                          bool latencySettings,
+                          bool mixSettings);
+
+    void rescanMidiDeviceList();
+    void rescanWaveDeviceList();
+
+    int getMidiDeviceScanIntervalSeconds() const        { return midiRescanIntervalSeconds; }
+    void setMidiDeviceScanIntervalSeconds (int intervalSeconds);
+
+    //==============================================================================
+    double getSampleRate() const;
+    int getBitDepth() const;
+    int getBlockSize() const;
+    TimeDuration getBlockLength() const;
+    double getBlockSizeMs() const;
+    double getOutputLatencySeconds() const;
+
+    // get a time by which recordings should be shifted to sync up with active output channels
+    double getRecordAdjustmentMs();
+    int getRecordAdjustmentSamples();
+
+    //==============================================================================
+    float getCpuUsage() const noexcept                  { return (float) currentCpuUsage; }
+
+    // Sets an upper limit on the proportion of CPU time being used - if getCpuUsage() exceeds this,
+    // the processing will be muted to keep the system running. Defaults to 0.98
+    void setCpuLimitBeforeMuting (double newLimit)      { jassert (newLimit > 0); cpuLimitBeforeMuting = newLimit; }
+
+    PerformanceMeasurement::Statistics getCPUStatistics() const;
+    void restCPUStatistics();
+
+    void updateNumCPUs(); // should be called when active num CPUs is changed
+
+    //==============================================================================
+    /** If set to true, clips the output at 0.0. */
+    void enableOutputClipping (bool clipOutput);
+
+    /** Checks if the output has clipped.
+        @param reset    Resets the clipped flag
+    */
+    bool hasOutputClipped (bool reset);
+
+
+    //==============================================================================
+    /** If you are using the engine in a plugin or an application
+        that accesses the audio device directly, use this interface
+        to pass audio and midi to the DeviceManager.
+    */
+    HostedAudioDeviceInterface& getHostedAudioDeviceInterface();
+
+    /** Returns true if the hosted interface is available and in use. */
+    bool isHostedAudioDeviceInterfaceInUse() const;
+
+    /** Removes the hosted audio device.
+        You shouldn't normally need to call this but can be useful for running tests.
+        Afterwards, you'll need to call initialise again.
+    */
+    void removeHostedAudioDeviceInterface();
+
+    //==============================================================================
+    // list of all input devices..
+    int getNumInputDevices() const;
+    InputDevice* getInputDevice (int index) const;
+
+    int getNumOutputDevices() const;
+    OutputDevice* getOutputDeviceAt (int index) const;
+
+    InputDevice* findInputDeviceForID (const juce::String& id) const;
+    InputDevice* findInputDeviceWithName (const juce::String& name) const;
+    std::shared_ptr<MidiInputDevice> findMidiInputDeviceForID (const juce::String& id) const;
+
+    OutputDevice* findOutputDeviceForID (const juce::String& id) const;
+    OutputDevice* findOutputDeviceWithName (const juce::String& name) const;
+
+    //==============================================================================
+    int getNumWaveOutDevices() const                            { return waveOutputs.size(); }
+    WaveOutputDevice* getWaveOutDevice (int index) const        { return waveOutputs[index]; }
+
+    void setDefaultWaveOutDevice (juce::String deviceID);
+    WaveOutputDevice* getDefaultWaveOutDevice() const;
+    juce::String getDefaultWaveOutDeviceID() const              { return defaultWaveOutID; }
+
+    int getNumWaveInDevices() const                             { return waveInputs.size(); }
+    WaveInputDevice* getWaveInDevice (int index) const          { return waveInputs[index]; }
+
+    void setDefaultWaveInDevice (juce::String deviceID);
+    WaveInputDevice* getDefaultWaveInDevice() const;
+    juce::String getDefaultWaveInDeviceID() const               { return defaultWaveInID; }
+
+    std::vector<WaveOutputDevice*> getWaveOutputDevices();
+    std::vector<WaveInputDevice*> getWaveInputDevices();
+
+    void setDeviceEnabled (WaveOutputDevice&, bool);
+    void setDeviceEnabled (WaveInputDevice&, bool);
+
+    void setDeviceNumChannels (WaveOutputDevice&, uint32_t numChannels);
+    void setDeviceNumChannels (WaveInputDevice&, uint32_t numChannels);
+
+    void setAllWaveInputsToNumChannels (uint32_t numChannels);
+    void setAllWaveOutputsToNumChannels (uint32_t numChannels);
+
+    juce::StringArray getPossibleChannelGroupsForDevice (WaveOutputDevice&, uint32_t maxNumChannels) const;
+    juce::StringArray getPossibleChannelGroupsForDevice (WaveInputDevice&, uint32_t maxNumChannels) const;
+
+    //==============================================================================
+    /** Wave device channel-grouping layout presets.
+
+        The way a physical device's channels are grouped into WaveInputDevice and
+        WaveOutputDevice instances is normally stored per-device-type and lost when
+        the device changes. These methods let that grouping be captured as a named
+        preset (stored in the global PropertyStorage) and recalled at any time, even
+        onto a different device - the recalled layout is fitted to whatever device is
+        currently active.
+    */
+
+    /** Returns the current channel grouping as an XML layout (an AUDIODEVICE_LAYOUT element). */
+    juce::XmlElement getCurrentWaveDeviceLayout() const;
+
+    /** Applies a previously captured layout to the current device, rebuilding the wave devices. */
+    void applyWaveDeviceLayout (const juce::XmlElement&);
+
+    /** Returns the names of all stored channel-layout presets. */
+    juce::StringArray getWaveDeviceLayoutPresetNames();
+
+    /** Stores the current channel grouping as a named preset (overwriting any preset with the same name). */
+    void saveWaveDeviceLayoutPreset (const juce::String& name);
+
+    /** Recalls a named preset and applies it to the current device. */
+    void loadWaveDeviceLayoutPreset (const juce::String& name);
+
+    /** Deletes a named preset. */
+    void deleteWaveDeviceLayoutPreset (const juce::String& name);
+
+    //==============================================================================
+    int getNumMidiOutDevices() const                            { return (int) midiOutputs.size(); }
+    MidiOutputDevice* getMidiOutDevice (int index) const        { return index >= 0 && index < (int) midiOutputs.size() ? midiOutputs[(size_t) index].get() : nullptr; }
+
+    void setDefaultMidiOutDevice (juce::String deviceID);
+    MidiOutputDevice* getDefaultMidiOutDevice() const;
+    juce::String getDefaultMidiOutDeviceID() const              { return defaultMidiOutID; }
+
+    int getNumMidiInDevices() const;
+    std::shared_ptr<MidiInputDevice> getMidiInDevice (int index) const;
+
+    std::vector<std::shared_ptr<MidiInputDevice>> getMidiInDevices() const;
+
+    void setDefaultMidiInDevice (juce::String deviceID);
+    MidiInputDevice* getDefaultMidiInDevice() const;
+    juce::String getDefaultMidiInDeviceID() const               { return defaultMidiInID; }
+
+    void injectMIDIMessageToDefaultDevice (const juce::MidiMessage&);
+    void broadcastMessageToAllVirtualDevices (PhysicalMidiInputDevice&, const juce::MidiMessage&);
+
+    void broadcastStreamTimeToMidiDevices (double streamTime);
+    bool shouldSendMidiTimecode() const noexcept                { return sendMidiTimecode; }
+
+    /** Returns the current block's stream time.
+        This shouldn't really be used and may be removed in future.
+    */
+    double getCurrentStreamTime() const noexcept                { return streamTime; }
+
+    bool isMSWavetableSynthPresent() const;
+
+    /** Changes to the devices get applied asyncronously so this function can be called to trigger any pending updates to be flushed. */
+    void dispatchPendingUpdates();
+
+    //==============================================================================
+    void checkDefaultDevicesAreValid();
+
+    static juce::String getDefaultAudioOutDeviceName (bool translated);
+    static juce::String getDefaultMidiOutDeviceName (bool translated);
+
+    static juce::String getDefaultAudioInDeviceName (bool translated);
+    static juce::String getDefaultMidiInDeviceName (bool translated);
+
+    juce::Result createVirtualMidiDevice (const juce::String& name);
+    void deleteVirtualMidiDevice (VirtualMidiInputDevice&);
+
+    Engine& engine;
+
+    //==============================================================================
+    /**
+        Subclass of an AudioDeviceManager which can be used to avoid adding the
+        system audio devices in plugin builds.
+        @see EngineBehaviour::addSystemAudioIODeviceTypes
+    */
+    struct TracktionEngineAudioDeviceManager  : public juce::AudioDeviceManager
+    {
+        TracktionEngineAudioDeviceManager (Engine&);
+        void createAudioDeviceTypes (juce::OwnedArray<juce::AudioIODeviceType>&) override;
+
+        Engine& engine;
+    };
+
+    TracktionEngineAudioDeviceManager deviceManager { engine };
+
+    //==============================================================================
+    std::unique_ptr<HostedAudioDeviceInterface> hostedAudioDeviceInterface;
+
+    std::vector<std::shared_ptr<MidiInputDevice>> midiInputs; // Only thread-safe from the message thread
+    std::vector<std::shared_ptr<MidiOutputDevice>> midiOutputs;
+
+    juce::OwnedArray<WaveInputDevice> waveInputs;
+    juce::OwnedArray<WaveOutputDevice> waveOutputs;
+
+    //==============================================================================
+    void addContext (EditPlaybackContext*);
+    void removeContext (EditPlaybackContext*);
+
+    //==============================================================================
+    /** Sets a global processor to be applied to the output.
+        This can be used to set a limiter or similar on the whole ouput.
+        It shouldn't be used for musical effects.
+    */
+    void setGlobalOutputAudioProcessor (std::unique_ptr<juce::AudioProcessor>);
+
+    /** Returns a previously set globalOutputAudioProcessor. */
+    juce::AudioProcessor* getGlobalOutputAudioProcessor() const     { return globalOutputAudioProcessor.get(); }
+
+    /** If this is set, it will get called (possibly on the midi thread) when incoming
+        messages seem to be unused. May want to use it to warn the user.
+    */
+    std::function<void(InputDevice*)> warnOfWastedMidiMessagesFunction;
+
+    static constexpr uint32_t maxNumChannelsPerDevice = 128;
+
+private:
+    //==============================================================================
+    bool finishedInitialising = false;
+    bool sendMidiTimecode = false;
+
+    std::atomic<double> currentCpuUsage { 0 }, streamTime { 0 }, cpuLimitBeforeMuting { 0.98 };
+    std::atomic<bool> isSuspended { true }, outputHasClipped { false }, outputClippingEnabled { false };
+    double currentLatencyMs = 0, outputLatencyTime = 0, currentSampleRate = 0;
+    int maxBlockSize = 0;
+
+    int defaultNumInputChannelsToOpen = 512, defaultNumOutputChannelsToOpen = 512;
+    juce::String defaultWaveOutID, defaultMidiOutID, defaultWaveInID, defaultMidiInID;
+    std::vector<int> activeOutputChannels;
+
+    int midiRescanIntervalSeconds = 4;
+    bool onlyRescanMidiOnHardwareChange = true;
+
+    WaveDeviceDescriptionList deviceDescriptionList;
+
+    struct MIDIDeviceList;
+    std::unique_ptr<MIDIDeviceList> lastMIDIDeviceList;
+
+    struct PrepareToStartCaller;
+    std::unique_ptr<PrepareToStartCaller> prepareToStartCaller;
+
+    std::shared_mutex contextLock;
+    juce::Array<EditPlaybackContext*> activeContexts;
+    std::unique_ptr<juce::AudioProcessor> globalOutputAudioProcessor;
+    juce::HeapBlock<const float*> inputChannelsScratch;
+    juce::HeapBlock<float*> outputChannelsScratch;
+
+    mutable std::shared_mutex midiInputsMutex;
+
+   #if JUCE_ANDROID
+    ScopedSteadyLoad::Context steadyLoadContext;
+   #endif
+
+    PerformanceMeasurement performanceMeasurement { "tracktion_engine::DeviceManager", -1, false };
+    crill::seqlock_object<PerformanceMeasurement::Statistics> performanceStats;
+    std::atomic<bool> clearStatsFlag { false };
+
+    void applyNewMidiDeviceList();
+    void restartMidiCheckTimer();
+
+    void clearAllContextDevices();
+    void reloadAllContextDevices();
+
+    void loadSettings();
+
+    bool usesHardwareMidiDevices();
+    void timerCallback() override;
+
+    void deviceListChanged (bool);
+    void handleAsyncUpdate() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+
+    void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int totalNumInputChannels,
+                                           float* const* outputChannelData, int totalNumOutputChannels, int numSamples,
+                                           const juce::AudioIODeviceCallbackContext&) override;
+    void audioDeviceAboutToStart (juce::AudioIODevice*) override;
+    void audioDeviceStopped() override;
+    void prepareToStart();
+
+    void audioDeviceIOCallbackInternal (const float* const* inputChannelData, int numInputChannels,
+                                        float* const* outputChannelData, int totalNumOutputChannels,
+                                        int numSamples);
+
+    // Deprecated: these legacy methods have been removed as we move to a more flexible
+    // channel layout system. Use methods in the wave devices instead.
+    bool isDeviceOutChannelStereo (int) const;
+    bool isDeviceOutEnabled (int);
+    bool isDeviceInChannelStereo (int) const;
+    bool isDeviceInEnabled (int);
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DeviceManager)
+};
+
+} // namespace tracktion::inline engine

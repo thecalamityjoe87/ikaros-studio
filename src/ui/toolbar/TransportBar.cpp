@@ -1,0 +1,105 @@
+#include "ui/toolbar/TransportBar.h"
+#include "engine/AudioEngine.h"
+#include "ui/theme/Tokens.h"
+
+namespace ikaros
+{
+
+using namespace tokens;
+
+namespace
+{
+    constexpr int buttonSize = 42;
+    constexpr int playWidth = 54;
+    constexpr int gap = 6;
+    constexpr int padding = 5;
+}
+
+TransportBar::TransportBar (AudioEngine& e) : engine (e)
+{
+    for (auto* b : { &toStartButton, &recordButton, &loopButton, &metronomeButton })
+    {
+        b->setCornerRadius (size::radiusLarge);
+        addAndMakeVisible (b);
+    }
+
+    playButton.setColours (IconButton::accentColours());
+    playButton.setCornerRadius (size::radiusLarge);
+    playButton.setIconSize (20.0f);
+    addAndMakeVisible (playButton);
+
+    recordButton.setIconColour (colour::record);
+    recordButton.setIconSize (16.0f);
+    // TODO(milestone-2): audio + MIDI recording. Disabled until then.
+    recordButton.setEnabled (false);
+    recordButton.setTooltip ("Record (coming in a later version)");
+
+    // Toggle buttons: setClickingTogglesState flips the toggle on click, and
+    // the engine is updated from onClick. update() keeps them in sync if the
+    // state changes elsewhere (menu, keyboard shortcut, loading a session).
+    loopButton.setClickingTogglesState (true);
+    metronomeButton.setClickingTogglesState (true);
+
+    toStartButton.onClick   = [this] { engine.goToStart(); };
+    playButton.onClick      = [this] { engine.togglePlay(); };
+    loopButton.onClick      = [this] { engine.setLooping (loopButton.getToggleState()); };
+    metronomeButton.onClick = [this] { engine.setMetronomeEnabled (metronomeButton.getToggleState()); };
+
+    lcd.onBpmChanged = [this] (double bpm) { engine.setBpm (bpm); };
+    lcd.onTimeSignatureChanged = [this] (int num, int den) { engine.setTimeSignature (num, den); };
+    addAndMakeVisible (lcd);
+
+    update();
+}
+
+int TransportBar::getPreferredWidth() const
+{
+    return padding * 2 + buttonSize * 4 + playWidth + LcdDisplay::preferredWidth + gap * 5 + 4;
+}
+
+void TransportBar::update()
+{
+    auto state = engine.getTransportState();
+
+    if (state.playing != wasPlaying)
+    {
+        wasPlaying = state.playing;
+        playButton.setIcon (state.playing ? Icon::pause : Icon::play);
+        playButton.setTitle (state.playing ? "Pause" : "Play");
+        playButton.setTooltip (state.playing ? "Pause (Space)" : "Play (Space)");
+    }
+
+    loopButton.setToggleState (state.looping, juce::dontSendNotification);
+    metronomeButton.setToggleState (state.metronome, juce::dontSendNotification);
+    lcd.setState (state, engine.getKeyName());
+}
+
+void TransportBar::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (colour::wellBg);
+    g.fillRoundedRectangle (r, size::radiusPill);
+    g.setColour (colour::borderSoft);
+    g.drawRoundedRectangle (r, size::radiusPill, 1.0f);
+}
+
+void TransportBar::resized()
+{
+    auto r = getLocalBounds().reduced (padding);
+
+    auto place = [&] (juce::Component& c, int w)
+    {
+        c.setBounds (r.removeFromLeft (w).withSizeKeepingCentre (w, buttonSize));
+        r.removeFromLeft (gap);
+    };
+
+    place (toStartButton, buttonSize);
+    place (playButton, playWidth);
+    place (recordButton, buttonSize);
+    place (loopButton, buttonSize);
+    r.removeFromLeft (4);
+    place (lcd, juce::jmax (120, r.getWidth() - buttonSize - gap));
+    place (metronomeButton, buttonSize);
+}
+
+} // namespace ikaros

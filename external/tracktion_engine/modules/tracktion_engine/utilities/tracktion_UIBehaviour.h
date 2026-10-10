@@ -1,0 +1,197 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+/**
+    Create a subclass of UIBehaviour to custom UI elements created by the engine
+*/
+class UIBehaviour
+{
+public:
+    UIBehaviour() = default;
+    virtual ~UIBehaviour() = default;
+
+    //==============================================================================
+    virtual Edit* getCurrentlyFocusedEdit()                                         { return {}; }
+    virtual Edit* getLastFocusedEdit()                                              { return {}; }
+    virtual juce::Array<Edit*> getAllOpenEdits()                                    { return {}; }
+    virtual bool isEditVisibleOnScreen (const Edit&)                                { return true; }
+    virtual bool closeAllEditsBelongingToProject (Project&)                         { return false; }
+    virtual void editNamesMayHaveChanged()                                          {}
+
+    virtual SelectionManager* getCurrentlyFocusedSelectionManager()                 { return {}; }
+    virtual SelectionManager* getSelectionManagerForRack (const RackType&)          { return {}; }
+    virtual bool paste (const Clipboard&);
+
+    virtual Project::Ptr getCurrentlyFocusedProject()                               { return {}; }
+    virtual void selectProjectInFocusedWindow (Project::Ptr)                        {}
+    virtual void updateAllProjectItemLists()                                        {}
+
+    virtual juce::ApplicationCommandManager* getApplicationCommandManager()         { return {}; }
+    virtual void getAllCommands (juce::Array<juce::CommandID>&)                     {}
+    virtual void getCommandInfo (juce::CommandID, juce::ApplicationCommandInfo&)    {}
+    virtual bool perform (const juce::ApplicationCommandTarget::InvocationInfo&)    { return false; }
+
+    //==============================================================================
+    /** Should show the new plugin window and creates the Plugin the user selects.
+        @deprecated Use the async callback version instead.
+    */
+    virtual Plugin::Ptr showMenuAndCreatePlugin (Plugin::Type, Edit&)               { return {}; }
+
+    /** Async version — shows the plugin menu and calls back with the created plugin (or nullptr). */
+    virtual void showMenuAndCreatePluginAsync (Plugin::Type types, Edit& edit, std::function<void (Plugin::Ptr)> callback)
+    {
+        if (callback)
+            callback (showMenuAndCreatePlugin (types, edit));
+    }
+
+    /** Must create a suitable Component plugin window for the given PluginWindowState.
+        The type of state should be checked and used accordingly e.g. Plugin::WindowState
+        or RackType::WindowsState
+    */
+    virtual std::unique_ptr<juce::Component> createPluginWindow (PluginWindowState&){ return {}; }
+
+    /** Should trigger an asynchronous refresh of any editor components showing for this plugin.
+        The default implementation just causes a new instance of the whole window to be created.
+    */
+    virtual void recreatePluginWindowContentAsync (Plugin&);
+
+    /** Called when a new track is created from some kind of user action i.e. not from an Edit load. */
+    virtual void newTrackCreated (Track&) {}
+
+    /** Must create an AudioThumnail for displaying, usually in a SmartThumbnail. */
+    virtual std::unique_ptr<juce::AudioThumbnailBase> createAudioThumbnail (int sourceSamplesPerThumbnailSample,
+                                                                            juce::AudioFormatManager& formatManagerToUse,
+                                                                            juce::AudioThumbnailCache& cacheToUse)
+    {
+        return std::make_unique<juce::AudioThumbnail> (sourceSamplesPerThumbnailSample,
+                                                       formatManagerToUse, cacheToUse);
+    }
+
+    //==============================================================================
+    /** Should display a dismissable alert window. N.B. this should be non-blocking. */
+    virtual void showWarningAlert (const juce::String& title, const juce::String& message);
+
+    /** Async ok/cancel alert. Calls the callback with true for OK, false for cancel. */
+    virtual void showOkCancelAlertBoxAsync (const juce::String& title, const juce::String& message,
+                                             const juce::String& ok, const juce::String& cancel,
+                                             std::function<void (bool)> callback);
+
+    /** Async yes/no/cancel alert. Calls the callback with 1=yes, 2=no, 0=cancel. */
+    virtual void showYesNoCancelAlertBoxAsync (const juce::String& title, const juce::String& message,
+                                                const juce::String& yes, const juce::String& no,
+                                                const juce::String& cancel,
+                                                std::function<void (int)> callback);
+
+    /** Should display a temporary information message, usually in the same place. */
+    virtual void showInfoMessage (const juce::String& message);
+
+    /** Should display a temporary warning message. */
+    virtual void showWarningMessage (const juce::String& message);
+
+    /** Should show the current quantisation level for a short period of time. */
+    virtual void showQuantisationLevel() {}
+
+    /** Should run this task in the current window, with a progress bar, blocking
+        until the task is done.
+    */
+    virtual void runTaskWithProgressBar (ThreadPoolJobWithProgress&)                { jassertfalse; }
+
+    virtual bool getBigInputMetersMode()                                            { return false; }
+    virtual void setBigInputMetersMode (bool) {}
+
+    virtual bool shouldGenerateLiveWaveformsWhenRecording()                         { return true;  }
+
+    virtual void showSafeRecordDialog (TransportControl&)                           {}
+    virtual void hideSafeRecordDialog (TransportControl&)                           {}
+
+    virtual void showProjectScreen()                                                {}
+    virtual void showSettingsScreen()                                               {}
+    virtual void showEditScreen()                                                   {}
+
+    virtual void showHideVideo()                                                    {}
+    virtual void showHideInputs()                                                   {}
+    virtual void showHideOutputs()                                                  {}
+    virtual void showHideMixer ([[maybe_unused]] bool fullscreen)                   {}
+    virtual void showHideMidiEditor ([[maybe_unused]] bool fullscreen)              {}
+    virtual void showHideTrackEditor ([[maybe_unused]] bool zoom)                   {}
+    virtual void showHideBrowser()                                                  {}
+    virtual void showHideActions()                                                  {}
+    virtual void showHideAllPanes()                                                 {}
+    virtual void toggleScroll()                                                     {}
+    virtual bool isScrolling()                                                      { return false; }
+
+    virtual void performUserAction (int)                                            {}
+
+    virtual void scrollTracksUp()                                                   {}
+    virtual void scrollTracksDown()                                                 {}
+    virtual void scrollTracksLeft()                                                 {}
+    virtual void scrollTracksRight()                                                {}
+
+    virtual void nudgeSelectedClips (TimecodeSnapType, const juce::String& commandDesc,
+                                     SelectionManager&, const juce::Array<Clip*>&, bool automationLocked);
+    virtual void nudgeSelected (TimecodeSnapType, const juce::String& commandDesc, bool automationLocked);
+    virtual void nudgeSelected (const juce::String& commandDesc);
+
+    virtual void stopPreviewPlayback()                                              {}
+    virtual void resetOverloads()                                                   {}
+    virtual void resetPeaks()                                                       {}
+
+    virtual void zoomHorizontal (float /*increment*/)                               {}
+    virtual void zoomVertical (float /*amount*/)                                    {}
+    virtual void zoomToSelection()                                                  {}
+    virtual void zoomToFitHorizontally()                                            {}
+    virtual void zoomToFitVertically()                                              {}
+
+    //==============================================================================
+    /** Should return the position which used be used for edit operations such as splitting.
+        By default this returns the transport position.
+    */
+    virtual TimePosition getEditingPosition (Edit&);
+
+    /** Should return the range which used be used for edit operations such as coping or deleting.
+        By default this returns the loop range.
+    */
+    virtual TimeRange getEditingRange (Edit&);
+
+    /** Can return a range of tracks which used be used for edit operations such as coping or deleting.
+    */
+    virtual juce::Array<Track*> getEditingTracks (Edit&)                            { return {}; }
+
+    //==============================================================================
+    /** If your UI has the concept of edit groups, you should return an expanded list of
+        selected items that includes all clips that should be edited with the selected
+        clip */
+    virtual SelectableList getAssociatedClipsToEdit (const SelectableList& items)   { return items; }
+
+    //==============================================================================
+    /** Should return the number of clip colours in your UI's palette. Control surfaces
+        are sent clip colours as an index in the range 1 to this number.
+        By default this returns 18.
+    */
+    virtual int getNumClipColourIndexes()                                           { return 18; }
+
+    /** Should return the palette index a control surface should use to show a clip,
+        e.g. on clip launcher pads. This should be 0 if the clip has no colour, otherwise
+        1 to getNumClipColourIndexes().
+        By default this quantises the hue of getClipColourForControlSurface().
+    */
+    virtual int getClipColourIndexForControlSurface (const Clip&);
+
+    /** Should return the colour a control surface should use to show a clip, e.g. on
+        clip launcher pads. Override this if your UI draws clips using a different colour
+        to Clip::getColour(), such as a user palette or the colour of the track they're on.
+        By default this returns Clip::getColour().
+    */
+    virtual juce::Colour getClipColourForControlSurface (const Clip&);
+};
+
+} // namespace tracktion::inline engine

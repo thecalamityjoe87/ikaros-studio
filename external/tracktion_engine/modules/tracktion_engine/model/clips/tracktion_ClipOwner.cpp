@@ -1,0 +1,970 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+struct ClipOwner::ClipList : public ValueTreeObjectList<Clip>,
+                             private juce::AsyncUpdater
+{
+    ClipList (ClipOwner& co, Edit& e, const juce::ValueTree& parentTree)
+        : ValueTreeObjectList<Clip> (parentTree),
+          edit (e),
+          clipOwner (co)
+    {
+        rebuildObjects();
+
+        editLoadedCallback = std::make_unique<Edit::LoadFinishedCallback<ClipList>> (*this, edit);
+    }
+
+    ~ClipList() override
+    {
+        for (auto c : objects)
+        {
+            c->flushStateToValueTree();
+            c->setParent (nullptr);
+        }
+
+        freeObjects();
+    }
+
+    bool isSuitableType (const juce::ValueTree& v) const override
+    {
+        return Clip::isClipState (v);
+    }
+
+    Clip* createNewObject (const juce::ValueTree& v) override
+    {
+        if (auto newClip = Clip::createClipForState (v, clipOwner))
+        {
+            clipOwner.clipCreated (*newClip);
+            newClip->incReferenceCount();
+
+            return newClip.get();
+        }
+
+        jassertfalse;
+        return {};
+    }
+
+    void deleteObject (Clip* c) override
+    {
+        jassert (c != nullptr);
+        if (c == nullptr)
+            return;
+
+        c->decReferenceCount();
+    }
+
+    void newObjectAdded (Clip* c) override
+    {
+        assert (c);
+
+        // If a new clip has been added, it's parent will already have been set so we
+        // won't get a later call to setParent so update the mod list here
+        if (c->getParent())
+            c->updateAutomationCurveListDestinations();
+
+        objectAddedOrRemoved (c);
+
+        // NB: EngineBehaviour::newClipCreated is called from insertClipWithState,
+        // i.e. only when a clip is created. This is also called for moves, paste
+        // and split, where the clip already exists.
+    }
+
+    void objectRemoved (Clip* c) override
+    {
+        // Preserve any ARA plugin edits in the clip's state tree before the clip
+        // object goes away, so undoing the removal can restore them
+        if (auto acb = dynamic_cast<AudioClipBase*> (c))
+            acb->captureARAStateToValueTree();
+
+        objectAddedOrRemoved (c);
+    }
+    void objectOrderChanged() override          { objectAddedOrRemoved (nullptr); }
+
+    void objectAddedOrRemoved (Clip* c)
+    {
+        if (c == nullptr || c->type != TrackItem::Type::unknown)
+        {
+            if (c == nullptr)
+                clipOwner.clipOrderChanged();
+            else
+                clipOwner.clipAddedOrRemoved();
+
+            if (! edit.isLoading() && ! edit.getUndoManager().isPerformingUndoRedo())
+                triggerAsyncUpdate();
+        }
+    }
+
+    Edit& edit;
+    ClipOwner& clipOwner;
+    std::unique_ptr<Edit::LoadFinishedCallback<ClipList>> editLoadedCallback;
+
+    void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
+    {
+        if (Clip::isClipState (v))
+        {
+            if (id == IDs::start || id == IDs::length)
+            {
+                if (! edit.getUndoManager().isPerformingUndoRedo())
+                    triggerAsyncUpdate();
+
+                clipOwner.clipPositionChanged();
+            }
+        }
+    }
+
+    void handleAsyncUpdate() override
+    {
+        sortClips (parent, &edit.getUndoManager());
+    }
+
+    static void sortClips (juce::ValueTree& state, juce::UndoManager* um)
+    {
+        struct Sorter
+        {
+            static int getPriority (const juce::Identifier& i)
+            {
+                if (i == IDs::AUTOMATIONTRACK)  return 0;
+                if (Clip::isClipState (i))      return 1;
+                if (i == IDs::PLUGIN)           return 2;
+                if (i == IDs::OUTPUTDEVICES)    return 3;
+                if (i == IDs::LFOS)             return 4;
+
+                return -1;
+            }
+
+            int compareElements (const juce::ValueTree& first, const juce::ValueTree& second) const noexcept
+            {
+                auto priority = getPriority (first.getType()) - getPriority (second.getType());
+
+                if (priority != 0)
+                    return priority;
+
+                if (Clip::isClipState (first) && Clip::isClipState (second))
+                {
+                    double t1 = first[IDs::start];
+                    double t2 = second[IDs::start];
+                    return t1 < t2 ? -1 : (t2 < t1 ? 1 : 0);
+                }
+
+                return 0;
+            }
+        };
+
+        Sorter clipSorter;
+        state.sort (clipSorter, um, true);
+    }
+
+    void editFinishedLoading()
+    {
+        editLoadedCallback = nullptr;
+
+        for (auto c : objects)
+            if (auto acb = dynamic_cast<AudioClipBase*> (c))
+                acb->updateAutoCrossfadesAsync (false);
+
+        clipOwner.clipPositionChanged();
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipList)
+};
+
+
+//==============================================================================
+//==============================================================================
+ClipOwner::ClipOwner() {}
+ClipOwner::~ClipOwner() {}
+
+void ClipOwner::initialiseClipOwner (Edit& edit, juce::ValueTree clipParentState)
+{
+    if (clipList)
+        return;
+
+    if (! edit.getUndoManager().isPerformingUndoRedo())
+        ClipList::sortClips (clipParentState, &edit.getUndoManager());
+
+    clipList = std::make_unique<ClipList> (*this, edit, clipParentState);
+}
+
+const juce::Array<Clip*>& ClipOwner::getClips() const
+{
+    assert (clipList && "You must call initialiseClipOwner before any other methods");
+    return clipList->objects;
+}
+
+//==============================================================================
+//==============================================================================
+Clip* findClipForState (ClipOwner& co, const juce::ValueTree& v)
+{
+    for (auto c : co.getClips())
+        if (c->state == v)
+            return c;
+
+    return {};
+}
+
+Clip* findClipForID (ClipOwner& co, EditItemID id)
+{
+    for (auto c : co.getClips())
+        if (c->itemID == id)
+            return c;
+
+    return {};
+}
+
+//==============================================================================
+namespace clip_owner
+{
+    inline void updateClipState (juce::ValueTree& state, const juce::String& name,
+                                 EditItemID itemID, ClipPosition position)
+    {
+        addValueTreeProperties (state,
+                                IDs::name, name,
+                                IDs::start, position.getStart().inSeconds(),
+                                IDs::length, position.getLength().inSeconds(),
+                                IDs::offset, position.getOffset().inSeconds());
+
+        itemID.writeID (state, nullptr);
+    }
+
+    inline juce::ValueTree createNewClipState (const juce::String& name, TrackItem::Type type,
+                                               EditItemID itemID, ClipPosition position)
+    {
+        juce::ValueTree state (TrackItem::clipTypeToXMLType (type));
+        updateClipState (state, name, itemID, position);
+        return state;
+    }
+
+    inline juce::String incrementLastDigit (const juce::String& in)
+    {
+        int digitCount = 0;
+
+        for (int i = in.length(); --i >= 0;)
+        {
+            if (juce::CharacterFunctions::isDigit (in[i]))
+                digitCount++;
+            else
+                break;
+        }
+
+        if (digitCount == 0)
+            return in + " 2";
+
+        return in.dropLastCharacters (digitCount)
+                + juce::String (in.getTrailingIntValue() + 1);
+    }
+}
+
+namespace clip_owner
+{
+    /** Fills in the defaults that have to be on the state before the Clip is
+        created, either because the Clip's constructor would overwrite them or
+        because other values are derived from them.
+    */
+    static void applyCreationStateDefaults (Edit& edit, juce::ValueTree& clipState)
+    {
+        auto& engineBehaviour = edit.engine.getEngineBehaviour();
+
+        if (clipState.hasType (IDs::MIDICLIP))
+        {
+            setPropertyIfMissing (clipState, IDs::sync, engineBehaviour.areMidiClipsRemappedWhenTempoChanges()
+                                                           ? Clip::syncBarsBeats : Clip::syncAbsolute, nullptr);
+        }
+        else if (clipState.hasType (IDs::AUDIOCLIP) || clipState.hasType (IDs::EDITCLIP))
+        {
+            if (! clipState.getChildWithName (IDs::LOOPINFO).isValid())
+            {
+                auto sourceFile = SourceFileReference::findFileFromString (edit, clipState[IDs::source]);
+
+                if (sourceFile.exists())
+                {
+                    auto loopInfo = AudioFile (edit.engine, sourceFile).getInfo().loopInfo;
+
+                    if (loopInfo.getRootNote() != -1)
+                        clipState.setProperty (IDs::autoPitch, true, nullptr);
+
+                    if (loopInfo.isLoopable())
+                    {
+                        clipState.setProperty (IDs::autoTempo, true, nullptr);
+                        clipState.setProperty (IDs::elastiqueMode, (int) TimeStretcher::elastiquePro, nullptr);
+
+                        auto& ts = edit.tempoSequence;
+
+                        auto startBeat = ts.toBeats (TimePosition::fromSeconds (static_cast<double> (clipState[IDs::start])));
+                        auto endBeat   = startBeat + BeatDuration::fromBeats (loopInfo.getNumBeats());
+                        auto newLength = ts.toTime (endBeat) - ts.toTime (startBeat);
+
+                        clipState.setProperty (IDs::length, newLength.inSeconds(), nullptr);
+                    }
+                    else if (clipState.hasType (IDs::EDITCLIP))
+                    {
+                        clipState.setProperty (IDs::autoTempo, true, nullptr);
+                    }
+
+                    auto loopSate = loopInfo.state;
+
+                    if (loopSate.getNumProperties() > 0 || loopSate.getNumChildren() > 0)
+                        clipState.addChild (loopSate.createCopy(), -1, nullptr);
+                }
+            }
+
+            if (! clipState.hasProperty (IDs::sync))
+            {
+                if (clipState.getProperty (IDs::autoTempo))
+                    clipState.setProperty (IDs::sync, (int) engineBehaviour.areAutoTempoClipsRemappedWhenTempoChanges()
+                                                               ? Clip::syncBarsBeats : Clip::syncAbsolute, nullptr);
+                else
+                    clipState.setProperty (IDs::sync, (int) engineBehaviour.areAudioClipsRemappedWhenTempoChanges()
+                                                               ? Clip::syncBarsBeats : Clip::syncAbsolute, nullptr);
+            }
+
+            if (! clipState.hasProperty (IDs::autoCrossfade))
+                if (edit.engine.getPropertyStorage().getProperty (SettingID::xFade, 0))
+                    clipState.setProperty (IDs::autoCrossfade, true, nullptr);
+        }
+    }
+
+    /** Adds a clip state to an owner and returns the Clip that was created for it.
+        This is the plain insert: no defaults of any kind are applied.
+    */
+    static Clip* addClipState (ClipOwner& clipOwner, juce::ValueTree& clipState)
+    {
+        CRASH_TRACER
+        jassert (clipState.isValid());
+        jassert (! clipState.getParent().isValid());
+
+        auto& edit = clipOwner.getClipOwnerEdit();
+
+        if (clipOwner.getClips().size() >= edit.engine.getEngineBehaviour().getEditLimits().maxClipsInTrack)
+        {
+            edit.engine.getUIBehaviour().showWarningMessage (TRANS("Can't add any more clips to this track!"));
+            return {};
+        }
+
+        if (auto clipSlot = dynamic_cast<ClipSlot*> (clipOwner.getClipOwnerSelectable()))
+            if (auto existingClip = clipSlot->getClip())
+                existingClip->removeFromParent();
+
+        clipOwner.getClipOwnerState().addChild (clipState, -1, &edit.getUndoManager());
+
+        return findClipForState (clipOwner, clipState);
+    }
+
+    /** Gives a clip that still has the default colour the hue of the track it's
+        gone in to. Copies get this too, so a clip from an older Edit with no
+        colour property doesn't stay the default colour.
+    */
+    static void applyTrackColourIfDefault (ClipOwner& clipOwner, Clip& newClip)
+    {
+        auto applyTrackColour = [&newClip] (Track& t)
+        {
+            if (newClip.getColour() == newClip.getDefaultColour())
+            {
+                auto col = t.getColour();
+                float hue = col.isTransparent() ? ((t.getIndexInEditTrackList() % 18) * 1.0f / 18.0f) : col.getHue();
+                newClip.setColour (newClip.getDefaultColour().withHue (hue));
+            }
+        };
+
+        if (auto at = dynamic_cast<AudioTrack*> (clipOwner.getClipOwnerSelectable()))
+            applyTrackColour (*at);
+        else if (auto cs = dynamic_cast<ClipSlot*> (clipOwner.getClipOwnerSelectable()))
+            applyTrackColour (cs->track);
+    }
+
+    /** Applies the defaults that need a constructed Clip, i.e. the ones that come
+        from the owner or go through the Clip's own setters.
+    */
+    static void applyCreationClipDefaults (ClipOwner& clipOwner, Clip& newClip, const juce::ValueTree& clipState)
+    {
+        auto& edit = clipOwner.getClipOwnerEdit();
+        auto& engineBehaviour = edit.engine.getEngineBehaviour();
+
+        if (dynamic_cast<AudioTrack*> (clipOwner.getClipOwnerSelectable()) != nullptr)
+        {
+            if (auto acb = dynamic_cast<AudioClipBase*> (&newClip))
+            {
+                if (engineBehaviour.autoAddClipEdgeFades())
+                    if (! (clipState.hasProperty (IDs::fadeIn) && clipState.hasProperty (IDs::fadeOut)))
+                        acb->applyEdgeFades();
+
+                const auto defaults = engineBehaviour.getClipDefaults();
+
+                if (! clipState.hasProperty (IDs::proxyAllowed))
+                    acb->setUsesProxy (defaults.useProxyFile);
+
+                if (! clipState.hasProperty (IDs::resamplingQuality))
+                    acb->setResamplingQuality (defaults.resamplingQuality);
+            }
+        }
+
+        // Auto-detect ARA plugin from iXML chunks for newly added audio clips
+        if (auto acb = dynamic_cast<AudioClipBase*> (&newClip))
+        {
+            if (acb->araPluginDescription.get().name.isEmpty())
+            {
+                auto araResult = detectARAFromIXMLChunks (edit.engine, acb->getAudioFile().getFile());
+
+                if (araResult.isValid())
+                {
+                    acb->setTimeStretchMode (TimeStretcher::ara);
+                    acb->araPluginDescription.setValue (araResult.pluginDescription, nullptr);
+
+                    if (araResult.archiveData.getSize() > 0)
+                    {
+                        acb->setupARA (true);
+
+                        if (auto proxy = acb->getARAProxy(); proxy != nullptr && proxy->isValid())
+                            proxy->restoreARAArchiveForPaste (araResult.archiveData,
+                                                              araResult.persistentID,
+                                                              {}, // archivedModID
+                                                              araResult.documentArchiveID);
+                    }
+                }
+            }
+        }
+    }
+
+    static bool isClipSlot (ClipOwner& clipOwner)
+    {
+        return dynamic_cast<ClipSlot*> (clipOwner.getClipOwnerSelectable()) != nullptr;
+    }
+}
+
+//==============================================================================
+void prepareClipForLauncher (Clip& clip)
+{
+    if (auto acb = dynamic_cast<AudioClipBase*> (&clip))
+    {
+        if (acb->effectsEnabled())
+            acb->enableEffects (false, false);
+
+        acb->setUsesProxy (false);
+        acb->setAutoTempo (true);
+        acb->setStart (0_tp, false, true);
+
+        // A one-shot isn't meant to loop, e.g. a single drum hit, so it's left
+        // to play once when it's launched
+        if (! acb->isLooping() && ! acb->getLoopInfo().isOneShot())
+            acb->setLoopRangeBeats ({ 0_bp, acb->getLengthInBeats() });
+    }
+    else if (auto mc = dynamic_cast<MidiClip*> (&clip))
+    {
+        mc->setUsesProxy (false);
+        mc->setStart (0_tp, false, true);
+
+        if (! mc->isLooping())
+            mc->setLoopRangeBeats (mc->getEditBeatRange());
+    }
+    else if (auto sc = dynamic_cast<StepClip*> (&clip))
+    {
+        sc->setStart (0_tp, false, true);
+
+        if (! sc->isLooping())
+            sc->setLoopRangeBeats ({ 0_bp, sc->getLengthInBeats() });
+    }
+}
+
+//==============================================================================
+ClipCopy::ClipCopy (juce::ValueTree stateToUse, bool wasInLauncher)
+    : state (std::move (stateToUse)), sourceWasInLauncher (wasInLauncher)
+{
+}
+
+ClipCopy ClipCopy::fromClip (const Clip& clip)
+{
+    return { clip.state.createCopy(), clip.getClipSlot() != nullptr };
+}
+
+ClipCopy ClipCopy::fromClipboardState (juce::ValueTree stateToUse, bool sourceWasInLauncher)
+{
+    return { std::move (stateToUse), sourceWasInLauncher };
+}
+
+ClipCopy ClipCopy::withNewItemID (Edit& edit) const
+{
+    auto newState = state.createCopy();
+    EditItemID::remapIDs (newState, nullptr, edit);
+    assignNewIDsToAutomationCurveModifiers (edit, newState);
+
+    return { std::move (newState), sourceWasInLauncher };
+}
+
+Clip* insertClipCopy (ClipOwner& clipOwner, const ClipCopy& clipCopy)
+{
+    CRASH_TRACER
+    auto& edit = clipOwner.getClipOwnerEdit();
+    auto clipState = clipCopy.getState();
+
+    // The fill-ins only apply to properties the state doesn't have, so a copy
+    // keeps everything the user set on the original
+    clip_owner::applyCreationStateDefaults (edit, clipState);
+
+    if (auto newClip = clip_owner::addClipState (clipOwner, clipState))
+    {
+        clip_owner::applyTrackColourIfDefault (clipOwner, *newClip);
+
+        // A clip that's already a launcher clip keeps the settings it has; one
+        // coming from the arrangement needs converting.
+        if (clip_owner::isClipSlot (clipOwner) && ! clipCopy.wasInLauncher())
+            prepareClipForLauncher (*newClip);
+
+        return newClip;
+    }
+
+    return {};
+}
+
+//==============================================================================
+Clip* insertClipWithState (ClipOwner& clipOwner, juce::ValueTree clipState)
+{
+    CRASH_TRACER
+    auto& edit = clipOwner.getClipOwnerEdit();
+
+    clip_owner::applyCreationStateDefaults (edit, clipState);
+
+    if (auto newClip = clip_owner::addClipState (clipOwner, clipState))
+    {
+        clip_owner::applyTrackColourIfDefault (clipOwner, *newClip);
+        clip_owner::applyCreationClipDefaults (clipOwner, *newClip, clipState);
+
+        if (! edit.getUndoManager().isPerformingUndoRedo())
+        {
+            auto& engineBehaviour = edit.engine.getEngineBehaviour();
+            const auto fromRecording = edit.getTransport().isRecordingStopping();
+
+            engineBehaviour.newClipCreated (*newClip, fromRecording);
+
+            JUCE_BEGIN_IGNORE_DEPRECATION_WARNINGS
+            engineBehaviour.newClipAdded (*newClip, fromRecording);
+            JUCE_END_IGNORE_DEPRECATION_WARNINGS
+        }
+
+        if (clip_owner::isClipSlot (clipOwner))
+            prepareClipForLauncher (*newClip);
+
+        return newClip;
+    }
+
+    jassertfalse;
+    return {};
+}
+
+Clip* insertClipWithState (ClipOwner& parent,
+                           const juce::ValueTree& stateToUse, const juce::String& name, TrackItem::Type type,
+                           ClipPosition position, DeleteExistingClips deleteExistingClips, bool allowSpottingAdjustment)
+{
+    CRASH_TRACER
+    auto& edit = parent.getClipOwnerEdit();
+
+    if (position.getStart() >= Edit::getMaximumEditEnd())
+        return {};
+
+    if (position.time.getEnd() > Edit::getMaximumEditEnd())
+        position.time.getEnd() = Edit::getMaximumEditEnd();
+
+    if (auto track = dynamic_cast<Track*> (&parent))
+        track->unfreeze (Track::groupFreeze);
+
+    if (deleteExistingClips == DeleteExistingClips::yes)
+        deleteRegion (parent, position.time);
+
+    auto newClipID = edit.createNewItemID();
+
+    juce::ValueTree newState;
+
+    if (stateToUse.isValid())
+    {
+        jassert (stateToUse.hasType (TrackItem::clipTypeToXMLType (type)));
+        newState = stateToUse;
+        clip_owner::updateClipState (newState, name, newClipID, position);
+    }
+    else
+    {
+        newState = clip_owner::createNewClipState (name, type, newClipID, position);
+    }
+
+    if (auto newClip = insertClipWithState (parent, newState))
+    {
+        if (allowSpottingAdjustment)
+            newClip->setStart (std::max (0_tp, newClip->getPosition().getStart() - toDuration (newClip->getSpottingPoint())), false, false);
+
+        return newClip;
+    }
+
+    return {};
+}
+
+Clip* insertNewClip (ClipOwner& parent, TrackItem::Type type, const juce::String& name, EditTimeRange pos)
+{
+    return insertNewClip (parent, type, name, { toTime (pos, parent.getClipOwnerEdit().tempoSequence), 0_td });
+}
+
+Clip* insertNewClip (ClipOwner& parent, TrackItem::Type type, EditTimeRange pos)
+{
+    return insertNewClip (parent, type, TrackItem::getSuggestedNameForNewItem (type), pos);
+}
+
+Clip* insertNewClip (ClipOwner& parent, TrackItem::Type type, const juce::String& name, ClipPosition position)
+{
+    CRASH_TRACER
+
+    if (auto newClip = insertClipWithState (parent, {}, name, type, position, DeleteExistingClips::no, false))
+        return newClip;
+
+    return {};
+}
+
+juce::ReferenceCountedObjectPtr<WaveAudioClip> insertWaveClip (ClipOwner& parent, const juce::String& name, const juce::File& sourceFile,
+                                                               ClipPosition position, DeleteExistingClips deleteExistingClips)
+{
+    auto& edit = parent.getClipOwnerEdit();
+
+    if (auto proj = getProjectForEdit (edit))
+    {
+        auto source = proj->createNewItem (sourceFile, ProjectItem::waveItemType(),
+                                           name, {}, ProjectItem::Category::imported, true);
+
+        if (source != nullptr && source->getProjectItemRef().isProjectItemID())
+            return insertWaveClip (parent, name, source->getProjectItemRef(), position, deleteExistingClips);
+
+        // Folder-based project: store a file path (relative to project folder or absolute)
+        if (source != nullptr)
+        {
+            auto newState = clip_owner::createNewClipState (name, TrackItem::Type::wave, edit.createNewItemID(), position);
+            newState.setProperty (IDs::source, SourceFileReference::findPathFromFile (edit, sourceFile, true), nullptr);
+
+            if (auto c = insertClipWithState (parent, newState, name, TrackItem::Type::wave, position, deleteExistingClips, false))
+                if (auto wc = dynamic_cast<WaveAudioClip*> (c))
+                    return *wc;
+        }
+
+        jassertfalse;
+        return {};
+    }
+
+    // Insert with the appropriate source reference
+    {
+        auto newState = clip_owner::createNewClipState (name, TrackItem::Type::wave, edit.createNewItemID(), position);
+
+        {
+            SourceFileReference sfr (edit, newState, IDs::source);
+            sfr.setToFile (sourceFile, SourceFileReference::PathStyle::chooseBest, true);
+        }
+
+        if (auto c = insertClipWithState (parent, newState, name, TrackItem::Type::wave, position, deleteExistingClips, false))
+        {
+            if (auto wc = dynamic_cast<WaveAudioClip*> (c))
+                return *wc;
+
+            jassertfalse;
+        }
+    }
+
+    jassertfalse;
+    return {};
+}
+
+WaveAudioClip::Ptr insertWaveClip (ClipOwner& parent, const juce::String& name, ProjectItemRef sourceID,
+                                   ClipPosition position, DeleteExistingClips deleteExistingClips)
+{
+    CRASH_TRACER
+    auto& edit = parent.getClipOwnerEdit();
+
+    auto newState = clip_owner::createNewClipState (name, TrackItem::Type::wave, edit.createNewItemID(), position);
+
+    // Set the source reference — uses a file path for folder-based projects,
+    // or keeps the project item ID for file-based projects
+    {
+        auto file = SourceFileReference::findFileFromString (edit, sourceID.toString());
+
+        if (file.existsAsFile())
+        {
+            SourceFileReference sfr (edit, newState, IDs::source);
+            sfr.setToFile (file, SourceFileReference::PathStyle::chooseBest, true);
+        }
+        else
+        {
+            newState.setProperty (IDs::source, sourceID.toString(), nullptr);
+        }
+    }
+
+    if (auto c = insertClipWithState (parent, newState, name, TrackItem::Type::wave, position, deleteExistingClips, false))
+    {
+        if (auto wc = dynamic_cast<WaveAudioClip*> (c))
+            return *wc;
+
+        jassertfalse;
+    }
+
+    return {};
+}
+
+MidiClip::Ptr insertMIDIClip (ClipOwner& parent, const juce::String& name, TimeRange position)
+{
+    if (auto t = dynamic_cast<AudioTrack*> (&parent))
+        if (! t->containsAnyMIDIClips())
+            t->setVerticalScaleToDefault();
+
+    if (auto c = insertNewClip (parent, TrackItem::Type::midi, name, position))
+    {
+        if (auto mc = dynamic_cast<MidiClip*> (c))
+            return *mc;
+
+        jassertfalse;
+    }
+
+    return {};
+}
+
+MidiClip::Ptr insertMIDIClip (ClipOwner& parent, TimeRange position)
+{
+    return insertMIDIClip (parent, TrackItem::getSuggestedNameForNewItem (TrackItem::Type::midi), position);
+}
+
+EditClip::Ptr insertEditClip (ClipOwner& parent, TimeRange position, ProjectItemRef sourceRef)
+{
+    CRASH_TRACER
+
+    auto name = TrackItem::getSuggestedNameForNewItem (TrackItem::Type::edit);
+    auto newState = clip_owner::createNewClipState (name, TrackItem::Type::edit, parent.getClipOwnerEdit().createNewItemID(), { position, TimeDuration() });
+    newState.setProperty (IDs::source, sourceRef.toString(), nullptr);
+
+    if (auto c = insertClipWithState (parent, newState, name, TrackItem::Type::edit, { position, 0_td }, DeleteExistingClips::no, false))
+    {
+        if (auto ec = dynamic_cast<EditClip*> (c))
+            return *ec;
+
+        jassertfalse;
+    }
+
+    return {};
+}
+
+//==============================================================================
+juce::Array<Clip*> deleteRegion (ClipOwner& parent, TimeRange range)
+{
+    juce::Array<Clip*> newClips;
+
+    CRASH_TRACER
+    if (auto track = dynamic_cast<Track*> (&parent))
+    {
+        track->unfreeze (Track::anyFreeze);
+    }
+
+    // make a copied list first, as they'll get moved out-of-order..
+    Clip::Array clipsToDo;
+
+    for (auto c : parent.getClips())
+        if (c->getPosition().time.overlaps (range))
+            clipsToDo.add (c);
+
+    for (int i = clipsToDo.size(); --i >= 0;)
+        newClips.addArray (deleteRegion (*clipsToDo.getUnchecked (i), range));
+
+    return newClips;
+}
+
+juce::Array<Clip*> deleteRegion (Clip& c, TimeRange range)
+{
+    juce::Array<Clip*> newClips;
+
+    CRASH_TRACER
+    if (auto track = dynamic_cast<Track*> (c.getParent()))
+    {
+        track->unfreeze (Track::anyFreeze);
+    }
+
+    auto pos = c.getPosition();
+
+    if (range.contains (pos.time))
+    {
+        c.removeFromParent();
+    }
+    else if (pos.getStart() < range.getStart() && pos.getEnd() > range.getEnd())
+    {
+        if (auto newClip = split (c, range.getStart()))
+        {
+            newClip->setStart (range.getEnd(), true, false);
+            c.setEnd (range.getStart(), true);
+            c.deselect();
+
+            newClips.add (newClip);
+        }
+    }
+    else
+    {
+        c.trimAwayOverlap (range);
+    }
+
+    return newClips;
+}
+
+juce::Array<Clip*> split (ClipOwner& parent, TimePosition time)
+{
+    CRASH_TRACER
+    juce::Array<Clip*> newClips;
+
+    // Make a copied list first, as they'll get moved out-of-order..
+    Clip::Array clipsToDo;
+
+    for (auto c : parent.getClips())
+        if (c->getPosition().time.contains (time))
+            clipsToDo.add (c);
+
+    for (auto c : clipsToDo)
+        newClips.add (split (*c, time));
+
+    return newClips;
+}
+
+Clip* split (Clip& clip, const TimePosition time)
+{
+    CRASH_TRACER
+    auto parent = clip.getParent();
+
+    if (parent == nullptr)
+        return {};
+
+    // A slot holds one clip, so inserting the second half would evict the first
+    if (clip.getClipSlot() != nullptr)
+        return {};
+
+    auto& edit = clip.edit;
+
+    if (auto track = dynamic_cast<Track*> (parent))
+        track->unfreeze (Track::groupFreeze);
+
+    if (clip.getPosition().time.reduced (0.001s).contains (time)
+         && ! clip.isGrouped())
+    {
+        auto newClipState = clip.state.createCopy();
+        edit.createNewItemID().writeID (newClipState, nullptr);
+        assignNewIDsToAutomationCurveModifiers (clip.edit, newClipState);
+
+        // The second half of a split is the same clip, so it keeps its settings
+        if (auto newClip = insertClipCopy (*parent, ClipCopy::fromClipboardState (newClipState,
+                                                                                 clip.getClipSlot() != nullptr)))
+        {
+            // special case for waveaudio clips that may have fade in/out
+            if (auto acb = dynamic_cast<AudioClipBase*> (newClip))
+                acb->setFadeIn ({});
+
+            if (auto acb = dynamic_cast<AudioClipBase*> (&clip))
+                acb->setFadeOut ({});
+
+            // need to do this after setting the fades, so the fades don't
+            // get mucked around with..
+            const bool isChord = dynamic_cast<ChordClip*> (&clip) != nullptr;
+            newClip->setStart (time, ! isChord, false);
+            clip.setEnd (time, true);
+
+            // special case for marker clips, set the marker number
+            if (auto mc1 = dynamic_cast<MarkerClip*> (&clip))
+            {
+                if (auto mc2 = dynamic_cast<MarkerClip*> (newClip))
+                {
+                    auto id = edit.getMarkerManager().getNextUniqueID (mc1->getMarkerID());
+                    mc2->setMarkerID (id);
+
+                    if (mc1->getName() == (TRANS("Marker") + " " + juce::String (mc1->getMarkerID())))
+                        mc2->setName (TRANS("Marker") + " " + juce::String (id));
+                    else
+                        mc2->setName (clip_owner::incrementLastDigit (mc1->getName()));
+                }
+            }
+
+            // fiddle with offsets for looped clips
+            if (newClip->getLoopLengthBeats() > BeatDuration())
+            {
+                auto extra = juce::roundToInt (std::floor ((newClip->getOffsetInBeats()
+                                                            / newClip->getLoopLengthBeats()) + 0.00001));
+
+                if (extra != 0)
+                {
+                    auto newOffsetBeats = newClip->getOffsetInBeats() - (newClip->getLoopLengthBeats() * extra);
+                    auto offset = TimeDuration::fromSeconds (newOffsetBeats.inBeats() / edit.tempoSequence.getBeatsPerSecondAt (newClip->getPosition().getStart()));
+
+                    newClip->setOffset (offset);
+                }
+            }
+
+            return newClip;
+        }
+    }
+
+    return {};
+}
+
+bool containsAnyMIDIClips (const ClipOwner& co)
+{
+    for (auto& c : co.getClips())
+        if (c->isMidi())
+            return true;
+
+    return false;
+}
+
+
+//==============================================================================
+//==============================================================================
+bool isMasterTrack (const Track& t)                             { return dynamic_cast<const MasterTrack*> (&t) != nullptr; }
+bool isTempoTrack (const Track& t)                              { return dynamic_cast<const TempoTrack*> (&t) != nullptr; }
+bool isAutomationTrack (const Track& t)                         { return dynamic_cast<const AutomationTrack*> (&t) != nullptr; }
+bool isAudioTrack (const Track& t)                              { return dynamic_cast<const AudioTrack*> (&t) != nullptr; }
+bool isFolderTrack (const Track& t)                             { return dynamic_cast<const FolderTrack*> (&t) != nullptr; }
+bool isMarkerTrack (const Track& t)                             { return dynamic_cast<const MarkerTrack*> (&t) != nullptr; }
+bool isChordTrack (const Track& t)                              { return dynamic_cast<const ChordTrack*> (&t) != nullptr; }
+bool isArrangerTrack (const Track& t)                           { return dynamic_cast<const ArrangerTrack*> (&t) != nullptr; }
+
+bool isAudioTrack (const ClipOwner& t)                          { return dynamic_cast<const AudioTrack*> (&t) != nullptr; }
+bool isFolderTrack (const ClipOwner& t)                         { return dynamic_cast<const FolderTrack*> (&t) != nullptr; }
+bool isMarkerTrack (const ClipOwner& t)                         { return dynamic_cast<const MarkerTrack*> (&t) != nullptr; }
+bool isChordTrack (const ClipOwner& t)                          { return dynamic_cast<const ChordTrack*> (&t) != nullptr; }
+bool isArrangerTrack (const ClipOwner& t)                       { return dynamic_cast<const ArrangerTrack*> (&t) != nullptr; }
+
+//==============================================================================
+bool canContainMIDI (const ClipOwner& co)
+{
+    // A slot holds the same clips as the track it belongs to
+    if (auto cs = dynamic_cast<const ClipSlot*> (&co))
+        if (auto trackOwner = dynamic_cast<const ClipOwner*> (&cs->track))
+            return canContainMIDI (*trackOwner);
+
+    if (auto track = dynamic_cast<const Track*> (&co))
+        return isAudioTrack (*track);
+
+    return false;
+}
+
+bool canContainAudio (const ClipOwner& co)
+{
+    if (dynamic_cast<const ContainerClip*> (&co) != nullptr)
+        return true;
+
+    // A slot holds the same clips as the track it belongs to
+    if (auto cs = dynamic_cast<const ClipSlot*> (&co))
+        if (auto trackOwner = dynamic_cast<const ClipOwner*> (&cs->track))
+            return canContainAudio (*trackOwner);
+
+    if (auto track = dynamic_cast<const Track*> (&co))
+        return isAudioTrack (*track);
+
+    return false;
+}
+
+bool isOnTop (const Track& track)
+{
+    return isMarkerTrack (track) || isTempoTrack (track) || isChordTrack (track) || isArrangerTrack (track) || isMasterTrack (track)
+        || (isAutomationTrack (track) && track.getParentTrack() != nullptr && track.getParentTrack()->isMasterTrack());
+}
+
+} // namespace tracktion::inline engine

@@ -1,0 +1,247 @@
+# Ikaros Studio — top-level CMake project
+#
+# Build (any platform):
+#   cmake -B build -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build --parallel
+#
+# Tracktion Engine lives in external/tracktion_engine (git submodule) and brings
+# its own copy of JUCE in external/tracktion_engine/modules/juce.
+
+cmake_minimum_required(VERSION 3.22)
+
+project(IkarosStudio VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Platform settings that must be decided *before* JUCE is added.
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
+
+if(MSVC)
+    # Static runtime, same as Tracktion's own examples, so the .exe has no VC++ redist dependency.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# ------------------------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------------------------
+set(TE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/tracktion_engine")
+
+if(NOT EXISTS "${TE_DIR}/modules/juce/CMakeLists.txt")
+    message(FATAL_ERROR
+        "Tracktion Engine / JUCE submodules are missing. Run:\n"
+        "  git -c url.\"https://github.com/\".insteadOf=\"git@github.com:\" submodule update --init --recursive")
+endif()
+
+# JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
+# then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
+add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
+add_subdirectory("${TE_DIR}/modules"      "${CMAKE_BINARY_DIR}/tracktion" EXCLUDE_FROM_ALL)
+
+# ------------------------------------------------------------------------------
+# App target
+# ------------------------------------------------------------------------------
+juce_add_gui_app(IkarosStudio
+    PRODUCT_NAME "Ikaros Studio"
+    COMPANY_NAME "ikarosdev"
+    BUNDLE_ID "io.github.thecalamityjoe87.IkarosStudio"
+    VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/io.github.thecalamityjoe87.IkarosStudio.png"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Ikaros Studio uses audio inputs for recording."
+    NEEDS_CURL FALSE
+    NEEDS_WEB_BROWSER FALSE)
+
+# Fonts are compiled into the binary so the app looks identical everywhere.
+# This generates a static library with a `BinaryData` namespace
+# (e.g. BinaryData::FigtreeRegular_ttf / BinaryData::FigtreeRegular_ttfSize).
+juce_add_binary_data(IkarosStudioBinaryData
+    HEADER_NAME "BinaryData.h"
+    NAMESPACE BinaryData
+    SOURCES
+        resources/fonts/Figtree-Regular.ttf
+        resources/fonts/Figtree-SemiBold.ttf
+        resources/fonts/Figtree-Bold.ttf
+        resources/fonts/JetBrainsMono-Medium.ttf
+        resources/fonts/JetBrainsMono-Bold.ttf)
+
+# ------------------------------------------------------------------------------
+# Sources, grouped like the folders under src/. Headers are listed too so they
+# show up in IDE project trees (Visual Studio, Xcode).
+# ------------------------------------------------------------------------------
+set(IKAROS_APP_SOURCES
+    src/app/Main.cpp
+    src/app/MainWindow.h            src/app/MainWindow.cpp
+    src/app/MainComponent.h         src/app/MainComponent.cpp
+    src/app/AppMenuModel.h          src/app/AppMenuModel.cpp
+    src/app/CommandIDs.h)
+
+# The only code that talks to Tracktion. Also built into the smoke test.
+set(IKAROS_ENGINE_SOURCES
+    src/engine/EngineTypes.h
+    src/engine/AudioEngine.h        src/engine/AudioEngine.cpp
+    src/engine/TrackController.h    src/engine/TrackController.cpp)
+
+# The only OS-specific code.
+set(IKAROS_PLATFORM_SOURCES
+    src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp)
+
+set(IKAROS_UI_SOURCES
+    # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
+    src/ui/theme/Tokens.h
+    src/ui/theme/Fonts.h                    src/ui/theme/Fonts.cpp
+    src/ui/theme/IkarosLookAndFeel.h        src/ui/theme/IkarosLookAndFeel.cpp
+
+    # widgets: small reusable controls
+    src/ui/widgets/Icons.h                  src/ui/widgets/Icons.cpp
+    src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
+    src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
+    src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+
+    # state: UI state shared between areas
+    src/ui/state/Selection.h
+
+    # one folder per area of the window
+    src/ui/titlebar/MenuBar.h               src/ui/titlebar/MenuBar.cpp
+    src/ui/titlebar/WindowControls.h        src/ui/titlebar/WindowControls.cpp
+    src/ui/toolbar/Toolbar.h                src/ui/toolbar/Toolbar.cpp
+    src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
+    src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
+    src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
+    src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
+    src/ui/arrangement/TrackHeader.h        src/ui/arrangement/TrackHeader.cpp
+    src/ui/arrangement/RegionComponent.h    src/ui/arrangement/RegionComponent.cpp
+    src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
+    src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
+    src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
+    src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp)
+
+target_sources(IkarosStudio PRIVATE
+    ${IKAROS_APP_SOURCES}
+    ${IKAROS_ENGINE_SOURCES}
+    ${IKAROS_PLATFORM_SOURCES}
+    ${IKAROS_UI_SOURCES})
+
+# Mirror the src/ folders in IDE project trees.
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "src"
+             FILES ${IKAROS_APP_SOURCES} ${IKAROS_ENGINE_SOURCES} ${IKAROS_PLATFORM_SOURCES} ${IKAROS_UI_SOURCES})
+
+target_include_directories(IkarosStudio PRIVATE src)
+
+target_compile_definitions(IkarosStudio PRIVATE
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_VERSION>"
+    JUCE_USE_CURL=0
+    JUCE_WEB_BROWSER=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    JUCE_MODAL_LOOPS_PERMITTED=0
+    # Plugin hosting is compiled in so Tracktion links, but scanning/VST3 UI is a later milestone.
+    # TODO(milestone-3): enable VST3/AU/LV2 scanning in the sound library.
+    JUCE_PLUGINHOST_VST3=0
+    JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_LV2=0
+    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+
+target_link_libraries(IkarosStudio
+    PRIVATE
+        IkarosStudioBinaryData
+        tracktion::tracktion_core
+        tracktion::tracktion_engine
+        tracktion::tracktion_graph
+        juce::juce_audio_devices
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # Tracktion uses some MSVC/Clang-only pragmas; GCC warns about each one.
+    target_compile_options(IkarosStudio PRIVATE -Wno-unknown-pragmas)
+endif()
+
+if(APPLE)
+    # Matches Tracktion's own example settings.
+    target_compile_options(IkarosStudio PRIVATE -fno-aligned-allocation)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(IkarosStudio PRIVATE atomic)
+
+    # Xlib for src/platform/WindowManagerHints.cpp (window-manager hints JUCE
+    # doesn't expose). JUCE itself loads X11 at runtime, so it's already required.
+    find_package(X11 REQUIRED)
+    target_link_libraries(IkarosStudio PRIVATE X11::X11)
+endif()
+
+# ------------------------------------------------------------------------------
+# Linux install layout (used by the Flatpak manifest and `cmake --install`)
+# ------------------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(GNUInstallDirs)
+    set(APP_ID "io.github.thecalamityjoe87.IkarosStudio")
+
+    # juce_add_gui_app puts the binary at <build>/IkarosStudio_artefacts/<Config>/Ikaros Studio
+    install(PROGRAMS "$<TARGET_FILE:IkarosStudio>"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            RENAME ikaros-studio)
+    install(FILES packaging/linux/${APP_ID}.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/linux/${APP_ID}.metainfo.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(FILES resources/icons/${APP_ID}.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    install(FILES resources/icons/${APP_ID}.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+endif()
+
+# ------------------------------------------------------------------------------
+# Engine smoke test (off by default: it compiles Tracktion a second time)
+#   cmake -B build -DIKAROS_BUILD_TESTS=ON && cmake --build build && ctest --test-dir build
+# ------------------------------------------------------------------------------
+option(IKAROS_BUILD_TESTS "Build the engine smoke test" OFF)
+
+if(IKAROS_BUILD_TESTS)
+    enable_testing()
+    juce_add_console_app(IkarosEngineSmokeTest PRODUCT_NAME "IkarosEngineSmokeTest")
+
+    target_sources(IkarosEngineSmokeTest PRIVATE
+        tests/EngineSmokeTest.cpp
+        ${IKAROS_ENGINE_SOURCES})
+
+    target_include_directories(IkarosEngineSmokeTest PRIVATE src)
+
+    target_compile_definitions(IkarosEngineSmokeTest PRIVATE
+        JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
+        JUCE_USE_CURL=0
+        JUCE_WEB_BROWSER=0
+        JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_PLUGINHOST_VST3=0
+        JUCE_PLUGINHOST_AU=0
+        JUCE_PLUGINHOST_LV2=0
+        TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+
+    target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        tracktion::tracktion_core
+        tracktion::tracktion_engine
+        tracktion::tracktion_graph
+        juce::juce_audio_devices
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_recommended_config_flags)
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        target_compile_options(IkarosEngineSmokeTest PRIVATE -Wno-unknown-pragmas)
+    endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic)
+    endif()
+
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest)
+endif()

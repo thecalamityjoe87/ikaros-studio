@@ -1,0 +1,41 @@
+# Flatpak manifest (stub).
+#
+# Build locally:
+#   flatpak install flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#       packaging/flatpak/io.github.thecalamityjoe87.IkarosStudio.yml
+#   flatpak run io.github.thecalamityjoe87.IkarosStudio
+#
+# TODO(release): pin the git source to a tag/commit, and consider the
+# org.freedesktop.LinuxAudio.BaseExtension for LV2/VST3 plugin support.
+
+id: io.github.thecalamityjoe87.IkarosStudio
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: ikaros-studio
+
+finish-args:
+  - --share=ipc
+  - --socket=x11              # JUCE renders through X11 (XWayland on Wayland desktops)
+  - --device=dri              # OpenGL
+  - --socket=pulseaudio       # audio via the PulseAudio / PipeWire-Pulse socket
+  - --device=all              # ALSA devices and USB MIDI keyboards
+  - --filesystem=xdg-documents/Ikaros Studio:create
+  - --filesystem=xdg-music
+
+modules:
+  - name: ikaros-studio
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    sources:
+      # For local development, build from the working copy:
+      - type: dir
+        path: ../..
+      # For release builds, use the git repository instead (Flathub doesn't
+      # allow network access during the build, so submodules must be fetched here):
+      # - type: git
+      #   url: https://github.com/thecalamityjoe87/ikaros-studio.git
+      #   tag: v0.1.0

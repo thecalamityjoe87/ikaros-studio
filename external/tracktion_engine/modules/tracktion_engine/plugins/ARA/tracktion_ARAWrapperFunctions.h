@@ -1,0 +1,313 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+/** Per-document state for the archiving controller: the factory the document belongs to,
+    plus an override so getDocumentArchiveID can report the ID an archive was saved with
+    while it's being restored. One per ARADocument - a process-wide value would report
+    the wrong ID if two documents ever restored at overlapping times. */
+struct ArchivingState
+{
+    const ARAFactory* factory = nullptr;
+    juce::String documentArchiveIDOverride;
+};
+
+struct ArchivingFunctions
+{
+
+    static ARASize ARA_CALL getArchiveSize (ARAArchivingControllerHostRef,
+                                            ARAArchiveReaderHostRef ref)
+    {
+        if (auto m = (juce::MemoryBlock*) ref)
+            return (ARASize) m->getSize();
+
+        return 0;
+    }
+
+    static ARABool ARA_CALL readBytesFromArchive (ARAArchivingControllerHostRef,
+                                                  ARAArchiveReaderHostRef ref,
+                                                  ARASize pos, ARASize length,
+                                                  ARAByte buffer[])
+    {
+        CRASH_TRACER
+
+        if (auto m = (juce::MemoryBlock*) ref)
+        {
+            if ((pos + length) <= m->getSize())
+            {
+                std::memcpy (buffer, juce::addBytesToPointer (m->getData(), pos), length);
+                return kARATrue;
+            }
+        }
+
+        return kARAFalse;
+    }
+
+    static ARABool ARA_CALL writeBytesToArchive (ARAArchivingControllerHostRef,
+                                                 ARAArchiveWriterHostRef ref,
+                                                 ARASize position, ARASize length,
+                                                 const ARAByte buffer[])
+    {
+        CRASH_TRACER
+        if (auto m = (juce::MemoryOutputStream*) ref)
+        {
+            // Plugins may write sparsely - the skipped range must be zero-filled
+            // (MemoryOutputStream can't seek past the end of the data written so far)
+            if (m->getDataSize() < position)
+            {
+                if (! m->setPosition ((int64_t) m->getDataSize()))
+                    return kARAFalse;
+
+                m->writeRepeatedByte (0, position - m->getDataSize());
+            }
+
+            if (m->setPosition ((int64_t) position) && m->write (buffer, length))
+                return kARATrue;
+        }
+
+        return kARAFalse;
+    }
+
+    static void ARA_CALL notifyDocumentArchivingProgress (ARAArchivingControllerHostRef, float p)
+    {
+        juce::ignoreUnused (p);
+        //TRACKTION_LOG_ARA ("Archiving progress: " << p);
+    }
+
+    static void ARA_CALL notifyDocumentUnarchivingProgress (ARAArchivingControllerHostRef, float p)
+    {
+        juce::ignoreUnused (p);
+        //TRACKTION_LOG_ARA ("Unarchiving progress: " << p);
+    }
+
+    static ARAPersistentID ARA_CALL getDocumentArchiveID (ARAArchivingControllerHostRef ref, ARAArchiveReaderHostRef)
+    {
+        if (auto s = (ArchivingState*) ref)
+        {
+            if (s->documentArchiveIDOverride.isNotEmpty())
+                return s->documentArchiveIDOverride.toRawUTF8();
+
+            if (s->factory != nullptr)
+                return s->factory->documentArchiveID;
+        }
+
+        return "com.celemony.ara.chunk.1"; // fallback
+    }
+};
+
+//==============================================================================
+struct EditProxyFunctions
+{
+    /** The spec allows these requests to arrive concurrently from any non-render
+        thread and explicitly permits deferred execution, but TransportControl must
+        only be used from the message thread - so hop over to it, re-checking that
+        the edit is still open when the callback finally runs. */
+    static void marshalToMessageThread (ARAPlaybackControllerHostRef ref, std::function<void (TransportControl&)> fn)
+    {
+        if (auto tc = (TransportControl*) ref)
+        {
+            auto editPtr = &tc->edit;
+            auto& engine = tc->edit.engine;
+
+            juce::MessageManager::callAsync ([&engine, editPtr, fn = std::move (fn)]
+            {
+                for (auto e : engine.getActiveEdits().getEdits())
+                    if (e == editPtr)
+                        return fn (e->getTransport());
+            });
+        }
+    }
+
+    static void ARA_CALL requestStartPlayback (ARAPlaybackControllerHostRef ref)
+    {
+        CRASH_TRACER
+        marshalToMessageThread (ref, [] (TransportControl& tc) { tc.play (false); });
+    }
+
+    static void ARA_CALL requestStopPlayback (ARAPlaybackControllerHostRef ref)
+    {
+        CRASH_TRACER
+        marshalToMessageThread (ref, [] (TransportControl& tc) { tc.stop (false, false); });
+    }
+
+    static void ARA_CALL requestSetPlaybackPosition (ARAPlaybackControllerHostRef ref, ARATimePosition timePosition)
+    {
+        CRASH_TRACER
+        marshalToMessageThread (ref, [timePosition] (TransportControl& tc) { tc.setPosition (TimePosition::fromSeconds (timePosition)); });
+    }
+
+    static void ARA_CALL requestSetCycleRange (ARAPlaybackControllerHostRef ref, ARATimePosition startTime, ARATimeDuration duration)
+    {
+        CRASH_TRACER
+        marshalToMessageThread (ref, [startTime, duration] (TransportControl& tc)
+                                     { tc.setLoopRange ({ TimePosition::fromSeconds (startTime), TimeDuration::fromSeconds (duration) }); });
+    }
+
+    static void ARA_CALL requestEnableCycle (ARAPlaybackControllerHostRef ref, ARABool enable)
+    {
+        CRASH_TRACER
+        marshalToMessageThread (ref, [enable] (TransportControl& tc) { tc.looping = enable != kARAFalse; });
+    }
+};
+
+//==============================================================================
+struct ModelUpdateFunctions
+{
+    static void notifyARAContentChanged (Edit& edit)
+    {
+        edit.markAsChanged();
+
+        for (auto track : getAudioTracks (edit))
+            for (auto clip : track->getClips())
+                if (auto audioClip = dynamic_cast<AudioClipBase*> (clip))
+                    if (auto proxy = audioClip->getARAProxy())
+                        proxy->contentHasChanged();
+    }
+
+    /** These notifications arrive from inside our own notifyModelUpdates() call, so
+        updating the document synchronously here would reenter the plugin's document
+        controller - defer to the next message loop iteration instead, re-checking
+        that the edit is still open when the callback runs. */
+    static void deferContentChanged (Edit& edit)
+    {
+        auto editPtr = &edit;
+        auto& engine = edit.engine;
+
+        juce::MessageManager::callAsync ([&engine, editPtr]
+        {
+            for (auto e : engine.getActiveEdits().getEdits())
+                if (e == editPtr)
+                    return notifyARAContentChanged (*e);
+        });
+    }
+
+    static void ARA_CALL notifyAudioSourceAnalysisProgress (ARAModelUpdateControllerHostRef,
+                                                            ARAAudioSourceHostRef,
+                                                            ARAAnalysisProgressState,
+                                                            float)
+    {
+    }
+
+    static void ARA_CALL notifyAudioSourceContentChanged (ARAModelUpdateControllerHostRef hostRef,
+                                                          ARAAudioSourceHostRef,
+                                                          const ARAContentTimeRange*,
+                                                          ARAContentUpdateFlags)
+    {
+        CRASH_TRACER
+        if (auto e = (Edit*) hostRef)
+            deferContentChanged (*e);
+    }
+
+    static void ARA_CALL notifyAudioModificationContentChanged (ARAModelUpdateControllerHostRef hostRef,
+                                                                ARAAudioModificationHostRef,
+                                                                const ARAContentTimeRange*,
+                                                                ARAContentUpdateFlags)
+    {
+        CRASH_TRACER
+        if (auto e = (Edit*) hostRef)
+            deferContentChanged (*e);
+    }
+
+    static void ARA_CALL notifyPlaybackRegionContentChanged (ARAModelUpdateControllerHostRef hostRef,
+                                                             ARAPlaybackRegionHostRef,
+                                                             const ARAContentTimeRange*,
+                                                             ARAContentUpdateFlags)
+    {
+        CRASH_TRACER
+        if (auto e = (Edit*) hostRef)
+            deferContentChanged (*e);
+    }
+};
+
+//==============================================================================
+struct MusicalContextFunctions
+{
+    /** Converts ASCII accidentals to the Unicode flat/sharp symbols that ARA
+        content name strings must use (see ARAInterface.h: 0x266d and 0x266f). */
+    static juce::String convertAccidentalsToUnicode (const juce::String& name)
+    {
+        if (! (name.containsChar ('#') || name.containsChar ('b')))
+            return name;
+
+        auto isNoteLetter = [] (juce::juce_wchar c)  { return c >= 'A' && c <= 'G'; };
+
+        juce::String result;
+
+        for (int i = 0; i < name.length(); ++i)
+        {
+            auto c = name[i];
+
+            if (c == '#')
+                result += juce::String::charToString (0x266f); // sharp symbol
+            else if (c == 'b' && i > 0 && (isNoteLetter (name[i - 1])
+                                            || juce::CharacterFunctions::isDigit (name[i + 1])))
+                result += juce::String::charToString (0x266d); // flat symbol
+            else
+                result += juce::String::charToString (c);
+        }
+
+        return result;
+    }
+
+    static ARA::ARACircleOfFifthsIndex getCircleOfFifthsIndexforMIDINote (int note, bool useSharps)
+    {
+        static const ARA::ARACircleOfFifthsIndex sharpNoteIndices[] = { 0, 7, 2, 9, 4, -1, 6, 1, 8, 3, 10, 5 };
+        static const ARA::ARACircleOfFifthsIndex flatNoteIndices[] = { 0, -5, 2, -3, 4, -1, -6, 1, -4, 3, -2, 5 };
+
+        if (juce::isPositiveAndBelow (note, 128))
+        {
+            return (useSharps ? sharpNoteIndices[note % 12]
+                              : flatNoteIndices[note % 12]);
+        }
+
+        return 0;
+    }
+
+    static std::array<ARA::ARAChordIntervalUsage, 12> getChordARAIntervalUsage (Chord c)
+    {
+        using namespace ARA;
+        switch (c.getType())
+        {
+            case Chord::majorTriad:                    return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0 };
+            case Chord::minorTriad:                    return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0 };
+            case Chord::diminishedTriad:               return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0, 0 };
+            case Chord::augmentedTriad:                return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0 };
+            case Chord::majorSixthChord:               return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, kARAChordDiatonicDegree6, 0, 0 };
+            case Chord::minorSixthChord:               return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, kARAChordDiatonicDegree6, 0, 0 };
+            case Chord::dominatSeventhChord:           return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::majorSeventhChord:             return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7 };
+            case Chord::minorSeventhChord:             return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::augmentedSeventhChord:         return { kARAChordDiatonicDegree1, 0, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::diminishedSeventhChord:        return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0, 0 };
+            case Chord::halfDiminishedSeventhChord:    return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::minorMajorSeventhChord:        return { kARAChordDiatonicDegree1, 0, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7 };
+            case Chord::suspendedSecond:               return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree2, 0, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0 };
+            case Chord::suspendedFourth:               return { kARAChordDiatonicDegree1, 0, 0, 0, 0, kARAChordDiatonicDegree4, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0 };
+            case Chord::powerChord:                    return { kARAChordDiatonicDegree1, 0, 0, 0, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, 0 };
+            case Chord::majorNinthChord:               return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7 };
+            case Chord::dominantNinthChord:            return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::minorMajorNinthChord:          return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7 };
+            case Chord::minorDominantNinthChord:       return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::augmentedMajorNinthChord:      return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7 };
+            case Chord::augmentedDominantNinthChord:   return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, 0, kARAChordDiatonicDegree5, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::halfDiminishedNinthChord:      return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::halfDiminishedMinorNinthChord: return { kARAChordDiatonicDegree1, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, 0, kARAChordDiatonicDegree7, 0 };
+            case Chord::diminishedNinthChord:          return { kARAChordDiatonicDegree1, 0, kARAChordDiatonicDegree9, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0, 0 };
+            case Chord::diminishedMinorNinthChord:     return { kARAChordDiatonicDegree1, kARAChordDiatonicDegree9, 0, kARAChordDiatonicDegree3, 0, 0, kARAChordDiatonicDegree5, 0, 0, kARAChordDiatonicDegree7, 0, 0 };
+            case Chord::customChord:
+            default:
+            {
+                std::array<ARA::ARAChordIntervalUsage, 12> chordIntervals{};
+                for (auto s : c.getSteps())  // wrap extensions (e.g. a 13th) into one octave
+                    chordIntervals[(std::size_t) (((s % 12) + 12) % 12)] = ARA::kARAKeySignatureIntervalUsed;
+                return chordIntervals;
+            }
+        }
+    }
+};

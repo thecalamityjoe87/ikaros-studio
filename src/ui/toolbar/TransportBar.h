@@ -1,0 +1,44 @@
+#pragma once
+
+#include "ui/widgets/IconButton.h"
+#include "ui/toolbar/LcdDisplay.h"
+
+namespace ikaros
+{
+
+class AudioEngine;
+
+//==============================================================================
+/**
+    The rounded "pill" in the middle of the toolbar:
+    Go to start · Play · Record · Loop · LCD · Metronome.
+*/
+class TransportBar  : public juce::Component
+{
+public:
+    explicit TransportBar (AudioEngine&);
+
+    /** Called by the owner's timer (~30 Hz). */
+    void update();
+
+    int getPreferredWidth() const;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    AudioEngine& engine;
+
+    IconButton toStartButton   { "Go to start", Icon::toStart };
+    IconButton playButton      { "Play", Icon::play };
+    IconButton recordButton    { "Record", Icon::record };
+    IconButton loopButton      { "Loop", Icon::loop };
+    LcdDisplay lcd;
+    IconButton metronomeButton { "Metronome", Icon::metronome };
+
+    bool wasPlaying = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TransportBar)
+};
+
+} // namespace ikaros

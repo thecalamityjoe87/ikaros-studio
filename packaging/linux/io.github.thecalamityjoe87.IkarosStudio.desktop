@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Ikaros Studio
+GenericName=Music Studio
+Comment=Make music with an easy, friendly studio
+Exec=ikaros-studio
+Icon=io.github.thecalamityjoe87.IkarosStudio
+Terminal=false
+Categories=AudioVideo;Audio;Music;Midi;
+Keywords=DAW;music;MIDI;synth;recording;sequencer;
+# TODO: register a MIME type for .tracktionedit sessions and add MimeType= + %f here.
+StartupNotify=true
+StartupWMClass=Ikaros Studio
+SingleMainWindow=true

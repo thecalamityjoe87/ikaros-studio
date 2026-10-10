@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: shown by GNOME Software, KDE Discover and Flathub. -->
+<component type="desktop-application">
+  <id>io.github.thecalamityjoe87.IkarosStudio</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <!-- TODO: confirm the project licence. Tracktion Engine and JUCE are GPLv3 for open-source use. -->
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Ikaros Studio</name>
+  <summary>Make music with an easy, friendly studio</summary>
+  <developer id="io.github.thecalamityjoe87">
+    <name>ikarosdev</name>
+  </developer>
+
+  <description>
+    <p>
+      Ikaros Studio is a beginner-friendly music studio. Pick a sound, play it on the
+      on-screen keyboard or a MIDI keyboard, and arrange regions on a timeline.
+      It stays simple by default, with advanced controls tucked away until you ask for them.
+    </p>
+    <ul>
+      <li>Instrument tracks with a built-in synthesizer</li>
+      <li>MIDI regions, loop playback and a metronome</li>
+      <li>Sound controls, effects and a simple mixer</li>
+      <li>Works the same on Linux, Windows and macOS</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.thecalamityjoe87.IkarosStudio.desktop</launchable>
+  <icon type="stock">io.github.thecalamityjoe87.IkarosStudio</icon>
+
+  <url type="homepage">https://github.com/thecalamityjoe87/ikaros-studio</url>
+  <url type="bugtracker">https://github.com/thecalamityjoe87/ikaros-studio/issues</url>
+  <url type="vcs-browser">https://github.com/thecalamityjoe87/ikaros-studio</url>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Music</category>
+  </categories>
+
+  <keywords>
+    <keyword>DAW</keyword>
+    <keyword>MIDI</keyword>
+    <keyword>synthesizer</keyword>
+    <keyword>music</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">1100</display_length>
+  </requires>
+
+  <!-- TODO(release): add screenshots before submitting to Flathub. -->
+
+  <releases>
+    <release version="0.1.0" date="2026-10-10" type="development">
+      <description>
+        <p>Milestone 1: main window, sessions, instrument tracks, MIDI regions and playback.</p>
+      </description>
+    </release>
+  </releases>
+</component>

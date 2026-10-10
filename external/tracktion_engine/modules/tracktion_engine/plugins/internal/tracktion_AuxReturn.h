@@ -1,0 +1,47 @@
+/*
+    ,--.                     ,--.     ,--.  ,--.
+  ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2024
+  '-.  .-'|  .--' ,-.  | .--'|     /'-.  .-',--.| .-. ||      \   Tracktion Software
+    |  |  |  |  \ '-'  \ `--.|  \  \  |  |  |  |' '-' '|  ||  |       Corporation
+    `---' `--'   `--`--'`---'`--'`--' `---' `--' `---' `--''--'    www.tracktion.com
+
+    Tracktion Engine uses a GPL/commercial licence - see LICENCE.md for details.
+*/
+
+namespace tracktion::inline engine {
+
+class AuxReturnPlugin   : public Plugin
+{
+public:
+    AuxReturnPlugin (PluginCreationInfo);
+    ~AuxReturnPlugin() override;
+
+    static const char* getPluginName()                                      { return NEEDS_TRANS("Aux Return"); }
+    static const char* xmlTypeName;
+
+    juce::String getName() const override;
+    juce::String getPluginType() override                                   { return xmlTypeName; }
+    juce::String getShortName (int suggestedMaxLength) override;
+    juce::String getSelectableDescription() override                        { return TRANS("Aux Return Plugin"); }
+    int getNumOutputChannelsGivenInputs (int numInputChannels) override     { return numInputChannels; }
+    BusLayout getBusses() const override   { return BusLayout::singlePassThrough(); }
+
+    void initialise (const PluginInitialisationInfo&) override;
+    void deinitialise() override;
+    void applyToBuffer (const PluginRenderContext&) override;
+
+    bool takesMidiInput() override                   { return true; }
+    bool producesAudioWhenNoAudioInput() override    { return true; }
+    bool canBeAddedToClip() override                 { return false; }
+    bool canBeAddedToRack() override                 { return false; }
+    bool needsConstantBufferSize() override          { return true; }
+
+    void restorePluginStateFromValueTree (const juce::ValueTree&) override;
+
+    juce::CachedValue<int> busNumber;
+
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AuxReturnPlugin)
+};
+
+} // namespace tracktion::inline engine

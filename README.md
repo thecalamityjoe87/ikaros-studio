@@ -105,29 +105,38 @@ flatpak run io.github.thecalamityjoe87.IkarosStudio
 ## Project layout
 
 ```
-CMakeLists.txt                  app target, fonts as binary data, install rules
+CMakeLists.txt                  app target, source lists (grouped like src/), install rules
 external/tracktion_engine/      git submodule (bundles JUCE in modules/juce)
-resources/fonts/                Figtree + JetBrains Mono (SIL OFL, licences included)
-resources/icons/                app icon (PNG)
-packaging/linux/                .desktop, AppStream metainfo, scalable icon
-packaging/flatpak/              Flatpak manifest
-tests/EngineSmokeTest.cpp       optional engine-layer test (-DIKAROS_BUILD_TESTS=ON)
+resources/
+  fonts/                        Figtree + JetBrains Mono (SIL OFL, licences included)
+  icons/                        app icon (SVG source + 256px PNG)
+packaging/
+  linux/                        .desktop file, AppStream metainfo
+  flatpak/                      Flatpak manifest
+tests/                          optional engine smoke test (-DIKAROS_BUILD_TESTS=ON)
 src/
-  Main.cpp                      JUCEApplication + main window
-  MainComponent.*               layout, commands (menus + shortcuts), refresh loop
-  AppMenuModel.*                File / Edit / Track / Region / Mix / View / Window / Help
-  CommandIDs.h
+  app/                          entry point and app shell
+    Main.cpp                    JUCEApplication: owns the theme, engine and window
+    MainWindow.*                the window: custom title bar, maximise/restore
+    MainComponent.*             layout, commands (menus + shortcuts), refresh loop
+    AppMenuModel.*, CommandIDs.h
   engine/                       the ONLY code that includes Tracktion
     EngineTypes.h               plain structs the UI uses (TrackInfo, RegionInfo, ...)
     AudioEngine.*               te::Engine + te::Edit: sessions, transport, tempo, undo, meters
     TrackController.*           tracks, regions, mixer, sound controls, live MIDI
-  platform/                     the only OS-specific code (window-manager hints on Linux)
+  platform/                     the ONLY OS-specific code (window-manager integration on Linux)
   ui/                           JUCE components only
-    lookandfeel/                IkarosLookAndFeel, Tokens.h (colours/sizes), Fonts
-    MenuBar, Toolbar, TransportBar, LcdDisplay, LevelMeter, IconButton, Icons
-    LibrarySidebar, ArrangementView, TrackHeader, RegionComponent
-    BottomPanel, Knob, PianoKeyboard, PianoRoll, MixerView, Selection
+    theme/                      Tokens.h (colours, sizes), Fonts, IkarosLookAndFeel
+    widgets/                    reusable controls: Icons, IconButton, Knob, LevelMeter
+    state/                      UI state shared between areas (Selection)
+    titlebar/                   MenuBar (doubles as the title bar), WindowControls
+    toolbar/                    Toolbar, TransportBar, LcdDisplay
+    library/                    LibrarySidebar
+    arrangement/                ArrangementView (ruler, lanes, playhead), TrackHeader, RegionComponent
+    bottompanel/                BottomPanel (Sound | Editor | Mixer), PianoKeyboard, PianoRoll, MixerView
 ```
+
+Where new code goes: a new area of the window gets its own folder under `ui/`. A control used by more than one area goes in `ui/widgets/`. Anything that needs Tracktion goes in `engine/`, behind a plain-struct API.
 
 ### Architecture in brief
 
