@@ -145,6 +145,24 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     const double anchorBeat = geometry.xToBeat (anchorX);
     geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat, pixelsPerBeat);
     geometry.scrollBeats = anchorBeat - anchorX / geometry.pixelsPerBeat;
+
+    // Like GarageBand, zooming in makes the tracks taller too, so regions
+    // and waveforms grow both ways. Square root: twice as wide for every
+    // four times the zoom. Zoomed out, tracks keep their normal height (the
+    // header's controls need it).
+    const int oldRowHeight = geometry.rowHeight;
+    const double growth = std::sqrt (geometry.pixelsPerBeat / startPixelsPerBeat);
+    geometry.rowHeight = juce::jlimit (size::trackRowHeight, maxRowHeight,
+                                       juce::roundToInt (size::trackRowHeight * growth));
+
+    if (geometry.rowHeight != oldRowHeight)
+    {
+        // Keep the same tracks in view as they grow or shrink.
+        const auto oldY = viewport.getViewPositionY();
+        layoutContent();
+        viewport.setViewPosition (viewport.getViewPositionX(), oldY * geometry.rowHeight / oldRowHeight);
+    }
+
     timelineChanged();
 }
 
@@ -325,6 +343,7 @@ void ArrangementView::resized()
         geometry.beatsPerBar = engine.beatsPerBar();
         geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
                                                getLaneWidth() / (16.0 * geometry.beatsPerBar));
+        startPixelsPerBeat = geometry.pixelsPerBeat;
     }
 
     layoutContent();
@@ -356,12 +375,12 @@ int ArrangementView::rowOf (TrackId id) const
 int ArrangementView::rowAt (int y) const
 {
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
-    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / rowHeight);
+    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / geometry.rowHeight);
 }
 
 juce::Rectangle<float> ArrangementView::rowAreaInOverlay (int row) const
 {
-    return { 0.0f, (float) (row * rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) rowHeight };
+    return { 0.0f, (float) (row * geometry.rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) geometry.rowHeight };
 }
 
 void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDown (comp, e); }
@@ -438,9 +457,9 @@ void ArrangementView::startRenamingTrack (TrackId id)
 
 void ArrangementView::scrollRowIntoView (int row)
 {
-    const int rowY = row * rowHeight;
+    const int rowY = row * geometry.rowHeight;
 
-    if (rowY < viewport.getViewPositionY() || rowY + rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
+    if (rowY < viewport.getViewPositionY() || rowY + geometry.rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
         viewport.setViewPosition (0, rowY);
 }
 
@@ -579,7 +598,7 @@ ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
 
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
 
-    if (y >= viewport.getY() && contentY < (int) tracks.size() * rowHeight)
+    if (y >= viewport.getY() && contentY < (int) tracks.size() * geometry.rowHeight)
     {
         target.row = rowAt (y);
 
@@ -624,7 +643,7 @@ void ArrangementView::fileDragMove (const juce::StringArray&, int x, int y)
     else
     {
         // Below the tracks: the drop zone.
-        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
                  (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
         text = "Add on a new audio track";
     }

@@ -90,7 +90,7 @@ void ArrangementView::Content::setRecording (TrackId track, double startBeat, do
 
 int ArrangementView::Content::getIdealHeight() const
 {
-    return (int) order.size() * rowHeight + dropZoneHeight + dropZoneMargin * 2;
+    return (int) order.size() * owner.geometry.rowHeight + dropZoneHeight + dropZoneMargin * 2;
 }
 
 void ArrangementView::Content::paint (juce::Graphics& g)
@@ -108,9 +108,9 @@ void ArrangementView::Content::resized()
 
     for (auto id : order)
     {
-        headers[id]->setBounds (0, y, headerWidth - 1, rowHeight);
-        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, rowHeight);
-        y += rowHeight;
+        headers[id]->setBounds (0, y, headerWidth - 1, owner.geometry.rowHeight);
+        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, owner.geometry.rowHeight);
+        y += owner.geometry.rowHeight;
     }
 
     dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,

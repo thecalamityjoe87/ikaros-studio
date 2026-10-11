@@ -197,15 +197,28 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     const bool bipolar = s.getProperties()["bipolar"];
     const auto arcStart = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
 
-    // Exactly in the middle (pan: dead centre), that arc is just a dot at
-    // 12 o'clock. It turns green, so "centred" can be seen at a glance.
+    // A bipolar knob gets a small tick at 12 o'clock, just outside the arc,
+    // marking the centre. Exactly in the middle there's no arc at all: the
+    // needle simply points at the tick.
+    if (bipolar)
+    {
+        const auto top = (startAngle + endAngle) * 0.5f;
+        g.setColour (colour::textSecondary);
+        g.drawLine ({ centre.getPointOnCircumference (radius + arcWidth * 0.9f, top),
+                      centre.getPointOnCircumference (radius + arcWidth * 2.2f, top) },
+                    juce::jmax (1.0f, arcWidth * 0.5f));
+    }
+
     const bool atMiddle = bipolar && std::abs (pos - 0.5f) < 0.001f;
 
-    juce::Path value;
-    value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
-                         juce::jmin (arcStart, valueAngle), juce::jmax (arcStart + 0.001f, valueAngle), true);
-    g.setColour (atMiddle ? colour::effectOn : s.findColour (knobArcColourId));
-    g.strokePath (value, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
+    if (! atMiddle)
+    {
+        juce::Path value;
+        value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
+                             juce::jmin (arcStart, valueAngle), juce::jmax (arcStart + 0.001f, valueAngle), true);
+        g.setColour (s.findColour (knobArcColourId));
+        g.strokePath (value, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
+    }
 
     auto capRadius = radius * 0.68f;
     const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);

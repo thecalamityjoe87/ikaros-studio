@@ -4,6 +4,7 @@
 #include "ui/state/Selection.h"
 #include "ui/arrangement/TrackHeader.h"
 #include "ui/widgets/IconButton.h"
+#include "ui/theme/Tokens.h"
 #include <map>
 
 namespace ikaros
@@ -99,6 +100,7 @@ public:
         double pixelsPerBeat = 20.0;
         double beatsPerBar = 4.0;
         double scrollBeats = 0.0;      // the beat at the left edge of the lanes
+        int rowHeight = tokens::size::trackRowHeight;   // track height: grows when zoomed in (see setZoom)
 
         float beatToX (double beat) const          { return (float) ((beat - scrollBeats) * pixelsPerBeat); }
         double xToBeat (float x) const             { return x / pixelsPerBeat + scrollBeats; }
@@ -134,6 +136,7 @@ private:
     std::vector<TrackInfo> tracks;
     double contentEndBeat = 0.0;
     bool zoomInitialised = false;
+    double startPixelsPerBeat = 20.0;   // the first zoom (16 bars across): tracks are their normal height here and below
     float lastPlayheadX = 0.0f;
 
     //==============================================================================
