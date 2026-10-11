@@ -30,6 +30,12 @@ namespace CommandIDs
         soloTrack,
 
         newRegion,
+        splitRegion,
+        duplicateRegion,
+        cutRegions,
+        copyRegions,
+        pasteRegions,
+        renameRegion,
         deleteRegion,
 
         togglePlay,
@@ -37,8 +43,14 @@ namespace CommandIDs
         goToStart,
         toggleLoop,
         toggleMetronome,
+        toggleCountIn,
 
         toggleLibrary,
+        zoomIn,
+        zoomOut,
+        snapToBar,
+        snapToBeat,
+        snapOff,
         showSoundTab,
         showEditorTab,
         showMixerTab,

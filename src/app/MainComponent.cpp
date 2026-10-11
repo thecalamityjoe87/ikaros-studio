@@ -21,6 +21,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
     arrangement.onOpenRegionInEditor = [this] (RegionId) { bottomPanel.setTab (BottomPanel::Tab::editor); };
     arrangement.onAddTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
+    arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
 
@@ -120,9 +121,14 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
-                                   CommandIDs::newRegion, CommandIDs::deleteRegion,
-                                   CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop, CommandIDs::toggleMetronome,
-                                   CommandIDs::toggleLibrary, CommandIDs::showSoundTab, CommandIDs::showEditorTab,
+                                   CommandIDs::newRegion, CommandIDs::splitRegion, CommandIDs::duplicateRegion,
+                                   CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
+                                   CommandIDs::renameRegion, CommandIDs::deleteRegion,
+                                   CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
+                                   CommandIDs::toggleMetronome, CommandIDs::toggleCountIn,
+                                   CommandIDs::toggleLibrary, CommandIDs::zoomIn, CommandIDs::zoomOut,
+                                   CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
+                                   CommandIDs::showSoundTab, CommandIDs::showEditorTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
@@ -136,6 +142,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
     const auto shift = juce::ModifierKeys::shiftModifier;
     auto track = engine.getTracks().getTrack (selection.getTrack());
     const bool hasTrack = track.has_value();
+    const bool hasRegions = selection.hasRegions();
     const auto transport = engine.getTransportState();
 
     switch (id)
@@ -177,9 +184,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
            #endif
             break;
         case CommandIDs::deleteSelection:
-            info.setInfo ("Delete", "Delete the selected region, or the selected track", "Edit", 0);
+            // No shortcut: the Delete key deletes regions (Region > Delete),
+            // so pressing it with nothing selected can't remove a whole track.
+            info.setInfo ("Delete", "Delete the selected regions, or the selected track", "Edit", 0);
             info.setActive (hasTrack);
-            info.addDefaultKeypress (juce::KeyPress::deleteKey, 0);
             break;
 
         case CommandIDs::newTrack:
@@ -215,9 +223,42 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("New Chord Region at Playhead", "Add a 4-bar MIDI region with a chord pattern", "Region", 0);
             info.setActive (hasTrack);
             break;
-        case CommandIDs::deleteRegion:
-            info.setInfo ("Delete Region", "Delete the selected region", "Region", 0);
+        case CommandIDs::splitRegion:
+            info.setInfo ("Split at Playhead", "Cut the selected regions in two at the playhead", "Region", 0);
+            info.setActive (canSplitAtPlayhead());
+            info.addDefaultKeypress ('t', cmd);
+            break;
+        case CommandIDs::duplicateRegion:
+            info.setInfo ("Duplicate", "Copy the selected regions to just after them", "Region", 0);
+            info.setActive (hasRegions);
+            info.addDefaultKeypress ('d', cmd);
+            break;
+        case CommandIDs::cutRegions:
+            info.setInfo ("Cut", "Move the selected regions to the clipboard", "Region", 0);
+            info.setActive (hasRegions);
+            info.addDefaultKeypress ('x', cmd);
+            break;
+        case CommandIDs::copyRegions:
+            info.setInfo ("Copy", "Copy the selected regions", "Region", 0);
+            info.setActive (hasRegions);
+            info.addDefaultKeypress ('c', cmd);
+            break;
+        case CommandIDs::pasteRegions:
+            info.setInfo ("Paste at Playhead", "Paste the copied regions on the selected track at the playhead", "Region", 0);
+            info.setActive (hasTrack && engine.getTracks().canPaste());
+            info.addDefaultKeypress ('v', cmd);
+            break;
+        case CommandIDs::renameRegion:
+            info.setInfo ("Rename...", "Rename the selected region", "Region", 0);
             info.setActive (selection.getRegion() != 0);
+            info.addDefaultKeypress (juce::KeyPress::F2Key, 0);
+            break;
+        case CommandIDs::deleteRegion:
+            info.setInfo (selection.getRegions().size() > 1 ? "Delete Regions" : "Delete Region",
+                          "Delete the selected regions", "Region", 0);
+            info.setActive (hasRegions);
+            info.addDefaultKeypress (juce::KeyPress::deleteKey, 0);
+            info.addDefaultKeypress (juce::KeyPress::backspaceKey, 0);
             break;
 
         case CommandIDs::togglePlay:
@@ -244,11 +285,36 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (transport.metronome);
             info.addDefaultKeypress ('u', cmd);
             break;
+        case CommandIDs::toggleCountIn:
+            info.setInfo ("Count-in", "Play one bar of clicks before recording starts", "Transport", 0);
+            info.setTicked (transport.countIn);
+            break;
 
         case CommandIDs::toggleLibrary:
             info.setInfo ("Show Library", "Show or hide the sound library", "View", 0);
             info.setTicked (libraryVisible);
             info.addDefaultKeypress ('y', cmd | shift);
+            break;
+        case CommandIDs::zoomIn:
+            info.setInfo ("Zoom In", "Zoom in on the timeline", "View", 0);
+            info.addDefaultKeypress ('=', cmd);
+            info.addDefaultKeypress ('+', cmd);
+            break;
+        case CommandIDs::zoomOut:
+            info.setInfo ("Zoom Out", "Zoom out on the timeline", "View", 0);
+            info.addDefaultKeypress ('-', cmd);
+            break;
+        case CommandIDs::snapToBar:
+            info.setInfo ("Snap to Bars", "Regions and edges land on bar lines", "View", 0);
+            info.setTicked (arrangement.getSnap() == ArrangementView::Snap::bar);
+            break;
+        case CommandIDs::snapToBeat:
+            info.setInfo ("Snap to Beats", "Regions and edges land on beat lines", "View", 0);
+            info.setTicked (arrangement.getSnap() == ArrangementView::Snap::beat);
+            break;
+        case CommandIDs::snapOff:
+            info.setInfo ("Snap Off", "Regions and edges go exactly where you drop them", "View", 0);
+            info.setTicked (arrangement.getSnap() == ArrangementView::Snap::off);
             break;
         case CommandIDs::showSoundTab:
             info.setInfo ("Sound", "Show the Sound controls", "View", 0);
@@ -309,8 +375,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::redo:            engine.redo(); break;
 
         case CommandIDs::deleteSelection:
-            if (selection.getRegion() != 0)
-                tracks.deleteRegion (selection.getRegion());
+            if (selection.hasRegions())
+                tracks.deleteRegions (selection.getRegions());
             else if (trackId != 0)
                 tracks.deleteTrack (trackId);
             break;
@@ -347,13 +413,56 @@ bool MainComponent::perform (const InvocationInfo& info)
                 selection.selectRegion (trackId, rid);
             break;
 
-        case CommandIDs::deleteRegion:    tracks.deleteRegion (selection.getRegion()); break;
+        case CommandIDs::splitRegion:
+        {
+            auto rightHalves = tracks.splitRegions (getRegionsToSplit(), engine.getTransportState().positionBeats);
+
+            if (! rightHalves.empty())
+                selection.selectRegions (trackId, rightHalves);
+            break;
+        }
+
+        case CommandIDs::duplicateRegion:
+        {
+            // Selecting the copies means pressing it again keeps adding copies.
+            auto copies = tracks.duplicateRegions (selection.getRegions());
+
+            if (! copies.empty())
+                selection.selectRegions (trackId, copies);
+            break;
+        }
+
+        case CommandIDs::cutRegions:
+            tracks.copyRegions (selection.getRegions());
+            tracks.deleteRegions (selection.getRegions());
+            break;
+
+        case CommandIDs::copyRegions:     tracks.copyRegions (selection.getRegions()); break;
+
+        case CommandIDs::pasteRegions:
+        {
+            auto pasted = tracks.pasteRegions (trackId, engine.getTransportState().positionBeats);
+
+            if (auto first = pasted.empty() ? std::nullopt : tracks.getRegion (pasted.front()))
+                selection.selectRegions (first->trackId, pasted);
+            break;
+        }
+
+        case CommandIDs::renameRegion:    arrangement.startRenaming (selection.getRegion()); break;
+        case CommandIDs::deleteRegion:    tracks.deleteRegions (selection.getRegions()); break;
 
         case CommandIDs::togglePlay:      engine.togglePlay(); break;
         case CommandIDs::toggleRecord:    engine.toggleRecord(); break;
         case CommandIDs::goToStart:       engine.goToStart(); break;
         case CommandIDs::toggleLoop:      engine.setLooping (! engine.getTransportState().looping); break;
         case CommandIDs::toggleMetronome: engine.setMetronomeEnabled (! engine.getTransportState().metronome); break;
+        case CommandIDs::toggleCountIn:   engine.setCountInEnabled (! engine.getTransportState().countIn); break;
+
+        case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
+        case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
+        case CommandIDs::snapToBar:       arrangement.setSnap (ArrangementView::Snap::bar); break;
+        case CommandIDs::snapToBeat:      arrangement.setSnap (ArrangementView::Snap::beat); break;
+        case CommandIDs::snapOff:         arrangement.setSnap (ArrangementView::Snap::off); break;
 
         case CommandIDs::toggleLibrary:
             libraryVisible = ! libraryVisible;
@@ -379,6 +488,32 @@ bool MainComponent::perform (const InvocationInfo& info)
 
     commands.commandStatusChanged();
     return true;
+}
+
+//==============================================================================
+std::vector<RegionId> MainComponent::getRegionsToSplit() const
+{
+    if (selection.hasRegions())
+        return selection.getRegions();
+
+    std::vector<RegionId> ids;
+
+    for (auto& r : engine.getTracks().getRegions (selection.getTrack()))
+        ids.push_back (r.id);
+
+    return ids;
+}
+
+bool MainComponent::canSplitAtPlayhead() const
+{
+    const auto beat = engine.getTransportState().positionBeats;
+
+    for (auto id : getRegionsToSplit())
+        if (auto r = engine.getTracks().getRegion (id))
+            if (beat > r->startBeat && beat < r->getEndBeat())
+                return true;
+
+    return false;
 }
 
 //==============================================================================

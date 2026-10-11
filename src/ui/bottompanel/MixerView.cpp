@@ -1,5 +1,6 @@
 #include "ui/bottompanel/MixerView.h"
 #include "ui/theme/Fonts.h"
+#include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
 
 namespace ikaros
@@ -22,13 +23,47 @@ public:
     {
         addAndMakeVisible (meter);
 
-        if (isMaster())
-            return;   // TODO(milestone-2): master fader
-
+        // One undo step per drag: start a transaction when the mouse goes down.
         fader.setRange (0.0, 1.0);
+        addAndMakeVisible (fader);
+
+        if (isMaster())
+        {
+            fader.setTitle ("Master volume");
+            fader.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
+            fader.onValueChange = [this] { engine.getTracks().setMasterVolume ((float) fader.getValue()); };
+            return;
+        }
+
         fader.onDragStart = [this] { engine.beginUndoStep ("Volume"); selection.selectTrack (trackId); };
         fader.onValueChange = [this] { engine.getTracks().setVolume (trackId, (float) fader.getValue()); };
-        addAndMakeVisible (fader);
+
+        // Pan: a small knob, centre at 12 o'clock. Double-click puts it back in the middle.
+        pan.setRange (-1.0, 1.0);
+        pan.setDoubleClickReturnValue (true, 0.0);
+        pan.getProperties().set ("bipolar", true);   // read by IkarosLookAndFeel::drawRotarySlider
+        pan.setTooltip ("Pan: left or right (double-click to centre)");
+        pan.onDragStart = [this] { engine.beginUndoStep ("Pan"); selection.selectTrack (trackId); };
+        pan.onValueChange = [this]
+        {
+            engine.getTracks().setPan (trackId, (float) pan.getValue());
+            panText = describePan ((float) pan.getValue());
+            repaint();
+        };
+        addAndMakeVisible (pan);
+    }
+
+    // "C", or how far left/right, e.g. "L 30".
+    static juce::String describePan (float value)
+    {
+        const int amount = juce::roundToInt (std::abs (value) * 100.0f);
+        return amount == 0 ? juce::String ("C") : (value < 0.0f ? "L " : "R ") + juce::String (amount);
+    }
+
+    static juce::String describeDb (float db)
+    {
+        return db <= -99.0f ? juce::String::fromUTF8 ("\xe2\x88\x92\xe2\x88\x9e dB")   // minus infinity
+                            : juce::String (db, 1) + " dB";
     }
 
     bool isMaster() const   { return trackId == 0; }
@@ -38,21 +73,32 @@ public:
         name = t.name;
         colour = t.colour;
         selected = isSelected;
-        dbText = t.volumeDb <= -99.0f ? juce::String::fromUTF8 ("\xe2\x88\x92\xe2\x88\x9e dB")
-                                      : juce::String (t.volumeDb, 1) + " dB";
+        dbText = describeDb (t.volumeDb);
+        panText = describePan (t.pan);
         fader.setTitle (t.name + " volume");
+        pan.setTitle (t.name + " pan");
+        pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
 
+        // Don't fight the user: only move the controls if they aren't dragging them.
         if (! fader.isMouseButtonDown())
             fader.setValue (t.volume, juce::dontSendNotification);
+
+        if (! pan.isMouseButtonDown())
+            pan.setValue (t.pan, juce::dontSendNotification);
 
         repaint();
     }
 
-    void setMasterLabel()
+    void updateMaster (float volume, float volumeDb)
     {
         name = "Master";
         colour = colour::accent;
-        dbText = {};
+        dbText = describeDb (volumeDb);
+
+        if (! fader.isMouseButtonDown())
+            fader.setValue (volume, juce::dontSendNotification);
+
+        repaint();
     }
 
     void setLevel (StereoLevel l)   { meter.setLevel (l); }
@@ -85,18 +131,31 @@ public:
         g.setColour (colour::textSecondary);
         g.setFont (fonts::mono (12.0f));
         g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
+
+        if (! isMaster())
+        {
+            g.setFont (fonts::mono (10.0f));
+            g.drawText (panText, panTextArea, juce::Justification::centred);
+        }
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced (10);
-        area.removeFromTop (26);
+        area.removeFromTop (22);
         area.removeFromBottom (24);
 
-        if (isMaster())
+        if (! isMaster())
         {
-            meter.setBounds (area.withSizeKeepingCentre (24, area.getHeight()));
-            return;
+            // Pan knob under the name, with its readout below it.
+            auto panRow = area.removeFromTop (52);
+            panTextArea = panRow.removeFromBottom (12);
+            pan.setBounds (panRow.withSizeKeepingCentre (40, 40));
+            area.removeFromTop (4);
+        }
+        else
+        {
+            area.removeFromTop (4);
         }
 
         auto meterArea = area.withSizeKeepingCentre (64, area.getHeight());
@@ -111,7 +170,9 @@ private:
     const TrackId trackId;   // 0 = master
     LevelMeter meter;
     juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
-    juce::String name, dbText;
+    juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+    juce::String name, dbText, panText { "C" };
+    juce::Rectangle<int> panTextArea;
     juce::Colour colour;
     bool selected = false;
 };
@@ -121,7 +182,6 @@ MixerView::MixerView (AudioEngine& e, Selection& s) : engine (e), selection (s)
 {
     setTitle ("Mixer");
     masterStrip = std::make_unique<Strip> (engine, selection, 0);
-    masterStrip->setMasterLabel();
     stripHolder.addAndMakeVisible (*masterStrip);
 
     viewport.setViewedComponent (&stripHolder, false);
@@ -153,6 +213,7 @@ void MixerView::refresh()
     }
 
     strips = std::move (next);
+    masterStrip->updateMaster (engine.getTracks().getMasterVolume(), engine.getTracks().getMasterVolumeDb());
     layoutStrips();
 }
 
@@ -179,7 +240,7 @@ void MixerView::layoutStrips()
     }
 
     x += stripGap;
-    masterStrip->setBounds (x, 0, stripWidth - 20, h);
+    masterStrip->setBounds (x, 0, stripWidth, h);
     x += stripWidth;
 
     stripHolder.setSize (juce::jmax (x, viewport.getMaximumVisibleWidth()), h);

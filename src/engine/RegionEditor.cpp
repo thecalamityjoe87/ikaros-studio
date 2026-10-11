@@ -1,0 +1,553 @@
+#include "engine/RegionEditor.h"
+#include "engine/AudioEngine.h"
+#include "engine/TrackHelpers.h"
+#include <algorithm>
+
+namespace te = tracktion;
+
+namespace ikaros
+{
+
+using namespace detail;
+
+//==============================================================================
+RegionEditor::RegionEditor (AudioEngine& o, CreateAudioTrackFn createTrack)
+    : owner (o), createAudioTrack (std::move (createTrack))
+{
+}
+
+void RegionEditor::sessionChanged()
+{
+    clipboard.clear();   // copied regions can refer to the old session's files
+    waveforms.clear();
+}
+
+//==============================================================================
+// Region helpers
+static bool isAudioRegion (te::Clip& clip)
+{
+    return dynamic_cast<te::WaveAudioClip*> (&clip) != nullptr;
+}
+
+// MIDI regions belong on instrument tracks, audio regions on audio tracks.
+static bool fitsOnTrack (te::Clip& clip, te::AudioTrack& track)
+{
+    return isAudioRegion (clip) == isAudioTrack (track);
+}
+
+// How far a region's edges can be dragged out (see RegionInfo).
+static void findTrimLimits (te::Clip& clip, double& minStartBeat, double& maxEndBeat)
+{
+    minStartBeat = 0.0;
+    maxEndBeat = std::numeric_limits<double>::max();
+
+    if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
+    {
+        // The recording begins at the clip's content start and lasts as long as the file.
+        auto pos = clip.getPosition();
+        auto contentStart = pos.time.getStart() - pos.offset;
+        auto sourceLength = wave->getSourceLength();
+
+        minStartBeat = juce::jmax (0.0, timeToBeat (clip.edit, contentStart));
+        maxEndBeat = sourceLength > te::TimeDuration() ? timeToBeat (clip.edit, contentStart + sourceLength)
+                                                       : clip.getEndBeat().inBeats();
+    }
+}
+
+// The region that was just placed wins: cut away the parts of other regions on
+// its track that it now covers. `placed` lists every region placed in the same
+// step, so a group that was moved together doesn't cut itself.
+static void clearSpaceFor (te::Clip& clip, const std::vector<te::Clip*>& placed)
+{
+    auto* track = clip.getClipTrack();
+
+    if (track == nullptr)
+        return;
+
+    auto range = clip.getEditTimeRange();
+    std::vector<te::Clip*> covered;
+
+    // Collect first: cutting adds and removes clips in the list we'd be looping over.
+    for (auto* other : track->getClips())
+        if (other != &clip
+             && std::find (placed.begin(), placed.end(), other) == placed.end()
+             && other->getEditTimeRange().overlaps (range))
+            covered.push_back (other);
+
+    for (auto* other : covered)
+        te::deleteRegionOfClip (*other, range);
+}
+
+static void clearSpaceForAll (const std::vector<te::Clip*>& placed)
+{
+    for (auto* clip : placed)
+        clearSpaceFor (*clip, placed);
+}
+
+static std::vector<RegionId> idsOf (const std::vector<te::Clip*>& clips)
+{
+    std::vector<RegionId> ids;
+
+    for (auto* clip : clips)
+        ids.push_back (clip->itemID.getRawID());
+
+    return ids;
+}
+
+static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
+{
+    RegionInfo r;
+    r.id = clip.itemID.getRawID();
+    r.name = clip.getName();
+    r.startBeat = clip.getStartBeat().inBeats();
+    r.lengthBeats = clip.getLengthInBeats().inBeats();
+    findTrimLimits (clip, r.minStartBeat, r.maxEndBeat);
+
+    if (auto* track = clip.getClipTrack())
+        r.trackId = track->itemID.getRawID();
+
+    if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
+    {
+        r.isMidi = true;
+        auto contentOffset = contentOffsetBeats (clip);
+
+        for (auto* n : midi->getSequence().getNotes())
+            r.notes.push_back ({ n->getNoteNumber(),
+                                 n->getStartBeat().inBeats() + contentOffset,
+                                 n->getLengthBeats().inBeats(),
+                                 n->getVelocity() });
+    }
+    else
+    {
+        r.isMidi = false;
+
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
+            r.peaks = waveforms.computePeaks (*wave, 256);
+    }
+
+    return r;
+}
+
+std::vector<RegionInfo> RegionEditor::getRegions (TrackId id) const
+{
+    std::vector<RegionInfo> result;
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* clip : t->getClips())
+            result.push_back (makeRegionInfo (*clip, waveforms));
+
+    return result;
+}
+
+std::optional<RegionInfo> RegionEditor::getRegion (RegionId id) const
+{
+    if (auto* clip = findClip (owner.getEdit(), id))
+        return makeRegionInfo (*clip, waveforms);
+
+    return std::nullopt;
+}
+
+RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
+{
+    auto* edit = owner.getEdit();
+    auto* track = findTrack (edit, id);
+
+    if (track == nullptr || isAudioTrack (*track))
+        return 0;   // MIDI regions only go on instrument tracks
+
+    const double bpb = owner.beatsPerBar();
+    const double start = std::floor (juce::jmax (0.0, startBeat) / bpb) * bpb;
+    double length = bpb * 4.0;
+
+    // Don't stack regions on top of each other: shorten the new one to end at
+    // the next region, and give up if there's less than a bar of space.
+    for (auto* clip : track->getClips())
+    {
+        auto cs = clip->getStartBeat().inBeats();
+        auto ce = cs + clip->getLengthInBeats().inBeats();
+
+        if (start >= cs && start < ce)
+            return 0;
+
+        if (cs > start)
+            length = juce::jmin (length, cs - start);
+    }
+
+    if (length < bpb)
+        return 0;
+
+    owner.beginUndoStep ("Add Region");
+
+    auto& ts = edit->tempoSequence;
+    te::TimeRange range (ts.toTime (te::BeatPosition::fromBeats (start)),
+                         ts.toTime (te::BeatPosition::fromBeats (start + length)));
+
+    auto* clip = dynamic_cast<te::MidiClip*> (track->insertNewClip (te::TrackItem::Type::midi, "Chords", range, nullptr));
+
+    if (clip == nullptr)
+        return 0;
+
+    // I – V – vi – IV in C major: one chord per bar, played on beats 1 and 3,
+    // with the root held in the bass.
+    struct Chord { int bass; std::array<int, 3> notes; };
+    const std::array<Chord, 4> progression {{
+        { 48, { 60, 64, 67 } },   // C
+        { 43, { 59, 62, 67 } },   // G
+        { 45, { 60, 64, 69 } },   // Am
+        { 41, { 60, 65, 69 } },   // F
+    }};
+
+    auto& seq = clip->getSequence();
+    auto* um = &edit->getUndoManager();
+    const int numBars = (int) std::round (length / bpb);
+
+    for (int bar = 0; bar < numBars; ++bar)
+    {
+        auto& chord = progression[(size_t) bar % progression.size()];
+        const double barStart = bar * bpb;
+        const double half = bpb / 2.0;
+
+        seq.addNote (chord.bass, te::BeatPosition::fromBeats (barStart),
+                     te::BeatDuration::fromBeats (bpb - 0.1), 90, 0, um);
+
+        for (double hit : { 0.0, half })
+            for (int n : chord.notes)
+                seq.addNote (n, te::BeatPosition::fromBeats (barStart + hit),
+                             te::BeatDuration::fromBeats (half - 0.15), hit == 0.0 ? 92 : 76, 0, um);
+    }
+
+    return clip->itemID.getRawID();
+}
+
+void RegionEditor::deleteRegion (RegionId id)
+{
+    deleteRegions ({ id });
+}
+
+void RegionEditor::deleteRegions (const std::vector<RegionId>& ids)
+{
+    // Clip::Ptr is ref-counted: it keeps each clip alive while it's removed.
+    std::vector<te::Clip::Ptr> clips;
+
+    for (auto id : ids)
+        if (auto* clip = findClip (owner.getEdit(), id))
+            clips.push_back (clip);
+
+    if (clips.empty())
+        return;
+
+    owner.beginUndoStep (clips.size() == 1 ? "Delete Region" : "Delete Regions");
+
+    for (auto& clip : clips)
+        clip->removeFromParent();
+}
+
+//==============================================================================
+// Region editing
+void RegionEditor::moveRegions (const std::vector<RegionPlacement>& placements)
+{
+    auto* edit = owner.getEdit();
+
+    // Check everything first, so a bad placement cancels the whole move
+    // instead of leaving it half done.
+    struct Move { te::Clip* clip; te::AudioTrack* track; te::TimePosition start; };
+    std::vector<Move> moves;
+
+    for (auto& p : placements)
+    {
+        auto* clip = findClip (edit, p.id);
+        auto* track = findTrack (edit, p.track);
+
+        if (clip == nullptr || track == nullptr || ! fitsOnTrack (*clip, *track))
+            return;
+
+        moves.push_back ({ clip, track, beatToTime (*edit, juce::jmax (0.0, p.startBeat)) });
+    }
+
+    if (moves.empty())
+        return;
+
+    owner.beginUndoStep (moves.size() == 1 ? "Move Region" : "Move Regions");
+    std::vector<te::Clip*> moved;
+
+    for (auto& m : moves)
+    {
+        if (m.clip->getClipTrack() != m.track)
+            m.clip->moveTo (*m.track);
+
+        // false, true = keep the content's offset and the region's length.
+        m.clip->setStart (m.start, false, true);
+        moved.push_back (m.clip);
+    }
+
+    clearSpaceForAll (moved);
+}
+
+void RegionEditor::trimRegion (RegionId id, double newStart, double newEnd)
+{
+    auto* edit = owner.getEdit();
+    auto* clip = findClip (edit, id);
+
+    if (clip == nullptr)
+        return;
+
+    double minStart = 0.0, maxEnd = 0.0;
+    findTrimLimits (*clip, minStart, maxEnd);
+    newStart = juce::jmax (newStart, minStart);
+    newEnd = juce::jmin (newEnd, maxEnd);
+
+    const double oldStart = clip->getStartBeat().inBeats();
+    const double oldEnd = clip->getEndBeat().inBeats();
+
+    if (newEnd - newStart < minRegionBeats || (newStart == oldStart && newEnd == oldEnd))
+        return;
+
+    owner.beginUndoStep ("Trim Region");
+    auto* um = &edit->getUndoManager();
+
+    if (newStart != oldStart)
+    {
+        auto* midi = dynamic_cast<te::MidiClip*> (clip);
+        const double contentStart = clip->getContentStartBeat().inBeats();
+
+        if (midi != nullptr && newStart < contentStart)
+        {
+            // Tracktion's content offset can't go below zero, so a MIDI region
+            // can't simply grow past the start of its content. Instead, start
+            // the content at the new region start and shift the notes later by
+            // the same amount: on the timeline they stay exactly where they were.
+            midi->getSequence().moveAllBeatPositions (te::BeatDuration::fromBeats (contentStart - newStart), um);
+            clip->setPosition ({ { beatToTime (*edit, newStart), clip->getPosition().time.getEnd() }, {} });
+        }
+        else
+        {
+            // true = "preserve sync": the content stays put on the timeline,
+            // so trimming hides or reveals part of it rather than sliding it.
+            clip->setStart (beatToTime (*edit, newStart), true, false);
+        }
+    }
+
+    if (newEnd != oldEnd)
+        clip->setEnd (beatToTime (*edit, newEnd), true);
+
+    clearSpaceFor (*clip, { clip });
+}
+
+std::vector<RegionId> RegionEditor::splitRegions (const std::vector<RegionId>& ids, double beat)
+{
+    auto* edit = owner.getEdit();
+    std::vector<te::Clip*> toSplit;
+
+    // Only regions the split point is properly inside (not at an edge).
+    for (auto id : ids)
+        if (auto* clip = findClip (edit, id))
+            if (beat > clip->getStartBeat().inBeats() + 0.01 && beat < clip->getEndBeat().inBeats() - 0.01)
+                toSplit.push_back (clip);
+
+    if (toSplit.empty())
+        return {};
+
+    owner.beginUndoStep (toSplit.size() == 1 ? "Split Region" : "Split Regions");
+    std::vector<te::Clip*> rightHalves;
+
+    for (auto* clip : toSplit)
+        if (auto* track = clip->getClipTrack())
+            if (auto* right = track->splitClip (*clip, beatToTime (*edit, beat)))
+                rightHalves.push_back (right);
+
+    return idsOf (rightHalves);
+}
+
+std::vector<RegionId> RegionEditor::duplicateRegions (const std::vector<RegionId>& ids)
+{
+    auto* edit = owner.getEdit();
+    std::vector<te::Clip*> originals;
+    double first = std::numeric_limits<double>::max(), last = 0.0;
+
+    for (auto id : ids)
+    {
+        if (auto* clip = findClip (edit, id))
+        {
+            originals.push_back (clip);
+            first = juce::jmin (first, clip->getStartBeat().inBeats());
+            last = juce::jmax (last, clip->getEndBeat().inBeats());
+        }
+    }
+
+    if (originals.empty())
+        return {};
+
+    owner.beginUndoStep (originals.size() == 1 ? "Duplicate Region" : "Duplicate Regions");
+
+    // The copies keep their spacing and start where the last original ends.
+    const double shift = last - first;
+    std::vector<te::Clip*> copies;
+
+    for (auto* clip : originals)
+    {
+        if (auto copy = te::duplicateClip (*clip))
+        {
+            copy->setStart (beatToTime (*edit, clip->getStartBeat().inBeats() + shift), false, true);
+            copies.push_back (copy.get());
+        }
+    }
+
+    clearSpaceForAll (copies);
+    return idsOf (copies);
+}
+
+void RegionEditor::renameRegion (RegionId id, const juce::String& newName)
+{
+    auto name = newName.trim();
+
+    if (auto* clip = findClip (owner.getEdit(), id))
+    {
+        if (name.isNotEmpty() && name != clip->getName())
+        {
+            owner.beginUndoStep ("Rename Region");
+            clip->setName (name);
+        }
+    }
+}
+
+void RegionEditor::copyRegions (const std::vector<RegionId>& ids)
+{
+    auto* edit = owner.getEdit();
+    auto tracks = te::getAudioTracks (*edit);
+
+    struct Found { te::Clip* clip; te::AudioTrack* track; };
+    std::vector<Found> found;
+    int topTrack = std::numeric_limits<int>::max();
+    double first = std::numeric_limits<double>::max();
+
+    for (auto id : ids)
+    {
+        if (auto* clip = findClip (edit, id))
+        {
+            if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getClipTrack()))
+            {
+                found.push_back ({ clip, track });
+                topTrack = juce::jmin (topTrack, tracks.indexOf (track));
+                first = juce::jmin (first, clip->getStartBeat().inBeats());
+            }
+        }
+    }
+
+    if (found.empty())
+        return;
+
+    clipboard.clear();
+
+    for (auto& f : found)
+    {
+        f.clip->flushStateToValueTree();   // make sure the state holds the latest settings
+        clipboard.push_back ({ f.clip->state.createCopy(),
+                                     f.track->itemID.getRawID(),
+                                     tracks.indexOf (f.track) - topTrack,
+                                     f.clip->getStartBeat().inBeats() - first,
+                                     isAudioRegion (*f.clip) });
+    }
+}
+
+bool RegionEditor::canPaste() const
+{
+    return ! clipboard.empty();
+}
+
+std::vector<RegionId> RegionEditor::pasteRegions (TrackId targetId, double beat)
+{
+    auto* edit = owner.getEdit();
+
+    if (clipboard.empty())
+        return {};
+
+    auto tracks = te::getAudioTracks (*edit);
+    const int targetIndex = tracks.indexOf (findTrack (edit, targetId));
+
+    owner.beginUndoStep ("Paste");
+    std::vector<te::Clip*> pasted;
+
+    for (auto& copied : clipboard)
+    {
+        // Keep the copied layout, starting from the target track (juce::Array's
+        // [] gives nullptr past the end)...
+        auto* track = targetIndex >= 0 ? tracks[targetIndex + copied.trackOffset] : nullptr;
+
+        // ...unless that's the wrong kind of track: then back where it came from.
+        if (track == nullptr || isAudioTrack (*track) != copied.isAudio)
+            track = findTrack (edit, copied.sourceTrack);
+
+        if (track == nullptr || isAudioTrack (*track) != copied.isAudio)
+            continue;
+
+        // Every paste needs fresh IDs for the clip and anything inside it.
+        auto state = copied.state.createCopy();
+        te::EditItemID::remapIDs (state, nullptr, *edit);
+
+        if (auto* clip = te::insertClipCopy (*track, te::ClipCopy::fromClipboardState (state, false)))
+        {
+            clip->setStart (beatToTime (*edit, juce::jmax (0.0, beat) + copied.beatOffset), false, true);
+            pasted.push_back (clip);
+        }
+    }
+
+    clearSpaceForAll (pasted);
+    return idsOf (pasted);
+}
+
+//==============================================================================
+// Audio files
+bool RegionEditor::isSupportedAudioFile (const juce::File& file) const
+{
+    auto& formats = owner.getTeEngine().getAudioFileFormatManager().readFormatManager;
+    return formats.findFormatForFileExtension (file.getFileExtension()) != nullptr;
+}
+
+std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juce::StringArray& paths, double beat)
+{
+    auto* edit = owner.getEdit();
+    auto& engine = owner.getTeEngine();
+    std::vector<juce::File> files;
+
+    for (auto& path : paths)
+    {
+        juce::File file (path);
+
+        // te::AudioFile reads the header, so this also skips broken files.
+        if (file.existsAsFile() && isSupportedAudioFile (file) && te::AudioFile (engine, file).isValid())
+            files.push_back (file);
+    }
+
+    if (files.empty())
+        return {};
+
+    owner.beginUndoStep (files.size() == 1 ? "Import Audio File" : "Import Audio Files");
+
+    auto* track = findTrack (edit, trackId);
+
+    if (track == nullptr || ! isAudioTrack (*track))
+        track = findTrack (edit, createAudioTrack (files.front().getFileNameWithoutExtension()));
+
+    if (track == nullptr)
+        return {};
+
+    std::vector<te::Clip*> added;
+    auto start = beatToTime (*edit, juce::jmax (0.0, beat));
+
+    for (auto& file : files)
+    {
+        const auto length = te::TimeDuration::fromSeconds (te::AudioFile (engine, file).getLength());
+
+        // ClipPosition = { time range on the timeline, offset into the file }.
+        if (auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file, { { start, start + length }, {} }, false))
+        {
+            added.push_back (clip.get());
+            start = start + length;
+        }
+    }
+
+    clearSpaceForAll (added);
+    return idsOf (added);
+}
+
+} // namespace ikaros

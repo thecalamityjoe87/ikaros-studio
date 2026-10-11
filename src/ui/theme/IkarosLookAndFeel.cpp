@@ -192,8 +192,13 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     g.setColour (colour::controlFill);
     g.strokePath (track, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
 
+    // A "bipolar" knob (e.g. pan) draws its arc out from 12 o'clock instead of
+    // from the start. Set with slider.getProperties().set ("bipolar", true).
+    const auto arcStart = s.getProperties()["bipolar"] ? (startAngle + endAngle) * 0.5f : startAngle;
+
     juce::Path value;
-    value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, juce::jmax (startAngle + 0.001f, valueAngle), true);
+    value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
+                         juce::jmin (arcStart, valueAngle), juce::jmax (arcStart + 0.001f, valueAngle), true);
     g.setColour (s.findColour (knobArcColourId));
     g.strokePath (value, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
 

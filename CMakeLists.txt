@@ -83,7 +83,13 @@ set(IKAROS_APP_SOURCES
 set(IKAROS_ENGINE_SOURCES
     src/engine/EngineTypes.h
     src/engine/AudioEngine.h        src/engine/AudioEngine.cpp
-    src/engine/TrackController.h    src/engine/TrackController.cpp)
+    src/engine/TrackController.h    src/engine/TrackController.cpp
+    src/engine/TrackHelpers.h
+    src/engine/InputRouter.h        src/engine/InputRouter.cpp
+    src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
+    src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
+    src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
+    src/engine/EffectsController.h  src/engine/EffectsController.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES

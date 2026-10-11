@@ -9,6 +9,7 @@
 
 #include <juce_graphics/juce_graphics.h>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace ikaros
@@ -24,23 +25,49 @@ using PluginId = std::uint64_t;
 // guitar or other audio input.
 enum class TrackKind { instrument, audio };
 
+// Notes have no IDs of their own. A note is identified by its index in
+// RegionInfo::notes, which stays valid until the region is next edited, so
+// the piano roll re-reads the region after every change.
 struct NoteInfo
 {
     int pitch = 60;            // MIDI note number
     double startBeat = 0.0;    // relative to the start of the region
     double lengthBeats = 1.0;
-    int velocity = 100;
+    int velocity = 100;        // 1..127
 };
 
 struct RegionInfo
 {
     RegionId id = 0;
+    TrackId trackId = 0;
     juce::String name;
     double startBeat = 0.0;    // position on the timeline, in beats (quarter notes)
     double lengthBeats = 0.0;
     bool isMidi = true;
     std::vector<NoteInfo> notes;   // MIDI regions only
     std::vector<float> peaks;      // audio regions only: waveform, 0..1 per column across the region
+
+    // How far the edges can be dragged out. An audio region can't grow past
+    // the start or end of its recording; a MIDI region can grow freely.
+    double minStartBeat = 0.0;
+    double maxEndBeat = std::numeric_limits<double>::max();
+
+    double getEndBeat() const noexcept    { return startBeat + lengthBeats; }
+};
+
+// Where a region should end up after a move: a track and a start beat.
+struct RegionPlacement
+{
+    RegionId id = 0;
+    TrackId track = 0;
+    double startBeat = 0.0;
+};
+
+// A changed note for TrackController::changeNotes.
+struct NoteChange
+{
+    int index = 0;             // which note (its index in RegionInfo::notes)
+    NoteInfo note;             // its new pitch, position, length and velocity
 };
 
 struct TrackInfo
@@ -58,6 +85,7 @@ struct TrackInfo
     bool armed = false;            // record-enabled
     float volume = 0.75f;          // fader position 0..1 (Tracktion's slider curve)
     float volumeDb = 0.0f;
+    float pan = 0.0f;              // -1 (left) .. 0 (centre) .. 1 (right)
 };
 
 // Stereo peak level in decibels.
@@ -129,6 +157,8 @@ struct TransportState
     double recordStartBeats = 0.0; // where the current take started
     bool looping = false;
     bool metronome = false;
+    bool countIn = false;          // one bar of clicks before recording starts
+    bool countingIn = false;       // recording has started but the count-in bar is still playing
     double positionBeats = 0.0;
     double positionSeconds = 0.0;
     int bar = 1;                   // 1-based
@@ -136,9 +166,18 @@ struct TransportState
     double bpm = 120.0;
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
+    int keyRoot = 0;               // 0 = C, 1 = C#/Db ... 11 = B
+    bool keyMinor = false;
     double loopStartBeats = 0.0;
     double loopEndBeats = 0.0;
 };
+
+/** A key's name as the app shows it, e.g. "Eb maj" or "F# min". */
+inline juce::String getKeyName (int root, bool minor)
+{
+    static const char* const names[] { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
+    return juce::String (names[((root % 12) + 12) % 12]) + (minor ? " min" : " maj");
+}
 
 struct SystemStats
 {

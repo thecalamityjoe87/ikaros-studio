@@ -44,6 +44,14 @@ public:
     bool saveSession();                         // returns false if the session is untitled
     bool saveSessionAs (const juce::File&);
 
+    /** Where a saved session keeps its recordings: a folder next to the
+        session file, e.g. "My Song Recordings" beside "My Song.tracktionedit". */
+    static juce::File getRecordingsFolderFor (const juce::File& sessionFile);
+
+    /** Where new recordings are written: Documents/Ikaros Studio/Recordings.
+        Saving copies a session's recordings into its own folder. */
+    static juce::File getRecordingsFolder();
+
     bool isUntitled() const;
     juce::File getSessionFile() const;
     juce::String getSessionName() const;
@@ -56,17 +64,24 @@ public:
     void togglePlay();
 
     /** Starts recording onto the armed track (arming the selected track for
-        this take if none is armed), or stops recording. Recorded MIDI becomes
-        a region when recording stops.
-        TODO(milestone-2): count-in, audio recording on audio tracks. */
+        this take if none is armed), or stops recording. The take becomes a
+        region when recording stops. With the count-in on, one bar of clicks
+        plays first. */
     void toggleRecord();
     void goToStart();
     void setPositionBeats (double beats);
     void setLooping (bool shouldLoop);
     void setLoopRangeBeats (double startBeat, double endBeat);
     void setMetronomeEnabled (bool);
+
+    /** One bar of metronome clicks before recording starts. This is an app
+        preference (Tracktion stores it in its settings), not part of a session. */
+    void setCountInEnabled (bool);
     void setBpm (double bpm);
     void setTimeSignature (int numerator, int denominator);
+
+    /** The session's key: root 0 = C ... 11 = B, major or minor. */
+    void setKey (int root, bool minor);
 
     TransportState getTransportState() const;
     juce::String getKeyName() const;
@@ -99,12 +114,17 @@ public:
     TrackController& getTracks() noexcept       { return *trackController; }
 
 private:
-    friend class TrackController;               // needs the Edit to do its job
+    // The track-level controllers need the Edit (and Tracktion's Engine) to do their job.
+    friend class TrackController;
+    friend class InputRouter;
+    friend class RegionEditor;
+    friend class NoteEditor;
+    friend class EffectsController;
 
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
 
-    void loadEdit (std::unique_ptr<tracktion::Edit>, const juce::File&, bool untitled);
+    void loadEdit (const juce::ValueTree& editState, const juce::File&, bool untitled);
     void notifyModelChanged();
 
     struct Impl;                                // Tracktion-typed members live in the .cpp

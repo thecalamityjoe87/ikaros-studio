@@ -73,7 +73,7 @@ private:
 
     TrackInspector inspector;
     std::unique_ptr<SoundPage> soundPage;
-    PianoRoll pianoRoll;
+    PianoRoll pianoRoll { engine };
     MixerView mixer;
 
     // Effect settings, shown in place of the tab pages while open.

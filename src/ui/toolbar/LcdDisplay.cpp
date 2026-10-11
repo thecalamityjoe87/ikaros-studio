@@ -40,14 +40,32 @@ LcdDisplay::LcdDisplay()
     timeSigButton.setCornerRadius (4.0f);
     timeSigButton.onClick = [this] { showTimeSignatureMenu(); };
     addAndMakeVisible (timeSigButton);
+
+    keyButton.setColours ({ juce::Colours::transparentBlack, colour::text,
+                            juce::Colours::transparentBlack, colour::text });
+    keyButton.setFont (fonts::monoBold (15.0f));
+    keyButton.setText (keyText);
+    keyButton.setCornerRadius (4.0f);
+    keyButton.setTooltip ("Key (click to change)");
+    keyButton.onClick = [this] { showKeyMenu(); };
+    addAndMakeVisible (keyButton);
 }
 
 void LcdDisplay::setState (const TransportState& s, const juce::String& key)
 {
-    auto pos = juce::String (s.bar).paddedLeft ('0', 2) + "." + juce::String (s.beat);
-    bool changed = pos != positionText || key != keyText;
+    // During a count-in, count down the beats left before recording starts: -4, -3...
+    auto pos = s.countingIn ? "-" + juce::String ((int) std::ceil (s.recordStartBeats - s.positionBeats - 0.001))
+                            : juce::String (s.bar).paddedLeft ('0', 2) + "." + juce::String (s.beat);
+    bool changed = pos != positionText;
     positionText = pos;
-    keyText = key;
+    keyRoot = s.keyRoot;
+    keyMinor = s.keyMinor;
+
+    if (key != keyText)
+    {
+        keyText = key;
+        keyButton.setText (key);
+    }
 
     if (! juce::approximatelyEqual (s.bpm, bpm))
     {
@@ -91,9 +109,6 @@ void LcdDisplay::paint (juce::Graphics& g)
     paintCaption (g, bpmArea, "BPM");
     paintCaption (g, timeArea, "TIME");
 
-    g.setColour (colour::text);
-    g.setFont (fonts::monoBold (15.0f));
-    g.drawText (keyText, keyArea.withTrimmedBottom (12), juce::Justification::bottomLeft);
     paintCaption (g, keyArea, "KEY");
 }
 
@@ -109,6 +124,10 @@ void LcdDisplay::resized()
 
     bpmLabel.setBounds (bpmArea.withTrimmedBottom (12).withTrimmedTop (4));
     timeSigButton.setBounds (timeArea.withTrimmedBottom (12).withTrimmedTop (4).withWidth (40));
+
+    // The button's text is centred, so size it to the text to keep it lined
+    // up on the left with the KEY caption below.
+    keyButton.setBounds (keyArea.withTrimmedBottom (12).withTrimmedTop (4).withWidth (64).translated (-5, 0));
 }
 
 void LcdDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -138,6 +157,34 @@ void LcdDisplay::showTimeSignatureMenu()
                              safeThis->onTimeSignatureChanged (sigs[(size_t) result - 1].first,
                                                                sigs[(size_t) result - 1].second);
                      });
+}
+
+void LcdDisplay::showKeyMenu()
+{
+    // Two columns: major keys, then minor keys.
+    juce::PopupMenu m;
+
+    for (int minor = 0; minor < 2; ++minor)
+    {
+        if (minor == 1)
+            m.addColumnBreak();
+
+        m.addSectionHeader (minor == 1 ? "Minor" : "Major");
+
+        for (int root = 0; root < 12; ++root)
+        {
+            const bool isMinor = minor == 1;
+            m.addItem (juce::PopupMenu::Item (getKeyName (root, isMinor))
+                           .setTicked (root == keyRoot && isMinor == keyMinor)
+                           .setAction ([safeThis = juce::Component::SafePointer<LcdDisplay> (this), root, isMinor]
+                           {
+                               if (safeThis != nullptr && safeThis->onKeyChanged)
+                                   safeThis->onKeyChanged (root, isMinor);
+                           }));
+        }
+    }
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&keyButton));
 }
 
 } // namespace ikaros

@@ -55,7 +55,7 @@ private:
     MenuBar menuBar { &menuModel };
     Toolbar toolbar { engine, commands };
     LibrarySidebar library { engine, selection };
-    ArrangementView arrangement { engine, selection };
+    ArrangementView arrangement { engine, selection, commands };
     BottomPanel bottomPanel { engine, selection };
 
     juce::TooltipWindow tooltipWindow { this, 700 };
@@ -63,6 +63,11 @@ private:
     bool libraryVisible = true;
 
     void refreshAll();
+
+    /** Split works on the selected regions, or if none are selected, on the
+        selected track's regions. */
+    std::vector<RegionId> getRegionsToSplit() const;
+    bool canSplitAtPlayhead() const;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
