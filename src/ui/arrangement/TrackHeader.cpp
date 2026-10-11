@@ -38,7 +38,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     armButton.onClick = [this]
     {
         selection.selectTrack (info.id);
-        engine.getTracks().setArmed (info.id, ! info.armed);
+        engine.getTracks().inputs().setArmed (info.id, ! info.armed);
     };
     addAndMakeVisible (armButton);
 
@@ -47,7 +47,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
     monitorButton.setCornerRadius (size::radiusSmall);
     monitorButton.setIconSize (14.0f);
-    monitorButton.onClick = [this] { engine.getTracks().setMonitoring (info.id, ! info.monitoring); };
+    monitorButton.onClick = [this] { engine.getTracks().inputs().setMonitoring (info.id, ! info.monitoring); };
     addChildComponent (monitorButton);
 
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };

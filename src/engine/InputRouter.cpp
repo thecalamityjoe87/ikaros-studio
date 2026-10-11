@@ -162,24 +162,12 @@ void InputRouter::routeAudioInputs()
     auto* edit = owner.getEdit();
     auto& dm = owner.getTeEngine().getDeviceManager();
 
-    // Microphones and guitars are mono, so offer each input channel on its
-    // own ("Input 1", "Input 2") rather than Tracktion's default stereo pairs.
-    // TODO: offer stereo pairs for stereo sources (keyboards, mixers).
+    // The inputs themselves (each channel on its own, plus stereo pairs) are
+    // laid out by IkarosEngineBehaviour::describeWaveDevices.
     bool devicesChanged = false;
 
-    for (auto* in : dm.getWaveInputDevices())
-    {
-        if (in->getChannels().getNumChannels() != 1)
-        {
-            dm.setAllWaveInputsToNumChannels (1);
-            devicesChanged = true;
-            break;
-        }
-    }
-
-    // Tracktion makes an input for every channel the driver advertises (with
-    // PipeWire that can be dozens), but only the channels the audio device
-    // actually opened carry audio. Switch the others off.
+    // Only the channels the audio device actually opened carry audio (with
+    // PipeWire the driver can advertise dozens). Switch the others off.
     int numOpenInputs = 0;
 
     if (auto* device = dm.deviceManager.getCurrentAudioDevice())
@@ -276,12 +264,30 @@ std::vector<AudioInput> InputRouter::getAudioInputs() const
     auto& dm = owner.getTeEngine().getDeviceManager();
 
     // Inputs for channels the audio device has open (routeAudioInputs()
-    // switches the rest off).
-    int index = 0;
+    // switches the rest off), named by channel: "Input 1", "Input 1+2 (stereo)".
+    // Mono ones first, then the pairs.
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        for (auto* in : dm.getWaveInputDevices())
+        {
+            if (in->getDeviceType() != te::InputDevice::waveDevice || ! in->isEnabled())
+                continue;
 
-    for (auto* in : dm.getWaveInputDevices())
-        if (in->getDeviceType() == te::InputDevice::waveDevice && in->isEnabled())
-            result.push_back ({ in->getDeviceID(), "Input " + juce::String (++index) });
+            auto& channels = in->getChannels();
+            const bool stereo = channels.getNumChannels() > 1;
+
+            if (stereo != (pass == 1))
+                continue;
+
+            juce::StringArray numbers;
+
+            for (auto& ci : channels)
+                numbers.add (juce::String (ci.indexInDevice + 1));
+
+            result.push_back ({ in->getDeviceID(),
+                                "Input " + numbers.joinIntoString ("+") + (stereo ? " (stereo)" : "") });
+        }
+    }
 
     return result;
 }

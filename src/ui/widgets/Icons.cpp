@@ -77,6 +77,11 @@ namespace
             case Icon::headphones:     return "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z";
             case Icon::waveform:       return "M4 10v4 M8 7v10 M12 4v16 M16 7v10 M20 10v4";
             case Icon::mute:           return "M3 9h4l5-4v14l-5-4H3z M16 9l5 6 M21 9l-5 6";   // speaker with a cross
+            case Icon::plugin:         return "M9 3v5 M15 3v5 M6 8h12v4a6 6 0 0 1-12 0z M12 18v3";   // a mains plug
+            case Icon::folder:         return "M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z";
+            case Icon::stop:           return "M7 7h10v10H7z";
+            case Icon::warning:        return "M12 3.5l9.5 17h-19z M12 10v5 M12 18h.01";
+            case Icon::openWindow:     return "M14 4h6v6 M20 4l-9 9 M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5";   // box with an arrow out
         }
 
         return "";
@@ -98,7 +103,7 @@ const juce::Path& get (Icon icon)
 
 bool isFilled (Icon icon)
 {
-    return icon == Icon::play || icon == Icon::pause || icon == Icon::record;
+    return icon == Icon::play || icon == Icon::pause || icon == Icon::record || icon == Icon::stop;
 }
 
 void draw (juce::Graphics& g, Icon icon, juce::Rectangle<float> area, juce::Colour colour,
@@ -129,6 +134,7 @@ Icon forCategory (const juce::String& c)
     if (c == "Strings")     return Icon::strings;
     if (c == "Loops")       return Icon::loops;
     if (c == "Audio Files") return Icon::mic;
+    if (c == "Plug-ins")    return Icon::plugin;
     return Icon::synths;
 }
 

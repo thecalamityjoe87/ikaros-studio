@@ -152,7 +152,7 @@ void PianoRoll::rereadRegion()
     // Called right after our own edits, so the notes on screen are always the
     // engine's (and the index-based selection matches them).
     if (region.has_value())
-        if (auto fresh = engine.getTracks().getRegion (region->id))
+        if (auto fresh = engine.getTracks().regions().getRegion (region->id))
             region = std::move (fresh);
 
     clampView();
@@ -449,7 +449,7 @@ void PianoRoll::applyChanges (const std::vector<NoteChange>& changes, const juce
 
     // Changing notes can renumber them (they're kept in time order); the map
     // says where each one went, so the same notes stay selected.
-    auto map = engine.getTracks().changeNotes (region->id, changes, undoName);
+    auto map = engine.getTracks().notes().changeNotes (region->id, changes, undoName);
     std::vector<int> moved;
 
     for (auto index : selected)
@@ -465,7 +465,7 @@ void PianoRoll::deleteSelected()
 {
     if (region.has_value() && ! selected.empty())
     {
-        engine.getTracks().deleteNotes (region->id, selected);
+        engine.getTracks().notes().deleteNotes (region->id, selected);
         selected.clear();
         rereadRegion();
     }
@@ -477,7 +477,7 @@ void PianoRoll::quantize()
         return;
 
     // With the grid off, quantize to 1/16 notes.
-    auto map = engine.getTracks().quantiseNotes (region->id, selected, gridBeats() > 0.0 ? gridBeats() : 0.25);
+    auto map = engine.getTracks().notes().quantiseNotes (region->id, selected, gridBeats() > 0.0 ? gridBeats() : 0.25);
     std::vector<int> moved;
 
     for (auto index : selected)
@@ -547,13 +547,13 @@ void PianoRoll::startPreview (int pitch, int velocity)
         return;
 
     previewNote = pitch;
-    engine.getTracks().noteOn (pitch, (float) velocity / 127.0f);
+    engine.getTracks().inputs().noteOn (pitch, (float) velocity / 127.0f);
 }
 
 void PianoRoll::stopPreview()
 {
     if (previewNote >= 0)
-        engine.getTracks().noteOff (std::exchange (previewNote, -1));
+        engine.getTracks().inputs().noteOff (std::exchange (previewNote, -1));
 }
 
 void PianoRoll::focusLost (FocusChangeType)
@@ -827,7 +827,7 @@ void PianoRoll::mouseUp (const juce::MouseEvent&)
     {
         case Gesture::Mode::draw:
         {
-            auto index = engine.getTracks().addNote (region->id, finished.newNote);
+            auto index = engine.getTracks().notes().addNote (region->id, finished.newNote);
             lastNoteLength = finished.newNote.lengthBeats;
             selected.clear();
             rereadRegion();

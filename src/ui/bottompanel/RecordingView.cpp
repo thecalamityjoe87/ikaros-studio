@@ -17,7 +17,7 @@ RecordingView::RecordingView (AudioEngine& e, Selection& s) : engine (e), select
         const auto index = inputBox.getSelectedItemIndex();
 
         if (juce::isPositiveAndBelow (index, (int) inputs.size()))
-            engine.getTracks().setTrackInput (trackId, inputs[(size_t) index].id);
+            engine.getTracks().inputs().setTrackInput (trackId, inputs[(size_t) index].id);
     };
     addChildComponent (inputBox);
 
@@ -27,7 +27,7 @@ RecordingView::RecordingView (AudioEngine& e, Selection& s) : engine (e), select
     monitorButton.setTooltip ("Hear the input through your speakers or headphones");
     monitorButton.onClick = [this]
     {
-        engine.getTracks().setMonitoring (trackId, ! monitorButton.getToggleState());
+        engine.getTracks().inputs().setMonitoring (trackId, ! monitorButton.getToggleState());
     };
     addChildComponent (monitorButton);
 
@@ -49,8 +49,8 @@ void RecordingView::refresh()
 
     if (isAudio)
     {
-        auto settings = tracks.getRecordingSettings (trackId);
-        inputs = tracks.getAudioInputs();
+        auto settings = tracks.inputs().getRecordingSettings (trackId);
+        inputs = tracks.inputs().getAudioInputs();
 
         inputBox.clear (juce::dontSendNotification);
 
@@ -83,7 +83,7 @@ void RecordingView::refresh()
 void RecordingView::updateMeter()
 {
     if (isAudio && isShowing())
-        meter.setLevel (engine.getTracks().getInputLevel (trackId));
+        meter.setLevel (engine.getTracks().inputs().getInputLevel (trackId));
 }
 
 int RecordingView::getIdealHeight() const

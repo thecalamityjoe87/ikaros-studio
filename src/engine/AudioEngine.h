@@ -15,6 +15,25 @@ namespace ikaros
 {
 
 class TrackController;
+class SoundLibrary;
+class PluginLibrary;
+class AudioPreview;
+
+//==============================================================================
+/** What the engine hands the UI when a third-party plug-in's window should
+    open. The UI puts `content` (the plug-in's own editor) in a window frame
+    and returns that window; the engine keeps it, and deletes it when the
+    plug-in goes away. */
+struct PluginWindowRequest
+{
+    std::unique_ptr<juce::Component> content;
+    juce::String title;                                     // e.g. "Ikaros Test Gain - Lead"
+    juce::Point<int> position;                              // where to put the window's top-left
+    std::function<void()> close;                            // call when the user closes the window
+    std::function<void (juce::Rectangle<int>)> moved;       // call when the user moves it (remembered for next time)
+};
+
+using PluginWindowFactory = std::function<std::unique_ptr<juce::Component> (PluginWindowRequest)>;
 
 //==============================================================================
 /**
@@ -32,7 +51,9 @@ class TrackController;
 class AudioEngine  : public juce::ChangeBroadcaster
 {
 public:
-    AudioEngine();
+    /** settingsName picks where Tracktion keeps its settings (devices, the
+        plug-in list...). Tests use their own, so they don't touch the app's. */
+    explicit AudioEngine (const juce::String& settingsName = "IkarosStudio");
     ~AudioEngine() override;
 
     //==============================================================================
@@ -113,6 +134,24 @@ public:
     //==============================================================================
     TrackController& getTracks() noexcept       { return *trackController; }
 
+    /** The library's sounds and loops. */
+    SoundLibrary& getSounds() noexcept          { return *sounds; }
+
+    /** Third-party plug-ins and the plug-in scan. */
+    PluginLibrary& getPlugins() noexcept        { return *plugins; }
+
+    /** Plays library files on their own, for previewing. */
+    AudioPreview& getPreview() noexcept         { return *preview; }
+
+    /** Sets how plug-in windows are framed (see PluginWindowRequest). Without
+        one, plug-in windows don't open. */
+    void setPluginWindowFactory (PluginWindowFactory);
+
+    /** Call first thing at startup. If this process was started to scan
+        plug-ins (see PluginScanner), it becomes the scan worker and this
+        returns true: then don't create the engine or any windows. */
+    static bool runPluginScanWorkerIfRequested (const juce::String& commandLine);
+
 private:
     // The track-level controllers need the Edit (and Tracktion's Engine) to do their job.
     friend class TrackController;
@@ -120,6 +159,8 @@ private:
     friend class RegionEditor;
     friend class NoteEditor;
     friend class EffectsController;
+    friend class SendBuses;
+    friend class PluginLibrary;
 
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
@@ -129,6 +170,12 @@ private:
 
     struct Impl;                                // Tracktion-typed members live in the .cpp
     std::unique_ptr<Impl> impl;
+
+    // Declared after impl, so they're destroyed before it (members are
+    // destroyed in reverse order), while Tracktion's Engine still exists.
+    std::unique_ptr<SoundLibrary> sounds;
+    std::unique_ptr<PluginLibrary> plugins;
+    std::unique_ptr<AudioPreview> preview;
     std::unique_ptr<TrackController> trackController;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)

@@ -12,10 +12,13 @@ namespace ikaros
     its chain of effects, in processing order (top to bottom).
 
       - the power button turns an effect on/off (bypass)
-      - clicking an effect opens its settings in the bottom panel's main area
+      - clicking a built-in effect opens its settings in the bottom panel's
+        main area; clicking a third-party plug-in opens its own window
+      - a third-party plug-in that isn't installed shows as a placeholder
+        (its settings are kept, so it works again once it's installed)
       - the ⋯ button offers Replace and Remove
       - drag an effect up/down to reorder the chain
-      - "+ Add effect" adds a built-in effect at the end
+      - "+ Add effect" adds a built-in or third-party effect at the end
 */
 class PluginChainView  : public juce::Component
 {
@@ -65,6 +68,7 @@ private:
     int dragFromIndex = -1, dropIndex = -1;
 
     juce::Rectangle<int> hintArea, instrumentLabelArea, instrumentArea, effectsLabelArea;
+    IconButton instrumentWindowButton { "Open plug-in window", Icon::openWindow };
 
     // Called by EffectRow
     void openEditor (int rowIndex);
@@ -73,7 +77,10 @@ private:
     void endDrag();
 
     void showAddMenu();
-    static juce::PopupMenu buildEffectMenu (std::function<void (const EffectType&)> onChosen);
+    juce::PopupMenu buildEffectMenu (std::function<void (const EffectType&)> onChosen) const;
+
+    /** Tooltip for a third-party plug-in that isn't installed. */
+    static juce::String describeMissing (const PluginSlot&);
 
     static constexpr int rowHeight = 34, rowGap = 4, labelHeight = 18;
 

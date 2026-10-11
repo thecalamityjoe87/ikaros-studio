@@ -1,0 +1,5 @@
+{
+  "name": "Ikaros Basics",
+  "description": "The sounds that come with Ikaros Studio.",
+  "credits": "Synthesised for Ikaros Studio by tools/generate_sounds.py. Same license as the app."
+}

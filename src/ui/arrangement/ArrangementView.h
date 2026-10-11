@@ -39,6 +39,7 @@ namespace ikaros
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
+                         public juce::DragAndDropTarget,
                          private juce::ScrollBar::Listener
 {
 public:
@@ -84,6 +85,13 @@ public:
     void fileDragMove (const juce::StringArray& files, int x, int y) override;
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
+
+    // DragAndDropTarget: loops and audio files dragged from the library.
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override;
+    void itemDragMove (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails&) override;
 
     /** Maps between beats and x-positions within a lane. */
     struct Geometry

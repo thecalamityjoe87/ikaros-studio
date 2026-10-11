@@ -28,13 +28,25 @@ public:
             knob->onDragStart = [this, knob] { engine.beginUndoStep (knob->getName()); };
             knob->onValueChange = [this, i] (float v)
             {
-                engine.getTracks().setSoundControl (selection.getTrack(), i, v);
+                engine.getTracks().effects().setSoundControl (selection.getTrack(), i, v);
                 refreshKnobText();
             };
             addAndMakeVisible (knob);
         }
 
         addAndMakeVisible (keyboard);
+
+        auto colours = IconButton::raisedColours();
+        colours.border = colour::border;
+        openWindowButton.setColours (colours);
+        openWindowButton.setFont (fonts::uiSemiBold (13.0f));
+        openWindowButton.setIconSize (16.0f);
+        openWindowButton.onClick = [this]
+        {
+            if (instrument.has_value())
+                engine.getTracks().effects().showPluginWindow (selection.getTrack(), instrument->id);
+        };
+        addChildComponent (openWindowButton);
     }
 
     void refresh (const std::optional<TrackInfo>& track, bool showDetails)
@@ -49,10 +61,18 @@ public:
         isAudioTrack = track.has_value() && track->kind == TrackKind::audio;
         keyboard.setVisible (! isAudioTrack);
 
-        for (auto* k : knobs)
-            k->setVisible (! isAudioTrack);
+        auto controls = tc.effects().getSoundControls (id);
+        instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
+        soundName = track.has_value() ? track->soundName : juce::String();
 
-        auto controls = tc.getSoundControls (id);
+        // Only the built-in synth has the five knobs. Other instruments get a
+        // card explaining where their controls are.
+        hasKnobs = ! controls.empty();
+
+        for (auto* k : knobs)
+            k->setVisible (hasKnobs);
+
+        openWindowButton.setVisible (! hasKnobs && instrument.has_value() && instrument->isThirdParty && ! instrument->missing);
 
         for (int i = 0; i < knobs.size() && i < (int) controls.size(); ++i)
         {
@@ -69,6 +89,39 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        if (! isAudioTrack && ! hasKnobs)
+        {
+            auto r = cardArea;
+            g.setColour (colour::cardBg);
+            g.fillRoundedRectangle (r.toFloat(), 12.0f);
+
+            auto text = r.reduced (20, 16);
+            const auto name = ! instrument.has_value() ? juce::String ("No instrument")
+                            : instrument->isThirdParty ? instrument->name
+                                                       : soundName;   // e.g. "Soft Piano" rather than "Sampler"
+            g.setColour (colour::text);
+            g.setFont (fonts::uiBold (15.0f));
+            g.drawText (name, text.removeFromTop (24), juce::Justification::centredLeft, true);
+            g.setColour (colour::textSecondary);
+            g.setFont (fonts::ui (13.0f));
+
+            juce::String message;
+
+            if (! instrument.has_value())
+                message = "Pick a sound in the library on the left.";
+            else if (instrument->missing)
+                message = instrument->name + " isn't installed on this computer. Its settings are kept, so it will "
+                          "work again once it's installed. Or pick another sound in the library.";
+            else if (instrument->isThirdParty)
+                message = "This plug-in has its own controls. Open its window to change the sound.";
+            else
+                message = "A sampled instrument. Shape its sound with effects under Plug-ins on the left, "
+                          "or pick another sound in the library.";
+
+            g.drawFittedText (message, text.withTrimmedBottom (openWindowButton.isVisible() ? 40 : 0),
+                              juce::Justification::topLeft, 3, 1.0f);
+        }
+
         if (isAudioTrack)
         {
             auto r = getLocalBounds().reduced (18, 14).withWidth (5 * (Knob::preferredWidth + 14));
@@ -104,7 +157,6 @@ public:
             g.drawText ("Plugin: " + details.pluginName, r.removeFromTop (20), juce::Justification::centredLeft, true);
             g.drawText ("Output: " + details.outputName, r.removeFromTop (20), juce::Justification::centredLeft, true);
             g.drawText ((isAudioTrack ? "Input: " : "MIDI input: ") + midi, r.removeFromTop (20), juce::Justification::centredLeft, true);
-            // TODO(milestone-3): "Open plugin window" for hosted VST3/AU instruments.
         }
     }
 
@@ -117,6 +169,8 @@ public:
         r.removeFromBottom (14);
 
         auto top = r;
+        cardArea = top.withWidth (juce::jmin (top.getWidth(), 5 * (Knob::preferredWidth + 14))).withHeight (Knob::preferredHeight);
+        openWindowButton.setBounds (cardArea.reduced (20, 14).removeFromBottom (32).removeFromLeft (190));
 
         for (auto* k : knobs)
         {
@@ -137,11 +191,15 @@ private:
     TrackDetails details;
     bool detailsVisible = false;
     bool isAudioTrack = false;
-    juce::Rectangle<int> detailsArea;
+    bool hasKnobs = true;
+    std::optional<PluginSlot> instrument;
+    juce::String soundName;
+    IconButton openWindowButton { "Open plug-in window", Icon::openWindow, "Open Plug-in Window" };
+    juce::Rectangle<int> detailsArea, cardArea;
 
     void refreshKnobText()
     {
-        auto controls = engine.getTracks().getSoundControls (selection.getTrack());
+        auto controls = engine.getTracks().effects().getSoundControls (selection.getTrack());
 
         for (int i = 0; i < knobs.size() && i < (int) controls.size(); ++i)
             knobs[i]->setValue (controls[(size_t) i].value, controls[(size_t) i].valueText);
@@ -338,10 +396,10 @@ void BottomPanel::refresh()
     std::optional<RegionInfo> region;
 
     if (selection.getRegion() != 0)
-        region = tc.getRegion (selection.getRegion());
+        region = tc.regions().getRegion (selection.getRegion());
 
     if (! region.has_value() && track.has_value())
-        for (auto& r : tc.getRegions (track->id))
+        for (auto& r : tc.regions().getRegions (track->id))
             if (r.isMidi) { region = r; break; }
 
     pianoRoll.setRegion (region, track.has_value() ? track->colour : colour::accent, engine.beatsPerBar());

@@ -1,5 +1,6 @@
 #include "engine/TrackController.h"
 #include "engine/AudioEngine.h"
+#include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
 #include <map>
 
@@ -43,7 +44,8 @@ TrackController::TrackController (AudioEngine& o)
       // function that makes one, instead of depending on this class.
       regionEditor (std::make_unique<RegionEditor> (o, [this] (const juce::String& name) { return createAudioTrack (name); })),
       noteEditor (std::make_unique<NoteEditor> (o)),
-      effectsController (std::make_unique<EffectsController> (o))
+      effectsController (std::make_unique<EffectsController> (o)),
+      sendBuses (std::make_unique<SendBuses> (o))
 {
 }
 
@@ -66,7 +68,7 @@ std::vector<TrackInfo> TrackController::getTracks() const
     if (edit == nullptr)
         return result;
 
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
     bool anySolo = false;
 
     for (auto* t : tracks)
@@ -84,6 +86,9 @@ std::vector<TrackInfo> TrackController::getTracks() const
         info.soundName = t->state.getProperty (soundNameProp, "Basic Synth").toString();
         info.category = t->state.getProperty (categoryProp, "Synths").toString();
         info.icon = t->state.getProperty (iconProp).toString();
+        info.soundId = effectsController->getSoundId (info.id);
+        info.reverbSend = sendBuses->getSendLevel (info.id, SendBuses::reverb);
+        info.delaySend = sendBuses->getSendLevel (info.id, SendBuses::delay);
 
         if (info.kind == TrackKind::audio)
         {
@@ -129,7 +134,7 @@ TrackId TrackController::addInstrumentTrack()
     auto* edit = owner.getEdit();
     owner.beginUndoStep ("Add Track");
 
-    auto existing = te::getAudioTracks (*edit);
+    auto existing = getUserTracks (*edit);
     te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
 
     // TrackInsertPoint (parent, preceding): nullptr parent = top level of the Edit.
@@ -138,33 +143,20 @@ TrackId TrackController::addInstrumentTrack()
     if (track == nullptr)
         return 0;
 
-    auto& um = edit->getUndoManager();
+    const auto id = track->itemID.getRawID();
     const int number = existing.size() + 1;
-    track->setName ("Instrument " + juce::String (number));
     track->setColour (juce::Colour (trackPalette[(size_t) (number - 1) % trackPalette.size()]));
-    track->state.setProperty (soundNameProp, "Basic Synth", &um);
-    track->state.setProperty (categoryProp, "Synths", &um);
 
-    // Built-in 4OSC synth as the instrument. createNewPlugin returns a
-    // ref-counted Plugin::Ptr; dynamic_cast gives us the concrete type.
-    if (auto synthPtr = edit->getPluginCache().createNewPlugin (te::FourOscPlugin::xmlTypeName, {}))
-    {
-        if (auto* synth = dynamic_cast<te::FourOscPlugin*> (synthPtr.get()))
-        {
-            // A friendlier starting sound than the raw init patch: low-pass
-            // filter on (so "Brightness" does something) and a little room.
-            synth->filterTypeValue = 1;
-            synth->filterFreq->setNormalisedParameter (0.75f, juce::sendNotification);
-            synth->ampRelease->setParameter (0.3f, juce::sendNotification);
-            synth->reverbOnValue = true;
-            synth->reverbMix->setParameter (0.2f, juce::sendNotification);
-        }
+    // The instrument, as part of this undo step. No effects by default; the
+    // user adds them from the Plug-ins inspector.
+    effectsController->setSound (id, SoundLibrary::defaultSoundId, false);
 
-        track->pluginList.insertPlugin (synthPtr, 0, nullptr);
-    }
-
-    // No effects by default; the user adds them from the Plug-ins inspector.
-    return track->itemID.getRawID();
+    // Named "Instrument N" rather than after the sound. It's still the
+    // app's name, so picking a sound renames it.
+    const auto name = "Instrument " + juce::String (number);
+    track->setName (name);
+    track->state.setProperty (autoNameProp, name, &edit->getUndoManager());
+    return id;
 }
 
 TrackId TrackController::addAudioTrack()
@@ -178,7 +170,7 @@ TrackId TrackController::addAudioTrack()
 TrackId TrackController::createAudioTrack (const juce::String& name)
 {
     auto* edit = owner.getEdit();
-    auto existing = te::getAudioTracks (*edit);
+    auto existing = getUserTracks (*edit);
     te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
     auto track = edit->insertNewAudioTrack (te::TrackInsertPoint (nullptr, last), nullptr);
 
@@ -264,6 +256,9 @@ void TrackController::renameTrack (TrackId id, const juce::String& newName)
         {
             owner.beginUndoStep ("Rename Track");
             t->setName (name);
+
+            // The user's name now: picking a sound won't replace it.
+            t->state.setProperty (autoNameProp, juce::String(), &owner.getEdit()->getUndoManager());
         }
     }
 }
@@ -314,7 +309,7 @@ void TrackController::moveTrack (TrackId id, int direction)
         return;
 
     auto* edit = owner.getEdit();
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
     auto* track = findTrack (edit, id);
     const int index = tracks.indexOf (track);
     owner.beginUndoStep (direction < 0 ? "Move Track Up" : "Move Track Down");
@@ -394,19 +389,6 @@ void TrackController::setMasterVolume (float pos)
             setParameterUndoably (*vol, *vol->volParam, te::IDs::volume, juce::jlimit (0.0f, 1.0f, pos));
 }
 
-void TrackController::setSound (TrackId id, const juce::String& category, const juce::String& presetName)
-{
-    if (auto* t = findTrack (owner.getEdit(), id))
-    {
-        owner.beginUndoStep ("Change Sound");
-        auto* um = &owner.getEdit()->getUndoManager();
-        t->state.setProperty (soundNameProp, presetName, um);
-        t->state.setProperty (categoryProp, category, um);
-        t->setName (presetName);
-        // TODO(milestone-3): swap the instrument (sampler / plugin preset) here.
-    }
-}
-
 StereoLevel TrackController::getTrackLevel (TrackId id)
 {
     auto* t = findTrack (owner.getEdit(), id);
@@ -451,7 +433,17 @@ TrackDetails TrackController::getDetails (TrackId id) const
         return d;
     }
 
-    d.pluginName = findSynth (*t) != nullptr ? juce::String ("4OSC (built-in synth)") : juce::String ("None");
+    if (auto instrument = effectsController->getInstrument (id))
+    {
+        if (instrument->isThirdParty)
+            d.pluginName = instrument->name + (instrument->missing ? " (not installed)" : " (" + instrument->manufacturer + ")");
+        else
+            d.pluginName = instrument->name + " (built-in)";
+    }
+    else
+    {
+        d.pluginName = "None";
+    }
 
     for (auto* instance : edit->getAllInputDevices())
         if (isRoutedMidiInput (instance->getInputDevice()))

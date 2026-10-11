@@ -1,0 +1,103 @@
+{
+  "name": "Electronic Kit",
+  "category": "Drums",
+  "oneShot": true,
+  "samples": [
+    {
+      "file": "36 Kick.flac",
+      "root": 36,
+      "low": 36,
+      "high": 36
+    },
+    {
+      "file": "37 Rim.flac",
+      "root": 37,
+      "low": 37,
+      "high": 37
+    },
+    {
+      "file": "38 Snare.flac",
+      "root": 38,
+      "low": 38,
+      "high": 38
+    },
+    {
+      "file": "39 Clap.flac",
+      "root": 39,
+      "low": 39,
+      "high": 39
+    },
+    {
+      "file": "41 Low Tom.flac",
+      "root": 41,
+      "low": 41,
+      "high": 41
+    },
+    {
+      "file": "42 Closed Hat.flac",
+      "root": 42,
+      "low": 42,
+      "high": 42
+    },
+    {
+      "file": "43 Low Tom 2.flac",
+      "root": 43,
+      "low": 43,
+      "high": 43
+    },
+    {
+      "file": "44 Pedal Hat.flac",
+      "root": 44,
+      "low": 44,
+      "high": 44
+    },
+    {
+      "file": "45 Mid Tom.flac",
+      "root": 45,
+      "low": 45,
+      "high": 45
+    },
+    {
+      "file": "46 Open Hat.flac",
+      "root": 46,
+      "low": 46,
+      "high": 46
+    },
+    {
+      "file": "47 Mid Tom 2.flac",
+      "root": 47,
+      "low": 47,
+      "high": 47
+    },
+    {
+      "file": "48 High Tom.flac",
+      "root": 48,
+      "low": 48,
+      "high": 48
+    },
+    {
+      "file": "49 Crash.flac",
+      "root": 49,
+      "low": 49,
+      "high": 49
+    },
+    {
+      "file": "50 High Tom 2.flac",
+      "root": 50,
+      "low": 50,
+      "high": 50
+    },
+    {
+      "file": "51 Ride.flac",
+      "root": 51,
+      "low": 51,
+      "high": 51
+    },
+    {
+      "file": "56 Cowbell.flac",
+      "root": 56,
+      "low": 56,
+      "high": 56
+    }
+  ]
+}

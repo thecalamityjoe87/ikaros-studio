@@ -41,6 +41,14 @@ endif()
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
 add_subdirectory("${TE_DIR}/modules"      "${CMAKE_BINARY_DIR}/tracktion" EXCLUDE_FROM_ALL)
 
+# Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
+# Units on macOS. JUCE ships everything needed to host them.
+if(APPLE)
+    set(IKAROS_PLUGIN_HOST_DEFINITIONS JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LV2=0)
+else()
+    set(IKAROS_PLUGIN_HOST_DEFINITIONS JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0 JUCE_PLUGINHOST_LV2=1)
+endif()
+
 # ------------------------------------------------------------------------------
 # App target
 # ------------------------------------------------------------------------------
@@ -89,7 +97,12 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
-    src/engine/EffectsController.h  src/engine/EffectsController.cpp)
+    src/engine/EffectsController.h  src/engine/EffectsController.cpp
+    src/engine/SendBuses.h          src/engine/SendBuses.cpp
+    src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
+    src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
+    src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
+    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -114,6 +127,9 @@ set(IKAROS_UI_SOURCES
 
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+
+    # windows of their own
+    src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
 
     # one folder per area of the window
     src/ui/titlebar/MenuBar.h               src/ui/titlebar/MenuBar.cpp
@@ -160,11 +176,7 @@ target_compile_definitions(IkarosStudio PRIVATE
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_MODAL_LOOPS_PERMITTED=0
-    # Plugin hosting is compiled in so Tracktion links, but scanning/VST3 UI is a later milestone.
-    # TODO(milestone-3): enable VST3/AU/LV2 scanning in the sound library.
-    JUCE_PLUGINHOST_VST3=0
-    JUCE_PLUGINHOST_AU=0
-    JUCE_PLUGINHOST_LV2=0
+    ${IKAROS_PLUGIN_HOST_DEFINITIONS}
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
 target_link_libraries(IkarosStudio
@@ -200,6 +212,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
 endif()
 
+# The sound packs that come with the app (made by tools/generate_sounds.py).
+# The sampler plays them from disk, so they're copied next to the program
+# (into Contents/Resources on macOS); SoundLibrary looks for them there.
+set(IKAROS_SOUNDS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/sounds")
+
+function(ikaros_copy_sounds target)
+    if(APPLE AND target STREQUAL "IkarosStudio")
+        set(dest "$<TARGET_FILE_DIR:${target}>/../Resources/Sounds")
+    else()
+        set(dest "$<TARGET_FILE_DIR:${target}>/Sounds")
+    endif()
+
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${IKAROS_SOUNDS_DIR}" "${dest}"
+        VERBATIM)
+endfunction()
+
+ikaros_copy_sounds(IkarosStudio)
+
 # ------------------------------------------------------------------------------
 # Linux install layout (used by the Flatpak manifest and `cmake --install`)
 # ------------------------------------------------------------------------------
@@ -219,6 +250,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
     install(FILES resources/icons/${APP_ID}.png
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+    install(DIRECTORY resources/sounds/
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/ikaros-studio/Sounds)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -242,9 +275,7 @@ if(IKAROS_BUILD_TESTS)
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_PLUGINHOST_VST3=0
-        JUCE_PLUGINHOST_AU=0
-        JUCE_PLUGINHOST_LV2=0
+        ${IKAROS_PLUGIN_HOST_DEFINITIONS}
         TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
@@ -264,5 +295,16 @@ if(IKAROS_BUILD_TESTS)
         target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic)
     endif()
 
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest)
+    ikaros_copy_sounds(IkarosEngineSmokeTest)
+
+    # The test scans the test plug-ins when they've been built.
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins")
+endif()
+
+# Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
+# plug-in scanning and hosting. See tests/plugins/CMakeLists.txt.
+option(IKAROS_BUILD_TEST_PLUGINS "Build plug-ins for testing plug-in hosting" OFF)
+
+if(IKAROS_BUILD_TEST_PLUGINS)
+    add_subdirectory(tests/plugins)
 endif()

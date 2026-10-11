@@ -5,6 +5,8 @@
 #include "ui/arrangement/ArrangementRegionDrag.h"
 #include "ui/arrangement/ArrangementRuler.h"
 #include "app/CommandIDs.h"
+#include "engine/AudioPreview.h"
+#include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -96,7 +98,7 @@ void ArrangementView::refresh()
 
     for (auto& t : tracks)
     {
-        auto& list = regions[t.id] = tc.getRegions (t.id);
+        auto& list = regions[t.id] = tc.regions().getRegions (t.id);
 
         for (auto& r : list)
             contentEndBeat = juce::jmax (contentEndBeat, r.getEndBeat());
@@ -280,7 +282,7 @@ void ArrangementView::updateTransport()
     playhead->setX (x);
 
     if (state.recording)
-        content->setRecording (engine.getTracks().getArmedTrack(), state.recordStartBeats, state.positionBeats);
+        content->setRecording (engine.getTracks().inputs().getArmedTrack(), state.recordStartBeats, state.positionBeats);
     else
         content->setRecording (0, 0.0, 0.0);
 }
@@ -403,7 +405,7 @@ void ArrangementView::showRegionMenu()
 
 void ArrangementView::startRenaming (RegionId id)
 {
-    auto region = engine.getTracks().getRegion (id);
+    auto region = engine.getTracks().regions().getRegion (id);
     const int row = region ? rowOf (region->trackId) : -1;
 
     if (row < 0)
@@ -514,23 +516,23 @@ void ArrangementView::showLaneMenu (TrackId track, double beat)
         return;
 
     const auto at = snapBeat (juce::jmax (0.0, beat));
-    const auto regions = tc.getRegions (track);
+    const auto regions = tc.regions().getRegions (track);
     juce::PopupMenu menu;
 
     if (info->kind == TrackKind::instrument)
     {
         menu.addItem (juce::PopupMenu::Item ("Add Chord Region Here").setAction ([this, track, at]
         {
-            if (auto rid = engine.getTracks().createChordRegion (track, at))
+            if (auto rid = engine.getTracks().regions().createChordRegion (track, at))
                 selection.selectRegion (track, rid);
         }));
     }
 
-    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.canPaste()).setAction ([this, track, at]
+    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.regions().canPaste()).setAction ([this, track, at]
     {
-        auto pasted = engine.getTracks().pasteRegions (track, at);
+        auto pasted = engine.getTracks().regions().pasteRegions (track, at);
 
-        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().getRegion (pasted.front()))
+        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().regions().getRegion (pasted.front()))
             selection.selectRegions (first->trackId, pasted);
     }));
 
@@ -538,7 +540,7 @@ void ArrangementView::showLaneMenu (TrackId track, double beat)
     {
         std::vector<RegionId> ids;
 
-        for (auto& r : engine.getTracks().getRegions (track))
+        for (auto& r : engine.getTracks().regions().getRegions (track))
             ids.push_back (r.id);
 
         selection.selectRegions (track, ids);
@@ -592,7 +594,7 @@ ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
 bool ArrangementView::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (auto& f : files)
-        if (engine.getTracks().isSupportedAudioFile (juce::File (f)))
+        if (engine.getTracks().regions().isSupportedAudioFile (juce::File (f)))
             return true;
 
     return false;
@@ -635,19 +637,49 @@ void ArrangementView::fileDragExit (const juce::StringArray&)
     overlay->clear();
 }
 
+//==============================================================================
+// Loops and audio files dragged from the library: the same as dropping a
+// file from the file manager.
+bool ArrangementView::isInterestedInDragSource (const SourceDetails& details)
+{
+    return dragtypes::getLibraryFile (details.description).existsAsFile();
+}
+
+void ArrangementView::itemDragEnter (const SourceDetails& details)
+{
+    itemDragMove (details);
+}
+
+void ArrangementView::itemDragMove (const SourceDetails& details)
+{
+    fileDragMove ({}, details.localPosition.x, details.localPosition.y);
+}
+
+void ArrangementView::itemDragExit (const SourceDetails&)
+{
+    overlay->clear();
+}
+
+void ArrangementView::itemDropped (const SourceDetails& details)
+{
+    engine.getPreview().stop();
+    filesDropped ({ dragtypes::getLibraryFile (details.description).getFullPathName() },
+                  details.localPosition.x, details.localPosition.y);
+}
+
 void ArrangementView::filesDropped (const juce::StringArray& files, int x, int y)
 {
     overlay->clear();
     auto target = findDropTarget (x, y);
     auto& tc = engine.getTracks();
-    auto ids = tc.importAudioFiles (target.track, files, target.beat);
+    auto ids = tc.regions().importAudioFiles (target.track, files, target.beat);
 
     if (ids.empty())
         return;
 
     refresh();
 
-    if (auto first = tc.getRegion (ids.front()))
+    if (auto first = tc.regions().getRegion (ids.front()))
         selection.selectRegions (first->trackId, ids);
 }
 

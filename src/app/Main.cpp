@@ -13,10 +13,16 @@ class IkarosApplication  : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override             { return false; }
+    // One window at a time, except for the plug-in scan's worker processes:
+    // they're copies of this app started with a special command line.
+    bool moreThanOneInstanceAllowed() override             { return isScanWorker(); }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
+        // A scan worker only loads plug-ins for the main app; no engine, no window.
+        if (AudioEngine::runPluginScanWorkerIfRequested (commandLine))
+            return;
+
         // Install the LookAndFeel before creating any components so they all pick it up.
         lookAndFeel = std::make_unique<IkarosLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
@@ -46,6 +52,11 @@ public:
     void anotherInstanceStarted (const juce::String&) override {}
 
 private:
+    static bool isScanWorker()
+    {
+        return getCommandLineParameters().contains ("--IkarosPluginScan:");
+    }
+
     std::unique_ptr<IkarosLookAndFeel> lookAndFeel;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

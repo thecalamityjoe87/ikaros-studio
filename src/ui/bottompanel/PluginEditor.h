@@ -14,8 +14,8 @@ namespace ikaros
     and one knob per parameter, wrapping to the available width.
 
     Built-in effects have no editor of their own, so this generic one works
-    for all of them. TODO(milestone-3): open the plug-in's own window for
-    third-party VST3/AU effects.
+    for all of them. Third-party plug-ins open their own window instead
+    (see PluginChainView::openEditor).
 */
 class PluginEditor  : public juce::Component,
                       private juce::Timer

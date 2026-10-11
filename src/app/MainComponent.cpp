@@ -1,6 +1,8 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/pluginwindow/PluginWindow.h"
+#include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Tokens.h"
 
@@ -53,6 +55,18 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     engine.addChangeListener (this);
     selection.addChangeListener (this);
 
+    // Third-party plug-in windows: the engine supplies the plug-in's editor,
+    // PluginWindow the frame around it.
+    engine.setPluginWindowFactory (&PluginWindow::create);
+
+    // Look for new plug-ins in the background once the window is up. Ones
+    // scanned before load straight from the saved list.
+    juce::Timer::callAfterDelay (1500, [safeThis = SafePointer<MainComponent> (this)]
+    {
+        if (safeThis != nullptr)
+            safeThis->engine.getPlugins().scan();
+    });
+
     refreshAll();
     startTimerHz (30);   // playhead, meters, CPU
     setSize (1440, 900);
@@ -63,6 +77,8 @@ MainComponent::~MainComponent()
     stopTimer();
     engine.removeChangeListener (this);
     selection.removeChangeListener (this);
+    engine.setPluginWindowFactory (nullptr);
+    engine.getPlugins().cancelScan();
 
    #if JUCE_MAC
     juce::MenuBarModel::setMacMainMenu (nullptr);
@@ -212,6 +228,7 @@ void MainComponent::timerCallback()
     toolbar.update (libraryVisible);
     arrangement.updateTransport();
     bottomPanel.update();
+    library.update();
     menuBar.setSessionStatus (engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges());
 }
 
@@ -370,7 +387,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::pasteRegions:
             info.setInfo ("Paste at Playhead", "Paste the copied regions on the selected track at the playhead", "Region", 0);
-            info.setActive (hasTrack && engine.getTracks().canPaste());
+            info.setActive (hasTrack && engine.getTracks().regions().canPaste());
             info.addDefaultKeypress ('v', cmd);
             break;
         case CommandIDs::renameRegion:
@@ -506,7 +523,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::deleteSelection:
             if (selection.hasRegions())
-                tracks.deleteRegions (selection.getRegions());
+                tracks.regions().deleteRegions (selection.getRegions());
             else if (trackId != 0)
                 tracks.deleteTrack (trackId);
             break;
@@ -523,7 +540,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::armTrack:
             if (auto t = tracks.getTrack (trackId))
-                tracks.setArmed (trackId, ! t->armed);
+                tracks.inputs().setArmed (trackId, ! t->armed);
             break;
 
         case CommandIDs::deleteTrack:     tracks.deleteTrack (trackId); break;
@@ -549,13 +566,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::moveTrackDown:   tracks.moveTrack (trackId, 1); break;
 
         case CommandIDs::newRegion:
-            if (auto rid = tracks.createChordRegion (trackId, engine.getTransportState().positionBeats))
+            if (auto rid = tracks.regions().createChordRegion (trackId, engine.getTransportState().positionBeats))
                 selection.selectRegion (trackId, rid);
             break;
 
         case CommandIDs::splitRegion:
         {
-            auto rightHalves = tracks.splitRegions (getRegionsToSplit(), engine.getTransportState().positionBeats);
+            auto rightHalves = tracks.regions().splitRegions (getRegionsToSplit(), engine.getTransportState().positionBeats);
 
             if (! rightHalves.empty())
                 selection.selectRegions (trackId, rightHalves);
@@ -565,7 +582,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::duplicateRegion:
         {
             // Selecting the copies means pressing it again keeps adding copies.
-            auto copies = tracks.duplicateRegions (selection.getRegions());
+            auto copies = tracks.regions().duplicateRegions (selection.getRegions());
 
             if (! copies.empty())
                 selection.selectRegions (trackId, copies);
@@ -573,23 +590,23 @@ bool MainComponent::perform (const InvocationInfo& info)
         }
 
         case CommandIDs::cutRegions:
-            tracks.copyRegions (selection.getRegions());
-            tracks.deleteRegions (selection.getRegions());
+            tracks.regions().copyRegions (selection.getRegions());
+            tracks.regions().deleteRegions (selection.getRegions());
             break;
 
-        case CommandIDs::copyRegions:     tracks.copyRegions (selection.getRegions()); break;
+        case CommandIDs::copyRegions:     tracks.regions().copyRegions (selection.getRegions()); break;
 
         case CommandIDs::pasteRegions:
         {
-            auto pasted = tracks.pasteRegions (trackId, engine.getTransportState().positionBeats);
+            auto pasted = tracks.regions().pasteRegions (trackId, engine.getTransportState().positionBeats);
 
-            if (auto first = pasted.empty() ? std::nullopt : tracks.getRegion (pasted.front()))
+            if (auto first = pasted.empty() ? std::nullopt : tracks.regions().getRegion (pasted.front()))
                 selection.selectRegions (first->trackId, pasted);
             break;
         }
 
         case CommandIDs::renameRegion:    arrangement.startRenaming (selection.getRegion()); break;
-        case CommandIDs::deleteRegion:    tracks.deleteRegions (selection.getRegions()); break;
+        case CommandIDs::deleteRegion:    tracks.regions().deleteRegions (selection.getRegions()); break;
 
         case CommandIDs::togglePlay:      engine.togglePlay(); break;
         case CommandIDs::toggleRecord:    engine.toggleRecord(); break;
@@ -641,7 +658,7 @@ std::vector<RegionId> MainComponent::getRegionsToSplit() const
 
     std::vector<RegionId> ids;
 
-    for (auto& r : engine.getTracks().getRegions (selection.getTrack()))
+    for (auto& r : engine.getTracks().regions().getRegions (selection.getTrack()))
         ids.push_back (r.id);
 
     return ids;
@@ -652,7 +669,7 @@ bool MainComponent::canSplitAtPlayhead() const
     const auto beat = engine.getTransportState().positionBeats;
 
     for (auto id : getRegionsToSplit())
-        if (auto r = engine.getTracks().getRegion (id))
+        if (auto r = engine.getTracks().regions().getRegion (id))
             if (beat > r->startBeat && beat < r->getEndBeat())
                 return true;
 

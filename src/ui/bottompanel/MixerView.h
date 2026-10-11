@@ -9,10 +9,12 @@ namespace ikaros
 
 //==============================================================================
 /**
-    The "Mixer" tab: one channel strip per track (name, pan knob, stereo
-    meter, fader, dB readout) plus a master strip with its own fader.
+    The "Mixer" tab: one channel strip per track (name, pan knob, Reverb and
+    Delay send knobs, stereo meter, fader, dB readout) plus a master strip
+    with its own fader.
 
-    TODO(milestone-3): sends (to shared reverb/delay buses).
+    The send knobs feed the two shared effects (see SendBuses): turn one up
+    to put the track in the reverb or echo that every track shares.
 */
 class MixerView  : public juce::Component
 {

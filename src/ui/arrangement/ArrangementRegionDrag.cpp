@@ -152,7 +152,7 @@ void ArrangementView::RegionDrag::updateTrimDrag (int dx)
 
     auto& info = comp->getInfo();
     const double delta = dx / owner.geometry.pixelsPerBeat;
-    const double minLength = TrackController::minRegionBeats;
+    const double minLength = RegionEditor::minRegionBeats;
 
     if (drag.mode == Drag::Mode::trimStart)
     {
@@ -199,10 +199,10 @@ void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::M
                                             finished.regions[i].startBeat + finished.beatDelta });
             }
 
-            tc.moveRegions (placements);
+            tc.regions().moveRegions (placements);
 
             // The selected track follows the clicked region to its new track.
-            if (auto moved = tc.getRegion (finished.anchor))
+            if (auto moved = tc.regions().getRegion (finished.anchor))
                 owner.selection.selectRegions (moved->trackId, owner.selection.getRegions());
 
             owner.refresh();   // now, so the regions don't flash back to where they were
@@ -217,14 +217,14 @@ void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::M
             comp->setTrimPreview (std::nullopt);
 
             if (changed)
-                tc.trimRegion (finished.anchor, finished.trim.getStart(), finished.trim.getEnd());
+                tc.regions().trimRegion (finished.anchor, finished.trim.getStart(), finished.trim.getEnd());
 
             owner.refresh();
         }
     }
     else if (finished.mode == Drag::Mode::pending && finished.selectOnlyAnchorOnClick)
     {
-        if (auto r = tc.getRegion (finished.anchor))
+        if (auto r = tc.regions().getRegion (finished.anchor))
             owner.selection.selectRegion (r->trackId, r->id);
     }
 }

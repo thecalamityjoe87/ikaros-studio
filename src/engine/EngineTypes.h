@@ -76,7 +76,8 @@ struct TrackInfo
     int index = 0;
     TrackKind kind = TrackKind::instrument;
     juce::String name;
-    juce::String soundName;        // e.g. "Grand Piano" (the preset shown in the library)
+    juce::String soundName;        // e.g. "Soft Piano" (the sound shown in the library)
+    juce::String soundId;          // the library sound (SoundInfo::id), empty for audio tracks
     juce::String category;         // library category, used to pick the icon
     juce::String icon;             // the icon the user chose ("guitar", "drums"...), or empty to follow the category
     juce::Colour colour;
@@ -88,6 +89,8 @@ struct TrackInfo
     float volume = 0.75f;          // fader position 0..1 (Tracktion's slider curve)
     float volumeDb = 0.0f;
     float pan = 0.0f;              // -1 (left) .. 0 (centre) .. 1 (right)
+    float reverbSend = 0.0f;       // sends to the shared buses, 0..1 (see SendBuses)
+    float delaySend = 0.0f;
 };
 
 // Stereo peak level in decibels.
@@ -112,14 +115,57 @@ struct PluginSlot
     juce::String type;             // Tracktion's plugin type, e.g. "reverb"
     juce::String name;             // what the user sees, e.g. "Reverb"
     bool enabled = true;           // false = bypassed
+    bool isThirdParty = false;     // a VST3/AU/LV2 plug-in: it has its own window
+    bool missing = false;          // a third-party plug-in that isn't installed (or failed to load)
+    juce::String manufacturer;     // third-party plug-ins only
 };
 
 // An effect the user can add from the "+ Add effect" menu.
 struct EffectType
 {
-    juce::String type;             // Tracktion's plugin type
+    juce::String type;             // Tracktion's plugin type, or "plugin:" + PluginInfo::id
     juce::String name;             // what the user sees
-    juce::String category;         // menu group, e.g. "Space"
+    juce::String category;         // menu group, e.g. "Space", or the maker of a third-party plug-in
+    bool isThirdParty = false;
+};
+
+// A sound in the library: something an instrument track can play.
+struct SoundInfo
+{
+    juce::String id;               // saved with the track, e.g. "synth:Warm Pad" or "sampler:Ikaros Basics/Soft Piano"
+    juce::String name;             // what the user sees, e.g. "Warm Pad"
+    juce::String category;         // library category, e.g. "Keyboards"
+    juce::String detail;           // small text on the right of the row, e.g. "Sampled"
+};
+
+// A loop or audio file in the library, or a folder while browsing audio files.
+struct LibraryFile
+{
+    juce::File file;
+    juce::String name;
+    juce::String detail;           // e.g. "120 · C" for a loop, or the file's length
+    bool isFolder = false;
+    double bpm = 0.0;              // loops: the tempo it was made at (0 = unknown)
+};
+
+// A third-party plug-in found by the plug-in scan.
+struct PluginInfo
+{
+    juce::String id;               // stable identifier (format, name and IDs)
+    juce::String name;
+    juce::String manufacturer;
+    juce::String format;           // "VST3", "LV2" or "AudioUnit"
+    bool isInstrument = false;
+};
+
+// Progress of the background plug-in scan.
+struct PluginScanStatus
+{
+    bool scanning = false;
+    int done = 0, total = 0;       // plug-in files checked so far, out of total
+    juce::String current;          // the file being checked now
+    int numFound = 0;              // plug-ins added by this scan
+    juce::StringArray failed;      // files that crashed or hung during this scan
 };
 
 // One adjustable setting of a plug-in (shown as a knob in the effect editor).

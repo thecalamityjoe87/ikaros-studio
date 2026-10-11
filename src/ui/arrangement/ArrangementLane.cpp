@@ -60,7 +60,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             comp->onDoubleClick = [this] (RegionComponent& c, RegionComponent::Zone z)   { owner.regionDoubleClicked (c, z); };
 
             auto rid = info.id;
-            comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().renameRegion (rid, name); };
+            comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().regions().renameRegion (rid, name); };
             comp->onOpenEditor = [this, rid]
             {
                 owner.selection.selectRegion (trackId, rid);
@@ -169,7 +169,7 @@ void ArrangementView::Lane::mouseDoubleClick (const juce::MouseEvent& e)
 {
     auto beat = owner.geometry.xToBeat ((float) e.x);
 
-    if (auto rid = owner.engine.getTracks().createChordRegion (trackId, beat))
+    if (auto rid = owner.engine.getTracks().regions().createChordRegion (trackId, beat))
         owner.selection.selectRegion (trackId, rid);
 }
 

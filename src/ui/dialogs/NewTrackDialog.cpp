@@ -105,7 +105,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     }
 
     // Real Instrument options
-    inputs = engine.getTracks().getAudioInputs();
+    inputs = engine.getTracks().inputs().getAudioInputs();
 
     for (int i = 0; i < (int) inputs.size(); ++i)
         inputBox.addItem (inputs[(size_t) i].name, i + 1);
@@ -158,10 +158,10 @@ void NewTrackDialog::create()
             const auto index = inputBox.getSelectedItemIndex();
 
             if (juce::isPositiveAndBelow (index, (int) inputs.size()))
-                tracks.setTrackInput (id, inputs[(size_t) index].id);
+                tracks.inputs().setTrackInput (id, inputs[(size_t) index].id);
 
             if (monitorToggle.getToggleState())
-                tracks.setMonitoring (id, true);
+                tracks.inputs().setMonitoring (id, true);
         }
     }
     else

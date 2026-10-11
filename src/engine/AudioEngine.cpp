@@ -1,4 +1,7 @@
 #include "engine/AudioEngine.h"
+#include "engine/AudioPreview.h"
+#include "engine/PluginLibrary.h"
+#include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 
 #include <tracktion_engine/tracktion_engine.h>
@@ -30,6 +33,131 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
         folder.createDirectory();
         return folder.getFullPathName() + "/%edit%_%track%_%date%_%time%_Take_%take%";
     }
+
+    // Audio inputs: each open input channel on its own (microphones and
+    // guitars are mono), plus each neighbouring pair as a stereo input
+    // (keyboards, mixers). Tracktion allows inputs that share channels.
+    // Outputs stay in stereo pairs.
+    bool isDescriptionOfWaveDevicesSupported() override   { return true; }
+
+    void describeWaveDevices (std::vector<te::WaveDeviceDescription>& descriptions,
+                              juce::AudioIODevice& device, bool isInput) override
+    {
+        if (! isInput)
+        {
+            const int num = device.getOutputChannelNames().size();
+
+            for (int i = 0; i < num; i += 2)
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, i + 1 < num ? 2u : 1u, true));
+
+            return;
+        }
+
+        const int num = device.getInputChannelNames().size();
+        auto open = device.getActiveInputChannels();
+
+        // Not open yet: assume the first two, which is what we ask for.
+        if (open.isZero())
+            open.setRange (0, juce::jmin (2, num), true);
+
+        for (int i = 0; i < num; ++i)
+            if (open[i])
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, 1, true));
+
+        for (int i = 0; i + 1 < num; i += 2)
+            if (open[i] && open[i + 1])
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, 2, true));
+    }
+};
+
+//==============================================================================
+// Shows a third-party plug-in's own editor. Lives inside the window the UI
+// made; deleted (with the window) by Tracktion when the window closes or the
+// plug-in goes away, which is always before the plug-in itself.
+struct PluginEditorHolder  : public juce::Component
+{
+    PluginEditorHolder (te::Plugin& p, std::unique_ptr<juce::Component> e)
+        : plugin (p), editor (std::move (e))
+    {
+        addAndMakeVisible (*editor);
+        setSize (editor->getWidth(), editor->getHeight());
+    }
+
+    ~PluginEditorHolder() override
+    {
+        editor.reset();   // the editor before saving: some plug-ins only commit changes when their editor closes
+        plugin.edit.flushPluginStateIfNeeded (plugin);
+    }
+
+    // The plug-in resized its editor: follow it (the window follows us).
+    void childBoundsChanged (juce::Component* child) override
+    {
+        if (child == editor.get())
+            setSize (editor->getWidth(), editor->getHeight());
+    }
+
+    void resized() override   { editor->setBounds (getLocalBounds()); }
+
+    te::Plugin& plugin;
+    std::unique_ptr<juce::Component> editor;
+};
+
+// UIBehaviour is how Tracktion asks the app for UI. We only supply plug-in
+// windows, and pass the framing on to the UI layer's factory.
+struct IkarosUIBehaviour  : public te::UIBehaviour
+{
+    PluginWindowFactory factory;
+
+    std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& state) override
+    {
+        auto* windowState = dynamic_cast<te::Plugin::WindowState*> (&state);
+
+        if (windowState == nullptr || factory == nullptr)
+            return {};
+
+        auto& plugin = windowState->plugin;
+        std::unique_ptr<juce::Component> editor = plugin.createEditor();
+
+        // A plug-in without an editor of its own gets JUCE's generic one (a slider per setting).
+        if (editor == nullptr)
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (&plugin))
+                if (auto* instance = external->getAudioPluginInstance())
+                    editor = std::make_unique<juce::GenericAudioProcessorEditor> (*instance);
+
+        if (editor == nullptr)
+            return {};
+
+        PluginWindowRequest request;
+        request.content = std::make_unique<PluginEditorHolder> (plugin, std::move (editor));
+        request.title = plugin.getName();
+
+        if (auto* track = plugin.getOwnerTrack())
+            request.title << " - " << track->getName();
+
+        request.position = state.lastWindowBounds.has_value() ? state.lastWindowBounds->getPosition()
+                                                              : state.choosePositionForPluginWindow();
+
+        // WeakReference: the window state is gone if the plug-in was deleted.
+        juce::WeakReference<te::PluginWindowState> weakState (&state);
+
+        // Closing deletes the window, so do it after the click that asked for it.
+        request.close = [weakState]
+        {
+            juce::MessageManager::callAsync ([weakState]
+            {
+                if (auto* s = weakState.get())
+                    s->closeWindowExplicitly();
+            });
+        };
+
+        request.moved = [weakState] (juce::Rectangle<int> bounds)
+        {
+            if (auto* s = weakState.get())
+                s->lastWindowBounds = bounds;
+        };
+
+        return factory (std::move (request));
+    }
 };
 
 //==============================================================================
@@ -41,7 +169,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
                             private juce::ChangeListener,
                             private juce::Timer
 {
-    explicit Impl (AudioEngine& o) : owner (o)
+    Impl (AudioEngine& o, const juce::String& settingsName)
+        : owner (o),
+          engine (settingsName, std::make_unique<IkarosUIBehaviour>(), std::make_unique<IkarosEngineBehaviour>())
     {
         // 2 inputs, 2 outputs by default. (Tracktion's default of "every
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
@@ -66,8 +196,7 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
     // te::Engine is the root object: device manager, plugin manager, temp files...
     // There should only be one per app.
-    te::Engine engine { "IkarosStudio", std::make_unique<te::UIBehaviour>(),
-                        std::make_unique<IkarosEngineBehaviour>() };
+    te::Engine engine;
 
     std::unique_ptr<te::Edit> edit;
     juce::File sessionFile;
@@ -254,9 +383,13 @@ private:
 };
 
 //==============================================================================
-AudioEngine::AudioEngine()
-    : impl (std::make_unique<Impl> (*this))
+AudioEngine::AudioEngine (const juce::String& settingsName)
+    : impl (std::make_unique<Impl> (*this, settingsName))
 {
+    sounds = std::make_unique<SoundLibrary>();
+    plugins = std::make_unique<PluginLibrary> (*this);
+    preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
+                                              impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
     newSession();
 }
@@ -269,9 +402,22 @@ AudioEngine::~AudioEngine()
         impl->edit->getTransport().stop (false, true);
 
     impl->detachMasterMeter();
+    preview.reset();
     trackController.reset();
     impl->stopObservingEdit();
-    impl->edit.reset();
+    impl->edit.reset();   // closes any plug-in windows
+    plugins.reset();
+}
+
+void AudioEngine::setPluginWindowFactory (PluginWindowFactory factory)
+{
+    // The UIBehaviour we gave the Engine is ours, so this cast always works.
+    dynamic_cast<IkarosUIBehaviour&> (impl->engine.getUIBehaviour()).factory = std::move (factory);
+}
+
+bool AudioEngine::runPluginScanWorkerIfRequested (const juce::String& commandLine)
+{
+    return PluginLibrary::runScanWorkerIfRequested (commandLine);
 }
 
 te::Engine& AudioEngine::getTeEngine() noexcept    { return impl->engine; }
@@ -326,7 +472,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& file
     if (impl->edit != nullptr)
     {
         impl->edit->getTransport().stop (false, true);
-        trackController->allNotesOff();
+        trackController->inputs().allNotesOff();
     }
 
     impl->detachMasterMeter();
@@ -482,7 +628,7 @@ void AudioEngine::stop()
     transport.stop (false, false);   // false = keep the recording
 
     if (wasRecording && impl->autoArmedTrack != 0)
-        trackController->setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
+        trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
 }
 
 void AudioEngine::toggleRecord()
@@ -495,9 +641,9 @@ void AudioEngine::toggleRecord()
         return;
     }
 
-    impl->autoArmedTrack = trackController->armForRecording();
+    impl->autoArmedTrack = trackController->inputs().armForRecording();
 
-    if (trackController->getArmedTrack() == 0)
+    if (trackController->inputs().getArmedTrack() == 0)
         return;   // no track to record onto
 
     // With the count-in on, Tracktion starts playback a bar early and clicks

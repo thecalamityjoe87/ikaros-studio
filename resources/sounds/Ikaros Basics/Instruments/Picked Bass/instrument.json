@@ -1,0 +1,25 @@
+{
+  "name": "Picked Bass",
+  "category": "Bass",
+  "oneShot": false,
+  "samples": [
+    {
+      "file": "E1.flac",
+      "root": 28,
+      "low": 0,
+      "high": 34
+    },
+    {
+      "file": "E2.flac",
+      "root": 40,
+      "low": 35,
+      "high": 46
+    },
+    {
+      "file": "E3.flac",
+      "root": 52,
+      "low": 47,
+      "high": 127
+    }
+  ]
+}

@@ -29,7 +29,7 @@ public:
         power.setIconSize (14.0f);
         power.onClick = [this]
         {
-            owner.engine.getTracks().setEffectEnabled (owner.trackId, slot.id, ! slot.enabled);
+            owner.engine.getTracks().effects().setEffectEnabled (owner.trackId, slot.id, ! slot.enabled);
         };
         addAndMakeVisible (power);
 
@@ -49,8 +49,10 @@ public:
         power.setTooltip (s.enabled ? "On (click to bypass)" : "Off (click to turn on)");
         more.setTitle (s.name + " options");
         more.setTooltip ("Replace or remove");
-        setTitle (s.name + (s.enabled ? "" : " (off)") + ", effect " + juce::String (i + 1));
-        setTooltip ("Click to show its settings. Drag to reorder.");
+        setTitle (s.name + (s.missing ? " (not installed)" : (s.enabled ? "" : " (off)")) + ", effect " + juce::String (i + 1));
+        setTooltip (s.missing ? describeMissing (s)
+                  : s.isThirdParty ? juce::String ("Click to open its window. Drag to reorder.")
+                                   : juce::String ("Click to show its settings. Drag to reorder."));
         repaint();
     }
 
@@ -70,9 +72,22 @@ public:
             g.drawRoundedRectangle (r.reduced (0.5f), size::radius, 1.5f);
         }
 
-        g.setColour (slot.enabled ? colour::text : colour::textSecondary);
+        auto area = nameArea;
+
+        if (slot.missing)
+        {
+            icons::draw (g, Icon::warning, area.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            area.removeFromRight (4);
+        }
+        else if (slot.isThirdParty)
+        {
+            icons::draw (g, Icon::openWindow, area.removeFromRight (16).toFloat(), colour::textSecondary, 13.0f);
+            area.removeFromRight (4);
+        }
+
+        g.setColour (slot.enabled && ! slot.missing ? colour::text : colour::textSecondary);
         g.setFont (fonts::ui (13.0f));
-        g.drawText (slot.name, nameArea, juce::Justification::centredLeft, true);
+        g.drawText (slot.name, area, juce::Justification::centredLeft, true);
 
         if (showFocusRing && hasKeyboardFocus (false))
             IkarosLookAndFeel::drawFocusRing (g, r, size::radius);
@@ -116,11 +131,11 @@ public:
         if (key == juce::KeyPress::returnKey || key == juce::KeyPress::spaceKey)
             owner.openEditor (index);
         else if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
-            tracks.removeEffect (owner.trackId, slot.id);
+            tracks.effects().removeEffect (owner.trackId, slot.id);
         else if (key == juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::altModifier, 0))
-            tracks.moveEffect (owner.trackId, slot.id, juce::jmax (0, index - 1));
+            tracks.effects().moveEffect (owner.trackId, slot.id, juce::jmax (0, index - 1));
         else if (key == juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys::altModifier, 0))
-            tracks.moveEffect (owner.trackId, slot.id, index + 1);
+            tracks.effects().moveEffect (owner.trackId, slot.id, index + 1);
         else
             return false;
 
@@ -198,6 +213,23 @@ PluginChainView::PluginChainView (AudioEngine& e, Selection& s) : engine (e), se
     addRow = std::make_unique<AddRow>();
     addRow->onClick = [this] { showAddMenu(); };
     addAndMakeVisible (*addRow);
+
+    instrumentWindowButton.setColours (IconButton::ghostColours());
+    instrumentWindowButton.setCornerRadius (6.0f);
+    instrumentWindowButton.setIconSize (15.0f);
+    instrumentWindowButton.setTooltip ("Open the instrument's window");
+    instrumentWindowButton.onClick = [this]
+    {
+        if (instrument.has_value())
+            engine.getTracks().effects().showPluginWindow (trackId, instrument->id);
+    };
+    addChildComponent (instrumentWindowButton);
+}
+
+juce::String PluginChainView::describeMissing (const PluginSlot& slot)
+{
+    return slot.name + " isn't installed on this computer (or couldn't be loaded). "
+           "Its settings are kept, so it will work again once it's installed.";
 }
 
 PluginChainView::~PluginChainView() = default;
@@ -210,8 +242,8 @@ void PluginChainView::refresh()
     trackId = selection.getTrack();
     auto track = tracks.getTrack (trackId);
     trackColour = track.has_value() ? track->colour : colour::accent;
-    instrument = tracks.getInstrument (trackId);
-    chain = tracks.getEffectChain (trackId);
+    instrument = tracks.effects().getInstrument (trackId);
+    chain = tracks.effects().getEffectChain (trackId);
 
     // Keep the same row components where possible (so keyboard focus survives).
     while (rows.size() > (int) chain.size())
@@ -223,7 +255,8 @@ void PluginChainView::refresh()
     for (int i = 0; i < rows.size(); ++i)
         rows[i]->update (chain[(size_t) i], i);
 
-    addRow->setVisible (trackId != 0 && (int) chain.size() < TrackController::maxEffectsPerTrack);
+    addRow->setVisible (trackId != 0 && (int) chain.size() < EffectsController::maxEffectsPerTrack);
+    instrumentWindowButton.setVisible (instrument.has_value() && instrument->isThirdParty && ! instrument->missing);
 
     resized();
     repaint();
@@ -259,7 +292,7 @@ int PluginChainView::getIdealHeight() const
     int h = 8 + 34 + 8;                                     // hint text
     h += instrument.has_value() ? labelHeight + rowHeight + 12 : 0;   // instrument (not on audio tracks)
     h += labelHeight + (int) chain.size() * (rowHeight + rowGap);
-    h += (int) chain.size() < TrackController::maxEffectsPerTrack ? rowHeight : 0;
+    h += (int) chain.size() < EffectsController::maxEffectsPerTrack ? rowHeight : 0;
     return h + 14;
 }
 
@@ -298,9 +331,19 @@ void PluginChainView::paint (juce::Graphics& g)
         auto r = instrumentArea.reduced (10, 0);
         icons::draw (g, Icon::synths, r.removeFromLeft (18).toFloat(), trackColour, 16.0f);
         r.removeFromLeft (8);
-        g.setColour (colour::text);
+        if (instrument->missing)
+        {
+            icons::draw (g, Icon::warning, r.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            r.removeFromRight (4);
+        }
+        else if (instrumentWindowButton.isVisible())
+        {
+            r.setRight (instrumentWindowButton.getX() - 4);
+        }
+
+        g.setColour (instrument->missing ? colour::textSecondary : colour::text);
         g.setFont (fonts::ui (13.0f));
-        g.drawText (instrument->name, r, juce::Justification::centredLeft, true);
+        g.drawText (instrument->name + (instrument->missing ? " (not installed)" : ""), r, juce::Justification::centredLeft, true);
     }
 
     // Insertion line while dragging an effect.
@@ -324,6 +367,7 @@ void PluginChainView::resized()
     {
         instrumentLabelArea = r.removeFromTop (labelHeight);
         instrumentArea = r.removeFromTop (rowHeight);
+        instrumentWindowButton.setBounds (instrumentArea.reduced (5).removeFromRight (24));
         r.removeFromTop (12);
     }
 
@@ -340,21 +384,42 @@ void PluginChainView::resized()
 }
 
 //==============================================================================
-juce::PopupMenu PluginChainView::buildEffectMenu (std::function<void (const EffectType&)> onChosen)
+juce::PopupMenu PluginChainView::buildEffectMenu (std::function<void (const EffectType&)> onChosen) const
 {
-    juce::PopupMenu menu;
+    juce::PopupMenu menu, plugins, makerMenu;
     juce::String currentCategory;
 
-    for (auto& effect : TrackController::getAvailableEffects())
+    // Third-party effects go in a "Plug-ins" submenu, one submenu per maker.
+    auto finishMaker = [&]
+    {
+        if (currentCategory.isNotEmpty() && makerMenu.getNumItems() > 0)
+            plugins.addSubMenu (currentCategory, makerMenu);
+
+        makerMenu = {};
+    };
+
+    for (auto& effect : engine.getTracks().effects().getAvailableEffects())
     {
         if (effect.category != currentCategory)
         {
+            if (effect.isThirdParty)
+                finishMaker();
+            else
+                menu.addSectionHeader (effect.category);
+
             currentCategory = effect.category;
-            menu.addSectionHeader (currentCategory);
         }
 
         // PopupMenu items can run a lambda directly when chosen.
-        menu.addItem (effect.name, [onChosen, effect] { onChosen (effect); });
+        (effect.isThirdParty ? makerMenu : menu).addItem (effect.name, [onChosen, effect] { onChosen (effect); });
+    }
+
+    finishMaker();
+
+    if (plugins.getNumItems() > 0)
+    {
+        menu.addSeparator();
+        menu.addSubMenu ("Plug-ins", plugins);
     }
 
     return menu;
@@ -369,7 +434,7 @@ void PluginChainView::showAddMenu()
 
         // The new row appears on the next refresh (model changes arrive
         // asynchronously), so open its settings from there.
-        openWhenShown = engine.getTracks().addEffect (trackId, effect.type);
+        openWhenShown = engine.getTracks().effects().addEffect (trackId, effect.type);
     });
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (addRow.get()));
@@ -384,25 +449,37 @@ void PluginChainView::showRowMenu (int rowIndex)
     auto& tracks = engine.getTracks();
 
     juce::PopupMenu menu;
-    menu.addItem ("Settings...", [this, rowIndex] { openEditor (rowIndex); });
-    menu.addItem (slot.enabled ? "Turn Off" : "Turn On", [&tracks, this, slot] { tracks.setEffectEnabled (trackId, slot.id, ! slot.enabled); });
+    if (slot.isThirdParty)
+        menu.addItem ("Open Plug-in Window", ! slot.missing, false, [this, rowIndex] { openEditor (rowIndex); });
+    else
+        menu.addItem ("Settings...", [this, rowIndex] { openEditor (rowIndex); });
+
+    menu.addItem (slot.enabled ? "Turn Off" : "Turn On", [&tracks, this, slot] { tracks.effects().setEffectEnabled (trackId, slot.id, ! slot.enabled); });
     menu.addSubMenu ("Replace With", buildEffectMenu ([&tracks, this, slot] (const EffectType& effect)
     {
-        tracks.replaceEffect (trackId, slot.id, effect.type);
+        tracks.effects().replaceEffect (trackId, slot.id, effect.type);
     }));
     menu.addSeparator();
-    menu.addItem ("Move Up", rowIndex > 0, false, [&tracks, this, slot, rowIndex] { tracks.moveEffect (trackId, slot.id, rowIndex - 1); });
-    menu.addItem ("Move Down", rowIndex < (int) chain.size() - 1, false, [&tracks, this, slot, rowIndex] { tracks.moveEffect (trackId, slot.id, rowIndex + 1); });
+    menu.addItem ("Move Up", rowIndex > 0, false, [&tracks, this, slot, rowIndex] { tracks.effects().moveEffect (trackId, slot.id, rowIndex - 1); });
+    menu.addItem ("Move Down", rowIndex < (int) chain.size() - 1, false, [&tracks, this, slot, rowIndex] { tracks.effects().moveEffect (trackId, slot.id, rowIndex + 1); });
     menu.addSeparator();
-    menu.addItem ("Remove", [&tracks, this, slot] { tracks.removeEffect (trackId, slot.id); });
+    menu.addItem ("Remove", [&tracks, this, slot] { tracks.effects().removeEffect (trackId, slot.id); });
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (rows[rowIndex]));
 }
 
 void PluginChainView::openEditor (int rowIndex)
 {
-    if (juce::isPositiveAndBelow (rowIndex, (int) chain.size()) && onOpenEffect)
-        onOpenEffect (chain[(size_t) rowIndex].id);
+    if (! juce::isPositiveAndBelow (rowIndex, (int) chain.size()))
+        return;
+
+    auto& slot = chain[(size_t) rowIndex];
+
+    // Third-party plug-ins draw their own settings, in a window of their own.
+    if (slot.isThirdParty)
+        engine.getTracks().effects().showPluginWindow (trackId, slot.id);
+    else if (onOpenEffect)
+        onOpenEffect (slot.id);
 }
 
 void PluginChainView::setOpenEffect (PluginId id)
@@ -451,7 +528,7 @@ void PluginChainView::endDrag()
     const int newPosition = drop > from ? drop - 1 : drop;
 
     if (newPosition != from)
-        engine.getTracks().moveEffect (trackId, chain[(size_t) from].id, newPosition);
+        engine.getTracks().effects().moveEffect (trackId, chain[(size_t) from].id, newPosition);
     else
         for (auto* row : rows)
             row->repaint();

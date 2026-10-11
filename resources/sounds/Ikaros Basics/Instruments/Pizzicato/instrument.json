@@ -1,0 +1,37 @@
+{
+  "name": "Pizzicato",
+  "category": "Strings",
+  "oneShot": false,
+  "samples": [
+    {
+      "file": "G2.flac",
+      "root": 43,
+      "low": 0,
+      "high": 46
+    },
+    {
+      "file": "D3.flac",
+      "root": 50,
+      "low": 47,
+      "high": 53
+    },
+    {
+      "file": "A3.flac",
+      "root": 57,
+      "low": 54,
+      "high": 60
+    },
+    {
+      "file": "E4.flac",
+      "root": 64,
+      "low": 61,
+      "high": 67
+    },
+    {
+      "file": "B4.flac",
+      "root": 71,
+      "low": 68,
+      "high": 127
+    }
+  ]
+}

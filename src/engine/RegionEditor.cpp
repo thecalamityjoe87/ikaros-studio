@@ -1,5 +1,6 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -413,7 +414,7 @@ void RegionEditor::renameRegion (RegionId id, const juce::String& newName)
 void RegionEditor::copyRegions (const std::vector<RegionId>& ids)
 {
     auto* edit = owner.getEdit();
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
 
     struct Found { te::Clip* clip; te::AudioTrack* track; };
     std::vector<Found> found;
@@ -461,7 +462,7 @@ std::vector<RegionId> RegionEditor::pasteRegions (TrackId targetId, double beat)
     if (clipboard.empty())
         return {};
 
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
     const int targetIndex = tracks.indexOf (findTrack (edit, targetId));
 
     owner.beginUndoStep ("Paste");
@@ -536,11 +537,28 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
 
     for (auto& file : files)
     {
-        const auto length = te::TimeDuration::fromSeconds (te::AudioFile (engine, file).getLength());
+        const auto fileSeconds = te::AudioFile (engine, file).getLength();
+        auto length = te::TimeDuration::fromSeconds (fileSeconds);
+
+        // A loop from the library knows its tempo: it lasts that many beats
+        // at the session's tempo, stretched to fit (and keeps following the
+        // tempo if it changes).
+        const auto loopBpm = owner.getSounds().getLoopBpm (file);
+        const auto loopBeats = fileSeconds * loopBpm / 60.0;
+
+        if (loopBpm > 0.0)
+            length = beatToTime (*edit, timeToBeat (*edit, start) + loopBeats) - start;
 
         // ClipPosition = { time range on the timeline, offset into the file }.
         if (auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file, { { start, start + length }, {} }, false))
         {
+            if (loopBpm > 0.0)
+            {
+                clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
+                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+                clip->setAutoTempo (true);
+            }
+
             added.push_back (clip.get());
             start = start + length;
         }

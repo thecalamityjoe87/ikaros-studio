@@ -2,9 +2,15 @@
 
 A simple music studio for Linux, Windows and macOS, in the spirit of GarageBand. Built with JUCE and Tracktion Engine.
 
-Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone or a guitar (with a count-in if you like), drag in audio files, edit regions and notes, add effects, and save sessions. Third-party plug-ins aren't in yet.
+Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone, a guitar or a stereo source (with a count-in if you like), pick sounds and loops from the library, edit regions and notes, add effects, send tracks to a shared reverb and delay, and save sessions. VST3 and LV2 plug-ins work on Linux and Windows, and VST3 and Audio Units on macOS.
 
 New recordings go to `Documents/Ikaros Studio/Recordings`. When you save a session, its recordings are copied into a folder next to the session file, so you can move or back up the two together.
+
+## Sounds and plug-ins
+
+The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`.
+
+Plug-ins are found by a scan in the background at startup. Each plug-in is loaded in a separate helper process, so one that crashes or freezes is just skipped (and remembered) instead of taking the app down. The Plug-ins tile in the library shows what was found and can scan again.
 
 ## Building
 
@@ -30,7 +36,7 @@ cmake --build build
 ./build/IkarosStudio_artefacts/Release/Ikaros\ Studio
 ```
 
-`sudo cmake --install build` installs the binary, desktop file, metainfo and icons.
+`sudo cmake --install build` installs the binary, desktop file, metainfo, icons and the sound packs.
 
 Debug builds draw a lot slower, so resizing feels choppy. Use `RelWithDebInfo` for day-to-day work; it's fast and relinks much quicker than `Release`.
 
@@ -62,6 +68,8 @@ cmake -B build -DIKAROS_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build
 ```
+
+Add `-DIKAROS_BUILD_TEST_PLUGINS=ON` to also build a few tiny VST3/LV2 plug-ins (and two deliberately broken ones) that the test scans and loads. They end up in `build/TestPlugins`, never in your real plug-in folders. The test keeps its own settings, so it doesn't touch the app's.
 
 ### Flatpak
 

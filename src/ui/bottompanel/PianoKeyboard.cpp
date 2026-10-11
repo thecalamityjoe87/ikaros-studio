@@ -100,17 +100,17 @@ PianoKeyboard::~PianoKeyboard()
 void PianoKeyboard::releaseAll()
 {
     state.allNotesOff (1);
-    engine.getTracks().allNotesOff();
+    engine.getTracks().inputs().allNotesOff();
 }
 
 void PianoKeyboard::handleNoteOn (juce::MidiKeyboardState*, int, int note, float velocity)
 {
-    engine.getTracks().noteOn (note, velocity);
+    engine.getTracks().inputs().noteOn (note, velocity);
 }
 
 void PianoKeyboard::handleNoteOff (juce::MidiKeyboardState*, int, int note, float)
 {
-    engine.getTracks().noteOff (note);
+    engine.getTracks().inputs().noteOff (note);
 }
 
 void PianoKeyboard::paint (juce::Graphics& g)

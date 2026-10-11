@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include <array>
 
 namespace ikaros
 {
@@ -51,6 +52,23 @@ public:
             repaint();
         };
         addAndMakeVisible (pan);
+
+        // Sends to the shared Reverb and Delay buses.
+        for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+        {
+            auto& knob = sendKnobs[(size_t) bus];
+            const auto busName = SendBuses::getBusName (bus);
+            knob.setRange (0.0, 1.0);
+            knob.setDoubleClickReturnValue (true, 0.0);
+            knob.setTooltip (busName + ": how much of this track goes to the shared " + busName.toLowerCase()
+                             + " (double-click for none)");
+            knob.onDragStart = [this, busName] { engine.beginUndoStep (busName + " Send"); selection.selectTrack (trackId); };
+            knob.onValueChange = [this, bus]
+            {
+                engine.getTracks().sends().setSendLevel (trackId, bus, (float) sendKnobs[(size_t) bus].getValue());
+            };
+            addAndMakeVisible (knob);
+        }
     }
 
     // "C", or how far left/right, e.g. "L 30".
@@ -78,6 +96,18 @@ public:
         fader.setTitle (t.name + " volume");
         pan.setTitle (t.name + " pan");
         pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+
+        const float sends[] { t.reverbSend, t.delaySend };
+
+        for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+        {
+            auto& knob = sendKnobs[(size_t) bus];
+            knob.setTitle (t.name + " " + SendBuses::getBusName (bus).toLowerCase() + " send");
+            knob.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+
+            if (! knob.isMouseButtonDown())
+                knob.setValue (sends[bus], juce::dontSendNotification);
+        }
 
         // Don't fight the user: only move the controls if they aren't dragging them.
         if (! fader.isMouseButtonDown())
@@ -136,6 +166,11 @@ public:
         {
             g.setFont (fonts::mono (10.0f));
             g.drawText (panText, panTextArea, juce::Justification::centred);
+
+            g.setFont (fonts::ui (9.5f));
+
+            for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+                g.drawText (SendBuses::getBusName (bus), sendLabelAreas[(size_t) bus], juce::Justification::centred);
         }
     }
 
@@ -147,10 +182,23 @@ public:
 
         if (! isMaster())
         {
-            // Pan knob under the name, with its readout below it.
-            auto panRow = area.removeFromTop (52);
-            panTextArea = panRow.removeFromBottom (12);
-            pan.setBounds (panRow.withSizeKeepingCentre (40, 40));
+            // One row of small knobs under the name: pan, then the Reverb and
+            // Delay sends, each with a caption (the pan's is its position).
+            auto knobRow = area.removeFromTop (46);
+            auto captions = knobRow.removeFromBottom (12);
+            const int column = knobRow.getWidth() / 3;
+            auto knobArea = [&] (int i) { return knobRow.withX (knobRow.getX() + i * column).withWidth (column).withSizeKeepingCentre (30, 30); };
+            auto captionArea = [&] (int i) { return captions.withX (captions.getX() + i * column).withWidth (column); };
+
+            pan.setBounds (knobArea (0));
+            panTextArea = captionArea (0);
+
+            for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+            {
+                sendKnobs[(size_t) bus].setBounds (knobArea (bus + 1));
+                sendLabelAreas[(size_t) bus] = captionArea (bus + 1);
+            }
+
             area.removeFromTop (4);
         }
         else
@@ -171,8 +219,11 @@ private:
     LevelMeter meter;
     juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+    std::array<juce::Slider, SendBuses::numBuses> sendKnobs { juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox },
+                                                              juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox } };
     juce::String name, dbText, panText { "C" };
     juce::Rectangle<int> panTextArea;
+    std::array<juce::Rectangle<int>, SendBuses::numBuses> sendLabelAreas;
     juce::Colour colour;
     bool selected = false;
 };

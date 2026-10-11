@@ -25,6 +25,7 @@ namespace ikaros
 */
 class MainComponent  : public juce::Component,
                        public juce::ApplicationCommandTarget,
+                       public juce::DragAndDropContainer,   // library files dragged onto the timeline
                        private juce::ChangeListener,
                        private juce::Timer
 {

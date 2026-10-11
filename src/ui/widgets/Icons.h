@@ -12,7 +12,8 @@ enum class Icon
     library, plus, undo, redo, toStart, play, pause, record, loop, metronome, search,
     keyboards, drums, bass, synths, guitar, strings, loops, mic,
     windowMinimise, windowMaximise, windowRestore, windowClose,
-    power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute
+    power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
+    plugin, folder, stop, warning, openWindow
 };
 
 namespace icons
