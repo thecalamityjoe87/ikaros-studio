@@ -154,6 +154,9 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
+    src/ui/bottompanel/PianoRollLayout.h
+    src/ui/bottompanel/PianoRollGestures.cpp
+    src/ui/bottompanel/PianoRollPainting.cpp
     src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp

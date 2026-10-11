@@ -27,6 +27,10 @@ class AudioEngine;
     Keys: Delete, Ctrl/Cmd+A, Escape (deselect, or cancel a drag), Q
     (quantize), arrows (move/transpose).
 
+    The code is in three files: PianoRoll.cpp (the region, view and editing),
+    PianoRollGestures.cpp (mouse, wheel and keys) and PianoRollPainting.cpp,
+    with shared sizes in PianoRollLayout.h.
+
     Every change goes through TrackController as one undo step, and the roll
     re-reads the region after each edit. The selection is kept by note ID
     (see NoteInfo), so it follows notes that move. Mouse hit-testing works
