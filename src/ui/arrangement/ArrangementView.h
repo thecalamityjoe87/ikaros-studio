@@ -31,6 +31,11 @@ namespace ikaros
     move (to another track of the same kind too), drag an edge to trim,
     double-click the name to rename. Audio files can be dropped on a lane or
     the drop zone.
+
+    Right-click a track header for the track menu (duplicate, rename, colour,
+    reorder, delete...), or an empty part of a lane for the lane menu (add or
+    paste a region there, plus the track menu). Drag the playhead's head, or
+    click the ruler, to move the playhead.
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
@@ -60,6 +65,9 @@ public:
 
     /** Shows the rename field on a region (scrolling it into view first). */
     void startRenaming (RegionId);
+
+    /** Shows the rename field on a track header (scrolling it into view first). */
+    void startRenamingTrack (TrackId);
 
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void (juce::Component*)> onAddTrackRequested;   // shows the track-type menu at this component
@@ -96,6 +104,7 @@ private:
     class Playhead;
     class Overlay;
     class Content;
+    class RegionDrag;
 
     AudioEngine& engine;
     Selection& selection;
@@ -138,31 +147,27 @@ private:
     void layoutContent();
 
     //==============================================================================
-    // Region gestures (RegionComponent forwards its mouse events here)
-    struct Drag
-    {
-        enum class Mode { none, pending, move, trimStart, trimEnd };
-
-        Mode mode = Mode::none;
-        RegionId anchor = 0;                 // the region that was clicked
-        juce::Point<int> start;              // mouse-down position in this component
-        bool selectOnlyAnchorOnClick = false;
-        std::vector<RegionInfo> regions;     // the selected regions as they were at mouse-down
-        std::vector<int> rows;               // each one's track row
-        double beatDelta = 0.0;              // move: how far in time
-        int rowDelta = 0;                    // move: how many tracks down
-        juce::Range<double> trim;            // trim: the anchor's new edges
-    };
-
-    Drag drag;
+    // Region gestures (RegionComponent forwards its mouse events here).
+    // Clicks, moves and trims are handled by RegionDrag.
+    std::unique_ptr<RegionDrag> regionDrag;
 
     void regionMouseDown (RegionComponent&, const juce::MouseEvent&);
     void regionMouseDrag (RegionComponent&, const juce::MouseEvent&);
     void regionMouseUp (RegionComponent&, const juce::MouseEvent&);
     void regionDoubleClicked (RegionComponent&, RegionComponent::Zone);
-    void updateMoveDrag (juce::Point<int>);
-    void updateTrimDrag (int dx);
     void showRegionMenu();
+
+    // Context menus for tracks. They act on the selected track, so the
+    // header or lane selects its track before showing them.
+    void showTrackMenu();
+    void showLaneMenu (TrackId, double beat);
+    juce::PopupMenu createTrackMenu();
+    juce::PopupMenu createColourMenu (TrackId);
+
+    /** Playhead dragging: moves it to an x-position in the lanes, scrolling
+        the timeline when that's past either edge. */
+    void dragPlayheadTo (float laneX);
+    void scrollRowIntoView (int row);
 
     RegionComponent* findRegion (RegionId) const;
     int rowOf (TrackId) const;

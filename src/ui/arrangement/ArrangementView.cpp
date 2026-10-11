@@ -1,4 +1,9 @@
 #include "ui/arrangement/ArrangementView.h"
+#include "ui/arrangement/ArrangementContent.h"
+#include "ui/arrangement/ArrangementLayout.h"
+#include "ui/arrangement/ArrangementOverlays.h"
+#include "ui/arrangement/ArrangementRegionDrag.h"
+#include "ui/arrangement/ArrangementRuler.h"
 #include "app/CommandIDs.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -8,18 +13,11 @@ namespace ikaros
 {
 
 using namespace tokens;
+using namespace arrangement;
 
 namespace
 {
-    constexpr int headerWidth = size::trackHeaderWidth;
-    constexpr int rowHeight = size::trackRowHeight;
-    constexpr int dropZoneHeight = 84;
-    constexpr int dropZoneMargin = 12;
-    constexpr int loopStripHeight = 14;    // top part of the ruler where dragging sets the loop
     constexpr int scrollBarHeight = 12;
-    constexpr int regionTop = 5;           // a region's gap from the top of its lane...
-    constexpr int regionGap = 11;          // ...and the total gap above and below it
-    constexpr int dragThreshold = 4;       // pixels the mouse must move before a click becomes a drag
 
     // Zoom range, in pixels per beat: from about 200 bars across the window
     // down to a single beat filling a large part of it.
@@ -36,625 +34,7 @@ namespace
     {
         return minPixelsPerBeat * std::pow (maxPixelsPerBeat / minPixelsPerBeat, value);
     }
-
-    // Zoomed far out, drawing every bar would be a solid smear. This finds a
-    // bar step (1, 2, 4, 8...) that keeps things at least minPixels apart.
-    int barStride (const ArrangementView::Geometry& geo, double minPixels)
-    {
-        const double barWidth = geo.pixelsPerBeat * geo.beatsPerBar;
-        int stride = 1;
-
-        while (barWidth * stride < minPixels && stride < 4096)
-            stride *= 2;
-
-        return stride;
-    }
-
-    // Calls fn (barIndex, x) for every stride-th bar visible in a lane of the given width.
-    template <typename Fn>
-    void forEachVisibleBar (const ArrangementView::Geometry& geo, int width, int stride, Fn&& fn)
-    {
-        const int firstBar = juce::jmax (0, (int) std::floor (geo.scrollBeats / geo.beatsPerBar));
-        const int lastBar = (int) std::ceil (geo.xToBeat ((float) width) / geo.beatsPerBar);
-
-        for (int bar = firstBar - firstBar % stride; bar <= lastBar; bar += stride)
-            fn (bar, juce::roundToInt (geo.beatToX (bar * geo.beatsPerBar)));
-    }
 }
-
-//==============================================================================
-// Ruler: bar numbers + loop range. Click/drag the lower part to move the
-// playhead; drag along the top strip to set the loop range. The left part
-// (above the track headers) holds the snap and zoom controls.
-class ArrangementView::Ruler  : public juce::Component,
-                               public juce::SettableTooltipClient   // adds setTooltip()
-{
-public:
-    explicit Ruler (ArrangementView& o) : owner (o)
-    {
-        setTitle ("Bar ruler");
-        setTooltip ("Click to move the playhead. Drag along the top edge to set the loop.");
-    }
-
-    void setLoop (bool on, double start, double end)
-    {
-        if (on != looping || start != loopStart || end != loopEnd)
-        {
-            looping = on;
-            loopStart = start;
-            loopEnd = end;
-            repaint();
-        }
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds();
-        g.fillAll (colour::sidebarBg);
-        g.setColour (colour::divider);
-        g.fillRect (r.removeFromBottom (1));
-
-        auto label = r.removeFromLeft (headerWidth);
-        g.setColour (colour::divider);
-        g.fillRect (label.removeFromRight (1));
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
-        g.drawText ("TRACKS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
-
-        // Everything below scrolls with the timeline; keep it out of the header part.
-        juce::Graphics::ScopedSaveState save (g);
-        g.reduceClipRegion (r);
-        g.setOrigin (r.getX(), 0);
-        auto& geo = owner.geometry;
-
-        // Loop range: an amber bar along the top.
-        if (looping && loopEnd > loopStart)
-        {
-            auto x1 = geo.beatToX (loopStart);
-            auto x2 = geo.beatToX (loopEnd);
-            g.setColour (colour::accent.withAlpha (0.4f));
-            g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, 3.5f);
-        }
-
-        // Bar numbers with a tick on the left of each. Zoomed out, only every
-        // 2nd/4th/... bar gets a number so they don't overlap.
-        const int labelStride = barStride (geo, 36.0);
-        const int bottom = getHeight() - 1;
-        g.setFont (fonts::mono (11.0f));
-
-        forEachVisibleBar (geo, r.getWidth(), barStride (geo, 6.0), [&] (int bar, int x)
-        {
-            const bool labelled = bar % labelStride == 0;
-            g.setColour (colour::borderStrong);
-            g.fillRect (x, bottom - (labelled ? 16 : 7), 1, labelled ? 14 : 5);
-
-            if (labelled)
-            {
-                g.setColour (colour::textSecondary);
-                g.drawText (juce::String (bar + 1), x + 4, bottom - 16, 40, 14, juce::Justification::centredLeft);
-            }
-        });
-    }
-
-    void mouseDown (const juce::MouseEvent& e) override
-    {
-        if (e.x < headerWidth)
-            return;
-
-        draggingLoop = e.y < loopStripHeight;
-        dragStartBeat = beatAt (e.x);
-        mouseDrag (e);
-    }
-
-    void mouseDrag (const juce::MouseEvent& e) override
-    {
-        if (e.mouseDownPosition.x < headerWidth)
-            return;
-
-        auto beat = beatAt (e.x);
-        auto& engine = owner.engine;
-
-        if (draggingLoop)
-        {
-            // Snap the loop to whole bars.
-            auto bpb = owner.geometry.beatsPerBar;
-            auto a = std::floor (juce::jmin (dragStartBeat, beat) / bpb) * bpb;
-            auto b = std::ceil (juce::jmax (dragStartBeat, beat) / bpb) * bpb;
-
-            if (b <= a)
-                b = a + bpb;
-
-            engine.setLoopRangeBeats (a, b);
-            engine.setLooping (true);
-        }
-        else
-        {
-            engine.setPositionBeats (owner.snapBeat (beat));
-        }
-    }
-
-    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
-    {
-        owner.handleWheel (e, wheel, true);   // over the ruler, the wheel always scrolls in time
-    }
-
-private:
-    ArrangementView& owner;
-    bool looping = false, draggingLoop = false;
-    double loopStart = 0.0, loopEnd = 0.0, dragStartBeat = 0.0;
-
-    double beatAt (int x) const   { return juce::jmax (0.0, owner.geometry.xToBeat ((float) (x - headerWidth))); }
-};
-
-//==============================================================================
-// One track's timeline lane: grid + regions. Double-click creates a region.
-class ArrangementView::Lane  : public juce::Component,
-                              public juce::SettableTooltipClient
-{
-public:
-    Lane (ArrangementView& o, TrackId id) : owner (o), trackId (id)
-    {
-        setTitle ("Track lane");
-
-        // Clicking a lane takes keyboard focus, so focus doesn't stay on (say)
-        // a Mute button that would then swallow the Space key.
-        setWantsKeyboardFocus (true);
-    }
-
-    void focusGained (FocusChangeType cause) override
-    {
-        // Only show a focus ring when focus arrived from the keyboard (Tab).
-        showFocusRing = cause != focusChangedByMouseClick;
-        repaint();
-    }
-
-    void focusLost (FocusChangeType) override    { showFocusRing = false; repaint(); }
-
-    void update (const TrackInfo& t, const std::vector<RegionInfo>& regionInfos, bool isSelected)
-    {
-        colour = t.colour;
-        selected = isSelected;
-        isAudio = t.kind == TrackKind::audio;
-        setAlpha (t.silencedBySolo || t.muted ? 0.4f : 1.0f);
-        setTooltip (isAudio ? "Drop an audio file here, or press R to record"
-                            : "Double-click to add a 4-bar chord region");
-
-        // Reconcile region components by ID: keep existing ones (so keyboard
-        // focus and a drag in progress survive), add new ones, remove deleted ones.
-        std::map<RegionId, std::unique_ptr<RegionComponent>> next;
-
-        for (auto& info : regionInfos)
-        {
-            auto it = regions.find (info.id);
-            std::unique_ptr<RegionComponent> comp;
-
-            if (it != regions.end())
-            {
-                comp = std::move (it->second);
-            }
-            else
-            {
-                comp = std::make_unique<RegionComponent> (info, colour);
-                addAndMakeVisible (*comp);
-
-                // The arrangement handles the gestures: it knows about the
-                // other selected regions and the other tracks.
-                comp->onMouseDown   = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseDown (c, e); };
-                comp->onMouseDrag   = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseDrag (c, e); };
-                comp->onMouseUp     = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseUp (c, e); };
-                comp->onDoubleClick = [this] (RegionComponent& c, RegionComponent::Zone z)   { owner.regionDoubleClicked (c, z); };
-
-                auto rid = info.id;
-                comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().renameRegion (rid, name); };
-                comp->onOpenEditor = [this, rid]
-                {
-                    owner.selection.selectRegion (trackId, rid);
-
-                    if (owner.onOpenRegionInEditor)
-                        owner.onOpenRegionInEditor (rid);
-                };
-            }
-
-            comp->update (info, colour, owner.selection.isSelected (info.id));
-            next[info.id] = std::move (comp);
-        }
-
-        regions = std::move (next);   // components not moved across are destroyed here
-        resized();
-        repaint();
-    }
-
-    RegionComponent* findRegion (RegionId id) const
-    {
-        auto it = regions.find (id);
-        return it != regions.end() ? it->second.get() : nullptr;
-    }
-
-    /** The take being recorded on this lane, from startBeat to the playhead
-        (nothing when endBeat <= startBeat). */
-    void setRecordingRange (double startBeat, double endBeat)
-    {
-        if (startBeat != recordStart || endBeat != recordEnd)
-        {
-            recordStart = startBeat;
-            recordEnd = endBeat;
-            repaint();
-        }
-    }
-
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        if (recordEnd <= recordStart)
-            return;
-
-        // A red region that grows with the playhead while recording.
-        auto& geo = owner.geometry;
-        auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
-        auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
-
-        g.setColour (colour::record.withAlpha (0.25f));
-        g.fillRoundedRectangle (r, 8.0f);
-        g.setColour (colour::record);
-        g.drawRoundedRectangle (r, 8.0f, 1.5f);
-
-        g.setFont (fonts::uiBold (11.0f));
-        g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds();
-
-        if (selected)
-            g.fillAll (colour::accent.withAlpha (0.05f));
-
-        // Beat lines (faint), when zoomed in enough for them to be useful...
-        auto& geo = owner.geometry;
-
-        if (geo.pixelsPerBeat >= 6.0)
-        {
-            g.setColour (juce::Colours::white.withAlpha (0.025f));
-
-            for (double beat = std::ceil (geo.scrollBeats); geo.beatToX (beat) <= (float) getWidth(); beat += 1.0)
-                g.fillRect (juce::roundToInt (geo.beatToX (beat)), 0, 1, r.getHeight());
-        }
-
-        // ...and bar lines (stronger).
-        g.setColour (juce::Colours::white.withAlpha (0.05f));
-        forEachVisibleBar (geo, getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
-
-        g.setColour (colour::divider);
-        g.fillRect (r.removeFromBottom (1));
-
-        if (showFocusRing && hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), 4.0f);
-    }
-
-    void resized() override
-    {
-        auto& geo = owner.geometry;
-
-        for (auto& [id, comp] : regions)   // structured binding: unpacks each map entry into key + value
-        {
-            // The display range includes an edge that's being dragged.
-            auto range = comp->getDisplayRange();
-            auto x = juce::roundToInt (geo.beatToX (range.getStart()));
-            auto w = juce::jmax (8, juce::roundToInt (geo.beatsToWidth (range.getLength())));
-            comp->setBounds (x, regionTop, w, getHeight() - regionGap);
-        }
-    }
-
-    void mouseDown (const juce::MouseEvent&) override
-    {
-        owner.selection.selectRegion (trackId, 0);   // select the track, deselect regions
-    }
-
-    void mouseDoubleClick (const juce::MouseEvent& e) override
-    {
-        auto beat = owner.geometry.xToBeat ((float) e.x);
-
-        if (auto rid = owner.engine.getTracks().createChordRegion (trackId, beat))
-            owner.selection.selectRegion (trackId, rid);
-    }
-
-private:
-    ArrangementView& owner;
-    const TrackId trackId;
-    juce::Colour colour;
-    bool selected = false, isAudio = false, showFocusRing = false;
-    double recordStart = 0.0, recordEnd = 0.0;
-    std::map<RegionId, std::unique_ptr<RegionComponent>> regions;
-};
-
-//==============================================================================
-// The dashed "Drop a sound, loop or audio file here" zone. Clicking it adds a
-// track; dropping audio files on it adds them on a new audio track (the
-// ArrangementView handles the drop).
-class ArrangementView::DropZone  : public juce::Button
-{
-public:
-    DropZone() : juce::Button ("Add a track")
-    {
-        setTitle ("Add a track");
-        setMouseClickGrabsKeyboardFocus (false);
-        setTooltip ("Click to add a new track, or drop audio files here");
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
-    }
-
-    void paintButton (juce::Graphics& g, bool over, bool) override
-    {
-        auto r = getLocalBounds().toFloat().reduced (1.0f);
-
-        juce::Path outline, dashed;
-        outline.addRoundedRectangle (r, 12.0f);
-        const float dashes[] = { 5.0f, 4.0f };
-        juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
-
-        if (over)
-        {
-            g.setColour (colour::raised.withAlpha (0.4f));
-            g.fillPath (outline);
-        }
-
-        g.setColour (over ? colour::textSecondary : colour::borderStrong);
-        g.fillPath (dashed);
-
-        auto text = juce::String ("Drop a sound, loop or audio file here");
-        auto font = fonts::ui (14.0f);
-        auto textW = juce::GlyphArrangement::getStringWidth (font, text);
-        auto group = r.withSizeKeepingCentre (textW + 26.0f, 20.0f);
-
-        icons::draw (g, Icon::plus, group.removeFromLeft (18.0f), colour::textSecondary, 18.0f, 2.0f);
-        group.removeFromLeft (8.0f);
-        g.setColour (colour::textSecondary);
-        g.setFont (font);
-        g.drawText (text, group, juce::Justification::centredLeft);
-
-        if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
-    }
-};
-
-//==============================================================================
-// The playhead: amber line with a rounded head, drawn over the ruler and lanes.
-class ArrangementView::Playhead  : public juce::Component
-{
-public:
-    Playhead()
-    {
-        setInterceptsMouseClicks (false, false);   // clicks pass through to the ruler/lanes
-        setAccessible (false);
-    }
-
-    void setX (float newX)
-    {
-        if (std::abs (newX - x) < 0.25f)
-            return;
-
-        // Only repaint the thin strips that changed, not the whole timeline.
-        repaint (stripAt (x));
-        x = newX;
-        repaint (stripAt (x));
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        if (x < -8.0f || x > (float) getWidth() + 8.0f)
-            return;
-
-        g.setColour (colour::accent);
-        g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight());
-        g.fillRoundedRectangle (x - 7.0f, 0.0f, 14.0f, 12.0f, 4.0f);
-    }
-
-private:
-    float x = -100.0f;
-
-    juce::Rectangle<int> stripAt (float px) const
-    {
-        return { juce::roundToInt (px) - 9, 0, 18, getHeight() };
-    }
-};
-
-//==============================================================================
-// Drawn over the lanes: outlines showing where dragged regions will land, and
-// where dragged-in audio files will go.
-class ArrangementView::Overlay  : public juce::Component
-{
-public:
-    struct Ghost
-    {
-        juce::Rectangle<float> area;
-        juce::Colour colour;
-        juce::String name;
-    };
-
-    Overlay()
-    {
-        setInterceptsMouseClicks (false, false);
-        setAccessible (false);
-    }
-
-    void setGhosts (std::vector<Ghost> newGhosts)
-    {
-        ghosts = std::move (newGhosts);
-        repaint();
-    }
-
-    void setDropTarget (juce::Rectangle<float> area, float markerX, const juce::String& text)
-    {
-        dropArea = area;
-        dropMarkerX = markerX;
-        dropText = text;
-        repaint();
-    }
-
-    void clear()
-    {
-        ghosts.clear();
-        dropArea = {};
-        repaint();
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        for (auto& ghost : ghosts)
-        {
-            g.setColour (ghost.colour.withAlpha (0.3f));
-            g.fillRoundedRectangle (ghost.area, 8.0f);
-            g.setColour (ghost.colour);
-            g.drawRoundedRectangle (ghost.area.reduced (0.75f), 8.0f, 1.5f);
-            g.setColour (colour::text);
-            g.setFont (fonts::uiBold (11.0f));
-            g.drawText (ghost.name, ghost.area.reduced (8.0f, 3.0f).removeFromTop (14.0f),
-                        juce::Justification::centredLeft, true);
-        }
-
-        if (! dropArea.isEmpty())
-        {
-            g.setColour (colour::accent.withAlpha (0.12f));
-            g.fillRoundedRectangle (dropArea, 10.0f);
-            g.setColour (colour::accent);
-            g.drawRoundedRectangle (dropArea.reduced (1.0f), 10.0f, 1.5f);
-            g.fillRect (dropMarkerX - 1.0f, dropArea.getY(), 2.0f, dropArea.getHeight());
-
-            g.setFont (fonts::uiBold (13.0f));
-            g.drawText (dropText, dropArea.withLeft (dropMarkerX + 8.0f).reduced (0.0f, 6.0f),
-                        juce::Justification::topLeft, true);
-        }
-    }
-
-private:
-    std::vector<Ghost> ghosts;
-    juce::Rectangle<float> dropArea;
-    float dropMarkerX = 0.0f;
-    juce::String dropText;
-};
-
-//==============================================================================
-// Everything that scrolls vertically: headers on the left, lanes on the right.
-class ArrangementView::Content  : public juce::Component
-{
-public:
-    explicit Content (ArrangementView& o) : owner (o)
-    {
-        dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested (&dropZone); };
-        addAndMakeVisible (dropZone);
-    }
-
-    void sync (const std::vector<TrackInfo>& tracks,
-               const std::map<TrackId, std::vector<RegionInfo>>& regions)
-    {
-        std::map<TrackId, std::unique_ptr<TrackHeader>> nextHeaders;
-        std::map<TrackId, std::unique_ptr<Lane>> nextLanes;
-        order.clear();
-
-        auto selectedTrack = owner.selection.getTrack();
-
-        for (auto& t : tracks)
-        {
-            auto header = std::move (headers[t.id]);
-            auto lane = std::move (lanes[t.id]);
-
-            if (header == nullptr)
-            {
-                header = std::make_unique<TrackHeader> (owner.engine, owner.selection, t);
-                addAndMakeVisible (*header);
-            }
-
-            if (lane == nullptr)
-            {
-                lane = std::make_unique<Lane> (owner, t.id);
-                addAndMakeVisible (*lane);
-            }
-
-            header->update (t, t.id == selectedTrack);
-            auto it = regions.find (t.id);
-            lane->update (t, it != regions.end() ? it->second : std::vector<RegionInfo> {}, t.id == selectedTrack);
-
-            order.push_back (t.id);
-            nextHeaders[t.id] = std::move (header);
-            nextLanes[t.id] = std::move (lane);
-        }
-
-        headers = std::move (nextHeaders);
-        lanes = std::move (nextLanes);
-    }
-
-    RegionComponent* findRegion (RegionId id) const
-    {
-        for (auto& [trackId, lane] : lanes)
-            if (auto* region = lane->findRegion (id))
-                return region;
-
-        return nullptr;
-    }
-
-    /** Re-positions regions and redraws the grid after a zoom or scroll. */
-    void timelineChanged()
-    {
-        for (auto& [id, lane] : lanes)
-        {
-            lane->resized();
-            lane->repaint();
-        }
-    }
-
-    void setRecording (TrackId track, double startBeat, double endBeat)
-    {
-        for (auto& [id, lane] : lanes)
-        {
-            if (id == track)
-                lane->setRecordingRange (startBeat, endBeat);
-            else
-                lane->setRecordingRange (0.0, 0.0);
-        }
-    }
-
-    int getIdealHeight() const
-    {
-        return (int) order.size() * rowHeight + dropZoneHeight + dropZoneMargin * 2;
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (colour::windowBg);
-        g.setColour (colour::sidebarBg);
-        g.fillRect (0, 0, headerWidth - 1, getHeight());
-        g.setColour (colour::divider);
-        g.fillRect (headerWidth - 1, 0, 1, getHeight());
-    }
-
-    void resized() override
-    {
-        int y = 0;
-
-        for (auto id : order)
-        {
-            headers[id]->setBounds (0, y, headerWidth - 1, rowHeight);
-            lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, rowHeight);
-            y += rowHeight;
-        }
-
-        dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,
-                            getWidth() - headerWidth - dropZoneMargin * 2, dropZoneHeight);
-    }
-
-    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
-    {
-        // Wheel events bubble up here from the lanes and regions. Anything the
-        // arrangement doesn't use goes on up to the Viewport (vertical scroll).
-        if (! owner.handleWheel (e, wheel, false))
-            juce::Component::mouseWheelMove (e, wheel);
-    }
-
-private:
-    ArrangementView& owner;
-    std::map<TrackId, std::unique_ptr<TrackHeader>> headers;
-    std::map<TrackId, std::unique_ptr<Lane>> lanes;
-    std::vector<TrackId> order;
-    DropZone dropZone;
-};
 
 //==============================================================================
 ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::ApplicationCommandManager& cm)
@@ -663,7 +43,8 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     ruler = std::make_unique<Ruler> (*this);
     content = std::make_unique<Content> (*this);
     overlay = std::make_unique<Overlay>();
-    playhead = std::make_unique<Playhead>();
+    playhead = std::make_unique<Playhead> (*this);
+    regionDrag = std::make_unique<RegionDrag> (*this);
 
     addAndMakeVisible (*ruler);
 
@@ -888,7 +269,7 @@ void ArrangementView::updateTransport()
     const bool wasVisible = lastPlayheadX >= 0.0f && lastPlayheadX <= width - 20.0f;
     const bool isVisible = x >= 0.0f && x <= width - 20.0f;
 
-    if (state.playing && wasVisible && ! isVisible && drag.mode == Drag::Mode::none
+    if (state.playing && wasVisible && ! isVisible && ! regionDrag->isDragging()
          && ! juce::Component::isMouseButtonDownAnywhere())
     {
         scrollToBeat (state.positionBeats - getVisibleBeats() * 0.05);
@@ -981,222 +362,9 @@ juce::Rectangle<float> ArrangementView::rowAreaInOverlay (int row) const
     return { 0.0f, (float) (row * rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) rowHeight };
 }
 
-void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)
-{
-    const auto info = comp.getInfo();   // a copy: the component may be updated during the drag
-    drag = {};
-
-    if (e.mods.isPopupMenu())
-    {
-        // Right-click: act on the clicked region, keeping a selection it's part of.
-        if (! selection.isSelected (info.id))
-            selection.selectRegion (info.trackId, info.id);
-
-        showRegionMenu();
-        return;
-    }
-
-    if (e.mods.isShiftDown() || e.mods.isCommandDown())
-    {
-        selection.toggleRegion (info.trackId, info.id);
-
-        if (! selection.isSelected (info.id))
-            return;   // it was just deselected: nothing to drag
-    }
-    else if (! selection.isSelected (info.id))
-    {
-        selection.selectRegion (info.trackId, info.id);
-    }
-    else
-    {
-        // Already part of a selection: keep it so the whole group can be
-        // dragged; a plain click (no drag) selects just this one on mouse-up.
-        drag.selectOnlyAnchorOnClick = selection.getRegions().size() > 1;
-    }
-
-    const auto zone = comp.getZoneAt (e.getPosition());
-    drag.anchor = info.id;
-    drag.start = e.getEventRelativeTo (this).getPosition();
-    drag.mode = zone == RegionComponent::Zone::leftEdge  ? Drag::Mode::trimStart
-              : zone == RegionComponent::Zone::rightEdge ? Drag::Mode::trimEnd
-                                                         : Drag::Mode::pending;
-    drag.trim = { info.startBeat, info.getEndBeat() };
-
-    for (auto id : selection.getRegions())
-    {
-        if (auto* c = findRegion (id))
-        {
-            drag.regions.push_back (c->getInfo());
-            drag.rows.push_back (rowOf (c->getInfo().trackId));
-        }
-    }
-}
-
-void ArrangementView::regionMouseDrag (RegionComponent&, const juce::MouseEvent& e)
-{
-    const auto pos = e.getEventRelativeTo (this).getPosition();
-
-    if (drag.mode == Drag::Mode::pending && pos.getDistanceFrom (drag.start) >= dragThreshold)
-    {
-        drag.mode = Drag::Mode::move;
-
-        // Dim the originals; outlines show where they'll land.
-        for (auto& r : drag.regions)
-            if (auto* c = findRegion (r.id))
-                c->setAlpha (0.35f);
-    }
-
-    if (drag.mode == Drag::Mode::move)
-        updateMoveDrag (pos);
-    else if (drag.mode == Drag::Mode::trimStart || drag.mode == Drag::Mode::trimEnd)
-        updateTrimDrag (pos.x - drag.start.x);
-}
-
-void ArrangementView::updateMoveDrag (juce::Point<int> pos)
-{
-    auto anchor = std::find_if (drag.regions.begin(), drag.regions.end(),
-                                [this] (const RegionInfo& r) { return r.id == drag.anchor; });
-
-    if (anchor == drag.regions.end())
-        return;
-
-    const int anchorIndex = (int) std::distance (drag.regions.begin(), anchor);
-
-    // Time: snap the clicked region's start to the grid; the others keep their spacing.
-    double delta = (pos.x - drag.start.x) / geometry.pixelsPerBeat;
-    delta = snapBeat (anchor->startBeat + delta) - anchor->startBeat;
-
-    double earliest = anchor->startBeat;
-
-    for (auto& r : drag.regions)
-        earliest = juce::jmin (earliest, r.startBeat);
-
-    delta = juce::jmax (delta, -earliest);   // nothing goes before the start of the song
-
-    // Tracks: follow the mouse up and down, as long as every region lands on
-    // a track of its own kind (MIDI on instrument tracks, audio on audio
-    // tracks). Otherwise they stay on their own tracks.
-    int rowDelta = rowAt (pos.y) - drag.rows[(size_t) anchorIndex];
-
-    for (size_t i = 0; i < drag.regions.size(); ++i)
-    {
-        const int target = drag.rows[i] + rowDelta;
-
-        if (drag.rows[i] < 0 || ! juce::isPositiveAndBelow (target, (int) tracks.size())
-             || (tracks[(size_t) target].kind == TrackKind::audio) == drag.regions[i].isMidi)
-        {
-            rowDelta = 0;
-            break;
-        }
-    }
-
-    drag.beatDelta = delta;
-    drag.rowDelta = rowDelta;
-
-    std::vector<Overlay::Ghost> ghosts;
-
-    for (size_t i = 0; i < drag.regions.size(); ++i)
-    {
-        auto& r = drag.regions[i];
-        const int row = drag.rows[i] + rowDelta;
-
-        if (! juce::isPositiveAndBelow (row, (int) tracks.size()))
-            continue;
-
-        auto area = rowAreaInOverlay (row);
-        ghosts.push_back ({ { geometry.beatToX (r.startBeat + delta), area.getY() + (float) regionTop,
-                              juce::jmax (8.0f, geometry.beatsToWidth (r.lengthBeats)), area.getHeight() - (float) regionGap },
-                            tracks[(size_t) row].colour, r.name });
-    }
-
-    overlay->setGhosts (std::move (ghosts));
-}
-
-void ArrangementView::updateTrimDrag (int dx)
-{
-    auto* comp = findRegion (drag.anchor);
-
-    if (comp == nullptr)
-        return;
-
-    auto& info = comp->getInfo();
-    const double delta = dx / geometry.pixelsPerBeat;
-    const double minLength = TrackController::minRegionBeats;
-
-    if (drag.mode == Drag::Mode::trimStart)
-    {
-        auto start = snapBeat (info.startBeat + delta);
-        start = juce::jlimit (juce::jmax (0.0, info.minStartBeat), info.getEndBeat() - minLength, start);
-        drag.trim = { start, info.getEndBeat() };
-    }
-    else
-    {
-        auto end = snapBeat (info.getEndBeat() + delta);
-        end = juce::jlimit (info.startBeat + minLength, juce::jmax (info.startBeat + minLength, info.maxEndBeat), end);
-        drag.trim = { info.startBeat, end };
-    }
-
-    comp->setTrimPreview (drag.trim);
-
-    if (auto* lane = comp->getParentComponent())
-        lane->resized();
-}
-
-void ArrangementView::regionMouseUp (RegionComponent&, const juce::MouseEvent&)
-{
-    auto finished = std::exchange (drag, {});   // take the drag state and reset it
-    auto& tc = engine.getTracks();
-
-    if (finished.mode == Drag::Mode::move)
-    {
-        overlay->clear();
-
-        for (auto& r : finished.regions)
-            if (auto* c = findRegion (r.id))
-                c->setAlpha (1.0f);
-
-        if (finished.beatDelta != 0.0 || finished.rowDelta != 0)
-        {
-            std::vector<RegionPlacement> placements;
-
-            for (size_t i = 0; i < finished.regions.size(); ++i)
-            {
-                const int row = finished.rows[i] + finished.rowDelta;
-
-                if (juce::isPositiveAndBelow (row, (int) tracks.size()))
-                    placements.push_back ({ finished.regions[i].id, tracks[(size_t) row].id,
-                                            finished.regions[i].startBeat + finished.beatDelta });
-            }
-
-            tc.moveRegions (placements);
-
-            // The selected track follows the clicked region to its new track.
-            if (auto moved = tc.getRegion (finished.anchor))
-                selection.selectRegions (moved->trackId, selection.getRegions());
-
-            refresh();   // now, so the regions don't flash back to where they were
-        }
-    }
-    else if (finished.mode == Drag::Mode::trimStart || finished.mode == Drag::Mode::trimEnd)
-    {
-        if (auto* comp = findRegion (finished.anchor))
-        {
-            const auto& info = comp->getInfo();
-            const bool changed = finished.trim.getStart() != info.startBeat || finished.trim.getEnd() != info.getEndBeat();
-            comp->setTrimPreview (std::nullopt);
-
-            if (changed)
-                tc.trimRegion (finished.anchor, finished.trim.getStart(), finished.trim.getEnd());
-
-            refresh();
-        }
-    }
-    else if (finished.mode == Drag::Mode::pending && finished.selectOnlyAnchorOnClick)
-    {
-        if (auto r = tc.getRegion (finished.anchor))
-            selection.selectRegion (r->trackId, r->id);
-    }
-}
+void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDown (comp, e); }
+void ArrangementView::regionMouseDrag (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDrag (comp, e); }
+void ArrangementView::regionMouseUp (RegionComponent& comp, const juce::MouseEvent& e)     { regionDrag->regionMouseUp (comp, e); }
 
 void ArrangementView::regionDoubleClicked (RegionComponent& comp, RegionComponent::Zone zone)
 {
@@ -1247,13 +415,156 @@ void ArrangementView::startRenaming (RegionId id)
     if (region->startBeat < geometry.scrollBeats || region->startBeat > visibleEnd - 1.0)
         scrollToBeat (region->startBeat - geometry.beatsPerBar);
 
+    scrollRowIntoView (row);
+
+    if (auto* comp = findRegion (id))
+        comp->startRenaming();
+}
+
+void ArrangementView::startRenamingTrack (TrackId id)
+{
+    const int row = rowOf (id);
+
+    if (row < 0)
+        return;
+
+    scrollRowIntoView (row);
+
+    if (auto* header = content->findHeader (id))
+        header->startRenaming();
+}
+
+void ArrangementView::scrollRowIntoView (int row)
+{
     const int rowY = row * rowHeight;
 
     if (rowY < viewport.getViewPositionY() || rowY + rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
         viewport.setViewPosition (0, rowY);
+}
 
-    if (auto* comp = findRegion (id))
-        comp->startRenaming();
+//==============================================================================
+// Track context menus
+juce::PopupMenu ArrangementView::createTrackMenu()
+{
+    // Commands, as in the Track menu, so names, shortcuts and enabled state
+    // come from one place (MainComponent::getCommandInfo).
+    juce::PopupMenu menu;
+    const auto track = selection.getTrack();
+
+    for (auto id : { CommandIDs::newTrack, CommandIDs::newAudioTrack,
+                     CommandIDs::duplicateTrackSettings, CommandIDs::duplicateTrack })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+    menu.addCommandItem (&commands, CommandIDs::renameTrack);
+    menu.addSubMenu ("Track Colour", createColourMenu (track), track != 0);
+    menu.addCommandItem (&commands, CommandIDs::moveTrackUp);
+    menu.addCommandItem (&commands, CommandIDs::moveTrackDown);
+    menu.addSeparator();
+
+    for (auto id : { CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+    menu.addCommandItem (&commands, CommandIDs::deleteTrack);
+    return menu;
+}
+
+juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
+{
+    // Names for TrackController::getTrackColours(), in the same order.
+    static const juce::StringArray names { "Blue", "Orange", "Green", "Purple", "Yellow" };
+
+    juce::PopupMenu menu;
+    const auto info = engine.getTracks().getTrack (track);
+    const auto colours = TrackController::getTrackColours();
+
+    for (size_t i = 0; i < colours.size(); ++i)
+    {
+        const auto c = colours[i];
+
+        // A small rounded swatch beside each name.
+        auto swatch = std::make_unique<juce::DrawablePath>();
+        juce::Path shape;
+        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, 3.0f);
+        swatch->setPath (shape);
+        swatch->setFill (c);
+
+        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Colour " + juce::String (i + 1))
+                          .setImage (std::move (swatch))
+                          .setTicked (info && info->colour == c)
+                          .setAction ([this, track, c] { engine.getTracks().setTrackColour (track, c); }));
+    }
+
+    return menu;
+}
+
+void ArrangementView::showTrackMenu()
+{
+    createTrackMenu().showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+}
+
+void ArrangementView::showLaneMenu (TrackId track, double beat)
+{
+    auto& tc = engine.getTracks();
+    const auto info = tc.getTrack (track);
+
+    if (! info)
+        return;
+
+    const auto at = snapBeat (juce::jmax (0.0, beat));
+    const auto regions = tc.getRegions (track);
+    juce::PopupMenu menu;
+
+    if (info->kind == TrackKind::instrument)
+    {
+        menu.addItem (juce::PopupMenu::Item ("Add Chord Region Here").setAction ([this, track, at]
+        {
+            if (auto rid = engine.getTracks().createChordRegion (track, at))
+                selection.selectRegion (track, rid);
+        }));
+    }
+
+    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.canPaste()).setAction ([this, track, at]
+    {
+        auto pasted = engine.getTracks().pasteRegions (track, at);
+
+        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().getRegion (pasted.front()))
+            selection.selectRegions (first->trackId, pasted);
+    }));
+
+    menu.addItem (juce::PopupMenu::Item ("Select All Regions on Track").setEnabled (! regions.empty()).setAction ([this, track]
+    {
+        std::vector<RegionId> ids;
+
+        for (auto& r : engine.getTracks().getRegions (track))
+            ids.push_back (r.id);
+
+        selection.selectRegions (track, ids);
+    }));
+
+    menu.addItem (juce::PopupMenu::Item ("Move Playhead Here").setAction ([this, at] { engine.setPositionBeats (at); }));
+    menu.addSeparator();
+    menu.addSubMenu ("Track", createTrackMenu());
+    menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+}
+
+//==============================================================================
+void ArrangementView::dragPlayheadTo (float laneX)
+{
+    const auto width = (float) getLaneWidth();
+
+    // Past an edge: scroll by a fraction of the overshoot, so the further out
+    // the mouse is, the faster the timeline scrolls.
+    if (laneX < 0.0f || laneX > width)
+    {
+        const float overshoot = laneX < 0.0f ? laneX : laneX - width;
+        scrollToBeat (geometry.scrollBeats + overshoot * 0.25f / geometry.pixelsPerBeat);
+    }
+
+    const auto beat = snapBeat (juce::jmax (0.0, geometry.xToBeat (juce::jlimit (0.0f, width, laneX))));
+    engine.setPositionBeats (beat);
+    playhead->setX (geometry.beatToX (beat));
 }
 
 //==============================================================================

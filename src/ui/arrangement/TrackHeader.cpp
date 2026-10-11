@@ -45,6 +45,17 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     volume.onValueChange = [this] { engine.getTracks().setVolume (info.id, (float) volume.getValue()); };
     addAndMakeVisible (volume);
 
+    // The rename field: hidden until startRenaming(). Return keeps the new
+    // name, Escape cancels, clicking elsewhere keeps it.
+    nameEditor.setFont (fonts::uiBold (14.0f));
+    nameEditor.setIndents (4, 2);
+    nameEditor.setJustification (juce::Justification::centredLeft);
+    nameEditor.setTitle ("Track name");
+    nameEditor.onReturnKey = [this] { finishRenaming (true); };
+    nameEditor.onEscapeKey = [this] { finishRenaming (false); };
+    nameEditor.onFocusLost = [this] { finishRenaming (true); };
+    addChildComponent (nameEditor);
+
     update (t, false);
 }
 
@@ -79,9 +90,43 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     repaint();
 }
 
-void TrackHeader::mouseDown (const juce::MouseEvent&)
+void TrackHeader::mouseDown (const juce::MouseEvent& e)
 {
     selection.selectTrack (info.id);
+
+    if (e.mods.isPopupMenu() && onShowMenu)
+        onShowMenu();
+}
+
+void TrackHeader::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (nameArea.contains (e.getPosition()))
+        startRenaming();
+}
+
+void TrackHeader::startRenaming()
+{
+    renaming = true;
+    nameEditor.setText (info.name, false);
+    nameEditor.setVisible (true);
+    nameEditor.grabKeyboardFocus();
+    nameEditor.selectAll();
+}
+
+void TrackHeader::finishRenaming (bool keepNewName)
+{
+    // Hiding the field takes its focus away, which calls onFocusLost and so
+    // this function again; the flag makes that second call do nothing.
+    if (! std::exchange (renaming, false))
+        return;
+
+    // Let go of focus first: hiding a focused field would pass focus on to
+    // the Mute button, which would then swallow the Space key.
+    nameEditor.giveAwayKeyboardFocus();
+    nameEditor.setVisible (false);
+
+    if (keepNewName)
+        engine.getTracks().renameTrack (info.id, nameEditor.getText());
 }
 
 void TrackHeader::paint (juce::Graphics& g)
@@ -125,6 +170,7 @@ void TrackHeader::resized()
     muteButton.setBounds (top.removeFromRight (24));
     top.removeFromRight (4);
     nameArea = top;
+    nameEditor.setBounds (nameArea.expanded (2, 0));
 
     r.removeFromTop (2);
     soundArea = r.removeFromTop (16);

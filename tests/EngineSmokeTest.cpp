@@ -134,6 +134,65 @@ int main()
         check (tracks.getEffectChain (t2).size() == 3, "undo brings a removed effect back");
 
         pumpMessages();
+        std::cout << "Track operations\n";
+        {
+            const auto trackCount = tracks.getTracks().size();
+            const auto sourceRegions = tracks.getRegions (t2);
+            const int sourceIndex = tracks.getTrack (t2)->index;
+
+            auto settingsCopy = tracks.duplicateTrack (t2, false);
+            pumpMessages();
+            auto copy = tracks.getTrack (settingsCopy);
+            check (copy && tracks.getTracks().size() == trackCount + 1 && copy->index == sourceIndex + 1,
+                   "duplicate settings adds a track just below");
+            check (copy && copy->soundName == "Grand Piano" && copy->colour == tracks.getTrack (t2)->colour,
+                   "with the same sound and colour");
+            check (tracks.getEffectChain (settingsCopy).size() == tracks.getEffectChain (t2).size(), "and the same effects");
+            check (tracks.getRegions (settingsCopy).empty(), "but no regions");
+
+            auto fullCopy = tracks.duplicateTrack (t2, true);
+            pumpMessages();
+            auto copiedRegions = tracks.getRegions (fullCopy);
+            check (! sourceRegions.empty() && copiedRegions.size() == sourceRegions.size()
+                     && copiedRegions.front().id != sourceRegions.front().id, "duplicate track copies its regions");
+            check (tracks.getRegions (t2).size() == sourceRegions.size(), "and leaves the original's alone");
+
+            tracks.renameTrack (fullCopy, "  Lead  ");
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->name == "Lead", "tracks can be renamed");
+            tracks.renameTrack (fullCopy, "   ");
+            check (tracks.getTrack (fullCopy)->name == "Lead", "a blank name is ignored");
+
+            auto purple = TrackController::getTrackColours()[3];
+            tracks.setTrackColour (fullCopy, purple);
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->colour == purple, "track colour can be changed");
+
+            // Order is now t2, fullCopy, settingsCopy.
+            tracks.moveTrack (fullCopy, 1);
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->index == sourceIndex + 2
+                     && tracks.getTrack (settingsCopy)->index == sourceIndex + 1, "tracks move down");
+            tracks.moveTrack (fullCopy, -1);
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->index == sourceIndex + 1, "and up");
+            check (! tracks.canMoveTrack (tracks.getTracks().front().id, -1)
+                     && ! tracks.canMoveTrack (tracks.getTracks().back().id, 1), "but not past either end");
+
+            engine.undo();   // move up
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->index == sourceIndex + 2, "undo restores the order");
+            engine.redo();
+            pumpMessages();
+
+            tracks.deleteTrack (fullCopy);
+            pumpMessages();
+            tracks.deleteTrack (settingsCopy);
+            pumpMessages();
+            check (tracks.getTracks().size() == trackCount, "(cleaned up the copies)");
+        }
+
+        pumpMessages();
         std::cout << "Recording\n";
         {
             auto t3 = tracks.addInstrumentTrack();

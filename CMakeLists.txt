@@ -122,6 +122,12 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
+    src/ui/arrangement/ArrangementLayout.h
+    src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
+    src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
+    src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
+    src/ui/arrangement/ArrangementOverlays.h    src/ui/arrangement/ArrangementOverlays.cpp
+    src/ui/arrangement/ArrangementRegionDrag.h  src/ui/arrangement/ArrangementRegionDrag.cpp
     src/ui/arrangement/TrackHeader.h        src/ui/arrangement/TrackHeader.cpp
     src/ui/arrangement/RegionComponent.h    src/ui/arrangement/RegionComponent.cpp
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp

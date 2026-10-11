@@ -28,6 +28,11 @@ namespace CommandIDs
         deleteTrack,
         muteTrack,
         soloTrack,
+        duplicateTrackSettings,
+        duplicateTrack,
+        renameTrack,
+        moveTrackUp,
+        moveTrackDown,
 
         newRegion,
         splitRegion,

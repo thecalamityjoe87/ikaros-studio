@@ -223,6 +223,97 @@ void TrackController::deleteTrack (TrackId id)
     }
 }
 
+TrackId TrackController::duplicateTrack (TrackId id, bool withRegions)
+{
+    auto* edit = owner.getEdit();
+    auto* source = findTrack (edit, id);
+
+    if (source == nullptr)
+        return 0;
+
+    owner.beginUndoStep (withRegions ? "Duplicate Track" : "New Track with Duplicate Settings");
+
+    // copyTrack deep-copies the track's state (plugins, volume, our ikaros*
+    // properties, clips) with fresh IDs, and inserts it after the source.
+    auto copy = asAudioTrack (edit->copyTrack (source, te::TrackInsertPoint (nullptr, source)).get());
+
+    if (copy == nullptr)
+        return 0;
+
+    if (! withRegions)
+    {
+        auto clips = copy->getClips();   // a copy: removing a clip changes the track's own list
+
+        for (auto* clip : clips)
+            clip->removeFromParent();
+    }
+
+    copy->setName (source->getName() + " copy");
+    return copy->itemID.getRawID();
+}
+
+void TrackController::renameTrack (TrackId id, const juce::String& newName)
+{
+    auto name = newName.trim();
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        if (name.isNotEmpty() && name != t->getName())
+        {
+            owner.beginUndoStep ("Rename Track");
+            t->setName (name);
+        }
+    }
+}
+
+void TrackController::setTrackColour (TrackId id, juce::Colour c)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        if (t->getColour() != c)
+        {
+            owner.beginUndoStep ("Track Colour");
+            t->setColour (c);
+        }
+    }
+}
+
+std::vector<juce::Colour> TrackController::getTrackColours()
+{
+    return { trackPalette.begin(), trackPalette.end() };
+}
+
+bool TrackController::canMoveTrack (TrackId id, int direction) const
+{
+    auto tracks = getTracks();
+
+    for (size_t i = 0; i < tracks.size(); ++i)
+        if (tracks[i].id == id)
+            return juce::isPositiveAndBelow ((int) i + direction, (int) tracks.size());
+
+    return false;
+}
+
+void TrackController::moveTrack (TrackId id, int direction)
+{
+    if (! canMoveTrack (id, direction))
+        return;
+
+    auto* edit = owner.getEdit();
+    auto tracks = te::getAudioTracks (*edit);
+    auto* track = findTrack (edit, id);
+    const int index = tracks.indexOf (track);
+    owner.beginUndoStep (direction < 0 ? "Move Track Up" : "Move Track Down");
+
+    // The Edit holds other (non-audio) tracks too, so always move relative to
+    // a neighbouring audio track: down = after the next one; up = move the one
+    // above to after this one.
+    if (direction > 0)
+        edit->moveTrack (track, te::TrackInsertPoint (nullptr, tracks[index + 1]));
+    else
+        edit->moveTrack (tracks[index - 1], te::TrackInsertPoint (nullptr, track));
+}
+
 void TrackController::setSelectedTrack (TrackId id)
 {
     const auto newSelection = findTrack (owner.getEdit(), id) != nullptr ? id : TrackId {};

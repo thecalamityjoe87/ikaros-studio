@@ -121,6 +121,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
+                                   CommandIDs::duplicateTrackSettings, CommandIDs::duplicateTrack,
+                                   CommandIDs::renameTrack, CommandIDs::moveTrackUp, CommandIDs::moveTrackDown,
                                    CommandIDs::newRegion, CommandIDs::splitRegion, CommandIDs::duplicateRegion,
                                    CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
                                    CommandIDs::renameRegion, CommandIDs::deleteRegion,
@@ -217,6 +219,27 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Solo", "Solo the selected track", "Track", 0);
             info.setActive (hasTrack);
             info.setTicked (hasTrack && track->solo);
+            break;
+        case CommandIDs::duplicateTrackSettings:
+            info.setInfo ("New Track with Duplicate Settings", "Add an empty track with the selected track's sound and settings", "Track", 0);
+            info.setActive (hasTrack);
+            info.addDefaultKeypress ('d', cmd | shift);
+            break;
+        case CommandIDs::duplicateTrack:
+            info.setInfo ("Duplicate Track", "Copy the selected track, with its settings and regions", "Track", 0);
+            info.setActive (hasTrack);
+            break;
+        case CommandIDs::renameTrack:
+            info.setInfo ("Rename Track", "Rename the selected track", "Track", 0);
+            info.setActive (hasTrack);
+            break;
+        case CommandIDs::moveTrackUp:
+            info.setInfo ("Move Track Up", "Move the selected track up the list", "Track", 0);
+            info.setActive (hasTrack && engine.getTracks().canMoveTrack (track->id, -1));
+            break;
+        case CommandIDs::moveTrackDown:
+            info.setInfo ("Move Track Down", "Move the selected track down the list", "Track", 0);
+            info.setActive (hasTrack && engine.getTracks().canMoveTrack (track->id, 1));
             break;
 
         case CommandIDs::newRegion:
@@ -407,6 +430,16 @@ bool MainComponent::perform (const InvocationInfo& info)
             if (auto t = tracks.getTrack (trackId))
                 tracks.setSolo (trackId, ! t->solo);
             break;
+
+        case CommandIDs::duplicateTrackSettings:
+        case CommandIDs::duplicateTrack:
+            if (auto id = tracks.duplicateTrack (trackId, info.commandID == CommandIDs::duplicateTrack))
+                selection.selectTrack (id);
+            break;
+
+        case CommandIDs::renameTrack:     arrangement.startRenamingTrack (trackId); break;
+        case CommandIDs::moveTrackUp:     tracks.moveTrack (trackId, -1); break;
+        case CommandIDs::moveTrackDown:   tracks.moveTrack (trackId, 1); break;
 
         case CommandIDs::newRegion:
             if (auto rid = tracks.createChordRegion (trackId, engine.getTransportState().positionBeats))

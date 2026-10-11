@@ -1,0 +1,199 @@
+#include "ui/arrangement/ArrangementOverlays.h"
+#include "ui/theme/Fonts.h"
+#include "ui/theme/IkarosLookAndFeel.h"
+#include "ui/theme/Tokens.h"
+
+namespace ikaros
+{
+
+using namespace tokens;
+
+//==============================================================================
+// DropZone
+ArrangementView::DropZone::DropZone() : juce::Button ("Add a track")
+{
+    setTitle ("Add a track");
+    setMouseClickGrabsKeyboardFocus (false);
+    setTooltip ("Click to add a new track, or drop audio files here");
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void ArrangementView::DropZone::paintButton (juce::Graphics& g, bool over, bool)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+
+    juce::Path outline, dashed;
+    outline.addRoundedRectangle (r, 12.0f);
+    const float dashes[] = { 5.0f, 4.0f };
+    juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
+
+    if (over)
+    {
+        g.setColour (colour::raised.withAlpha (0.4f));
+        g.fillPath (outline);
+    }
+
+    g.setColour (over ? colour::textSecondary : colour::borderStrong);
+    g.fillPath (dashed);
+
+    auto text = juce::String ("Drop a sound, loop or audio file here");
+    auto font = fonts::ui (14.0f);
+    auto textW = juce::GlyphArrangement::getStringWidth (font, text);
+    auto group = r.withSizeKeepingCentre (textW + 26.0f, 20.0f);
+
+    icons::draw (g, Icon::plus, group.removeFromLeft (18.0f), colour::textSecondary, 18.0f, 2.0f);
+    group.removeFromLeft (8.0f);
+    g.setColour (colour::textSecondary);
+    g.setFont (font);
+    g.drawText (text, group, juce::Justification::centredLeft);
+
+    if (hasKeyboardFocus (false))
+        IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
+}
+
+//==============================================================================
+// Playhead
+ArrangementView::Playhead::Playhead (ArrangementView& o) : owner (o)
+{
+    setInterceptsMouseClicks (true, false);
+    setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
+    setAccessible (false);   // the ruler is the accessible way to move it
+}
+
+bool ArrangementView::Playhead::hitTest (int px, int py)
+{
+    return py < size::rulerHeight && std::abs ((float) px - x) <= grabRadius;
+}
+
+void ArrangementView::Playhead::mouseDown (const juce::MouseEvent& e)
+{
+    // Keep the grab point under the mouse, so the playhead doesn't jump
+    // when it's picked up a few pixels off-centre.
+    dragging = true;
+    grabOffset = (float) e.x - x;
+}
+
+void ArrangementView::Playhead::mouseDrag (const juce::MouseEvent& e)
+{
+    dragX = (float) e.x - grabOffset;
+    owner.dragPlayheadTo (dragX);
+
+    // Held past either edge: keep scrolling even when the mouse is still.
+    if (dragX < 0.0f || dragX > (float) getWidth())
+        startTimerHz (30);
+    else
+        stopTimer();
+}
+
+void ArrangementView::Playhead::mouseUp (const juce::MouseEvent& e)
+{
+    stopTimer();
+    dragging = false;
+    setHighlighted (isMouseOver() && hitTest (e.x, e.y));
+}
+
+void ArrangementView::Playhead::setX (float newX)
+{
+    if (std::abs (newX - x) < 0.25f)
+        return;
+
+    // Only repaint the thin strips that changed, not the whole timeline.
+    repaint (stripAt (x));
+    x = newX;
+    repaint (stripAt (x));
+}
+
+void ArrangementView::Playhead::paint (juce::Graphics& g)
+{
+    if (x < -8.0f || x > (float) getWidth() + 8.0f)
+        return;
+
+    g.setColour (highlighted ? colour::accent.brighter (0.3f) : colour::accent);
+    g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight());
+
+    if (highlighted)
+        g.fillRoundedRectangle (x - 8.0f, 0.0f, 16.0f, 14.0f, 4.5f);
+    else
+        g.fillRoundedRectangle (x - 7.0f, 0.0f, 14.0f, 12.0f, 4.0f);
+}
+
+void ArrangementView::Playhead::timerCallback()
+{
+    if (! dragging || ! juce::Component::isMouseButtonDownAnywhere())
+        stopTimer();
+    else
+        owner.dragPlayheadTo (dragX);
+}
+
+void ArrangementView::Playhead::setHighlighted (bool shouldHighlight)
+{
+    if (highlighted != shouldHighlight)
+    {
+        highlighted = shouldHighlight;
+        repaint (stripAt (x));
+    }
+}
+
+juce::Rectangle<int> ArrangementView::Playhead::stripAt (float px) const
+{
+    return { juce::roundToInt (px) - 9, 0, 18, getHeight() };
+}
+
+//==============================================================================
+// Overlay
+ArrangementView::Overlay::Overlay()
+{
+    setInterceptsMouseClicks (false, false);
+    setAccessible (false);
+}
+
+void ArrangementView::Overlay::setGhosts (std::vector<Ghost> newGhosts)
+{
+    ghosts = std::move (newGhosts);
+    repaint();
+}
+
+void ArrangementView::Overlay::setDropTarget (juce::Rectangle<float> area, float markerX, const juce::String& text)
+{
+    dropArea = area;
+    dropMarkerX = markerX;
+    dropText = text;
+    repaint();
+}
+
+void ArrangementView::Overlay::clear()
+{
+    ghosts.clear();
+    dropArea = {};
+    repaint();
+}
+
+void ArrangementView::Overlay::paint (juce::Graphics& g)
+{
+    for (auto& ghost : ghosts)
+    {
+        g.setColour (ghost.colour.withAlpha (0.3f));
+        g.fillRoundedRectangle (ghost.area, 8.0f);
+        g.setColour (ghost.colour);
+        g.drawRoundedRectangle (ghost.area.reduced (0.75f), 8.0f, 1.5f);
+        g.setColour (colour::text);
+        g.setFont (fonts::uiBold (11.0f));
+        g.drawText (ghost.name, ghost.area.reduced (8.0f, 3.0f).removeFromTop (14.0f),
+                    juce::Justification::centredLeft, true);
+    }
+
+    if (! dropArea.isEmpty())
+    {
+        g.setColour (colour::accent.withAlpha (0.12f));
+        g.fillRoundedRectangle (dropArea, 10.0f);
+        g.setColour (colour::accent);
+        g.drawRoundedRectangle (dropArea.reduced (1.0f), 10.0f, 1.5f);
+        g.fillRect (dropMarkerX - 1.0f, dropArea.getY(), 2.0f, dropArea.getHeight());
+
+        g.setFont (fonts::uiBold (13.0f));
+        g.drawText (dropText, dropArea.withLeft (dropMarkerX + 8.0f).reduced (0.0f, 6.0f),
+                    juce::Justification::topLeft, true);
+    }
+}
+
+} // namespace ikaros

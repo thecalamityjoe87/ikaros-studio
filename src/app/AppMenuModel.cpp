@@ -50,11 +50,18 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     {
         add (CommandIDs::newTrack);
         add (CommandIDs::newAudioTrack);
-        add (CommandIDs::deleteTrack);
+        add (CommandIDs::duplicateTrackSettings);
+        add (CommandIDs::duplicateTrack);
+        m.addSeparator();
+        add (CommandIDs::renameTrack);
+        add (CommandIDs::moveTrackUp);
+        add (CommandIDs::moveTrackDown);
         m.addSeparator();
         add (CommandIDs::muteTrack);
         add (CommandIDs::soloTrack);
         add (CommandIDs::armTrack);
+        m.addSeparator();
+        add (CommandIDs::deleteTrack);
     }
     else if (name == "Region")
     {
