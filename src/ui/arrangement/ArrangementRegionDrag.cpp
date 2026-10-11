@@ -50,6 +50,7 @@ void ArrangementView::RegionDrag::regionMouseDown (RegionComponent& comp, const 
     drag.start = e.getEventRelativeTo (&owner).getPosition();
     drag.mode = zone == RegionComponent::Zone::leftEdge  ? Drag::Mode::trimStart
               : zone == RegionComponent::Zone::rightEdge ? Drag::Mode::trimEnd
+              : zone == RegionComponent::Zone::loopCorner ? Drag::Mode::loop
                                                          : Drag::Mode::pending;
     drag.trim = { info.startBeat, info.getEndBeat() };
 
@@ -81,6 +82,8 @@ void ArrangementView::RegionDrag::regionMouseDrag (RegionComponent&, const juce:
         updateMoveDrag (pos);
     else if (drag.mode == Drag::Mode::trimStart || drag.mode == Drag::Mode::trimEnd)
         updateTrimDrag (pos.x - drag.start.x);
+    else if (drag.mode == Drag::Mode::loop)
+        updateLoopDrag (pos.x - drag.start.x);
 }
 
 void ArrangementView::RegionDrag::updateMoveDrag (juce::Point<int> pos)
@@ -173,6 +176,27 @@ void ArrangementView::RegionDrag::updateTrimDrag (int dx)
         lane->resized();
 }
 
+void ArrangementView::RegionDrag::updateLoopDrag (int dx)
+{
+    auto* comp = owner.findRegion (drag.anchor);
+
+    if (comp == nullptr)
+        return;
+
+    auto& info = comp->getInfo();
+    auto end = owner.snapBeat (info.getEndBeat() + dx / owner.geometry.pixelsPerBeat);
+
+    // A region that isn't looped yet can only be looped longer. A looped one
+    // can be pulled back too (down to the shortest a region can be).
+    const double shortest = info.isLooped() ? info.startBeat + RegionEditor::minRegionBeats : info.getEndBeat();
+    drag.trim = { info.startBeat, juce::jmax (shortest, end) };
+
+    comp->setTrimPreview (drag.trim, true);
+
+    if (auto* lane = comp->getParentComponent())
+        lane->resized();
+}
+
 void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::MouseEvent&)
 {
     auto finished = std::exchange (drag, {});   // take the drag state and reset it
@@ -219,6 +243,15 @@ void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::M
             if (changed)
                 tc.regions().trimRegion (finished.anchor, finished.trim.getStart(), finished.trim.getEnd());
 
+            owner.refresh();
+        }
+    }
+    else if (finished.mode == Drag::Mode::loop)
+    {
+        if (auto* comp = owner.findRegion (finished.anchor))
+        {
+            comp->setTrimPreview (std::nullopt);
+            tc.regions().loopRegion (finished.anchor, finished.trim.getEnd());
             owner.refresh();
         }
     }

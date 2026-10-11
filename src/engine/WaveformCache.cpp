@@ -14,8 +14,14 @@ std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int num
 {
     auto file = clip.getAudioFile().getFile();
     auto pos = clip.getPosition();
+
+    // The part of the file the region shows: from its offset for its length,
+    // or one loop's worth if it's looped (the UI draws the repeats).
+    const double sourceStart = clip.isLooping() ? clip.getLoopStart().inSeconds() : pos.offset.inSeconds();
+    const double sourceLength = clip.isLooping() ? clip.getLoopLength().inSeconds() : pos.getLength().inSeconds();
+
     auto key = file.getFullPathName() + ":" + juce::String (file.getSize())
-             + ":" + juce::String (pos.offset.inSeconds()) + ":" + juce::String (pos.getLength().inSeconds());
+             + ":" + juce::String (sourceStart) + ":" + juce::String (sourceLength);
 
     if (auto it = peakCache.find (key); it != peakCache.end())
         return it->second;
@@ -26,8 +32,8 @@ std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int num
     // unique_ptr: the reader is deleted automatically when we're done.
     if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (file) })
     {
-        const auto start = (juce::int64) (pos.offset.inSeconds() * reader->sampleRate);
-        const auto length = (juce::int64) (pos.getLength().inSeconds() * reader->sampleRate);
+        const auto start = (juce::int64) (sourceStart * reader->sampleRate);
+        const auto length = (juce::int64) (sourceLength * reader->sampleRate);
         const auto step = juce::jmax ((juce::int64) 1, length / numColumns);
         std::vector<juce::Range<float>> levels ((size_t) reader->numChannels);
 

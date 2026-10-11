@@ -128,11 +128,31 @@ inline double timeToBeat (te::Edit& edit, te::TimePosition time)
     return edit.tempoSequence.toBeats (time).inBeats();
 }
 
+// Looped regions: how far into the repeating part the region starts, in
+// beats (0 up to, not including, one loop's length). Tracktion lets the
+// clip's offset run past one loop (a split or a left trim does that), so
+// this wraps it.
+inline double loopOffsetBeats (te::Clip& clip)
+{
+    if (! clip.isLooping())
+        return 0.0;
+
+    const double loopLength = clip.getLoopLengthBeats().inBeats();
+    const double offset = (clip.getStartBeat() - clip.getContentStartBeat()).inBeats();
+    return loopLength > 0.0 ? offset - std::floor (offset / loopLength) * loopLength : 0.0;
+}
+
 // Note positions in the UI are relative to the region start. Tracktion stores
 // them relative to the clip's *content* start, which is earlier once a
 // region has been trimmed from the left. This is the difference, in beats.
+//
+// A looped region's notes are the repeating part, so the UI sees them
+// relative to the loop's start instead (0 = the first beat that repeats).
 inline double contentOffsetBeats (te::Clip& clip)
 {
+    if (clip.isLooping())
+        return -clip.getLoopStartBeats().inBeats();
+
     return (clip.getContentStartBeat() - clip.getStartBeat()).inBeats();
 }
 

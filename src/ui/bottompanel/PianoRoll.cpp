@@ -138,7 +138,13 @@ void PianoRoll::setPlayheadBeat (double editBeat)
     double rel = -1.0;
 
     if (region.has_value() && editBeat >= region->startBeat && editBeat < region->getEndBeat())
-        rel = editBeat - region->startBeat;
+    {
+        rel = editBeat - contentStartBeat();
+
+        // A looped region plays its loop over and over: show where in the loop.
+        if (region->isLooped())
+            rel -= std::floor (rel / region->loopLengthBeats) * region->loopLengthBeats;
+    }
 
     if (rel != playheadBeat)
     {
@@ -166,7 +172,14 @@ double PianoRoll::xToBeat (float x) const        { return (x - (float) gridArea.
 float PianoRoll::pitchToY (int pitch) const      { return (float) gridArea.getY() + (float) ((127 - pitch) - topRow) * rowHeight; }
 double PianoRoll::visibleBeats() const           { return gridArea.getWidth() / pixelsPerBeat; }
 double PianoRoll::visibleRows() const            { return gridArea.getHeight() / (double) rowHeight; }
-double PianoRoll::regionLength() const           { return region.has_value() ? juce::jmax (1.0, region->lengthBeats) : 1.0; }
+double PianoRoll::regionLength() const           { return region.has_value() ? juce::jmax (1.0, region->getContentLengthBeats()) : 1.0; }
+
+// Where beat 0 of the notes is on the song's timeline. For a looped region
+// that's the start of the first loop, which can be before the region starts.
+double PianoRoll::contentStartBeat() const
+{
+    return region.has_value() ? region->startBeat - region->loopOffsetBeats : 0.0;
+}
 
 int PianoRoll::yToPitch (int y) const
 {
@@ -206,9 +219,9 @@ double PianoRoll::snapToGrid (double beat, bool roundDown) const
 
     // Snap on the song's timeline, so notes line up with the arrangement's
     // bars even when the region doesn't start on a bar.
-    const double absolute = region->startBeat + beat;
+    const double absolute = contentStartBeat() + beat;
     const double snapped = (roundDown ? std::floor (absolute / g + 1.0e-9) : std::round (absolute / g)) * g;
-    return snapped - region->startBeat;
+    return snapped - contentStartBeat();
 }
 
 juce::String PianoRoll::gridName() const
@@ -670,12 +683,12 @@ void PianoRoll::mouseDown (const juce::MouseEvent& e)
     // the left of the mouse. Dragging right makes it longer.
     const double start = juce::jmax (0.0, snapToGrid (xToBeat ((float) pos.x), true));
 
-    if (start >= region->lengthBeats)
+    if (start >= region->getContentLengthBeats())
         return;
 
     selected.clear();
     gesture.mode = Gesture::Mode::draw;
-    gesture.newNote = { yToPitch (pos.y), start, juce::jmin (lastNoteLength, region->lengthBeats - start), 100 };
+    gesture.newNote = { yToPitch (pos.y), start, juce::jmin (lastNoteLength, region->getContentLengthBeats() - start), 100 };
     startPreview (gesture.newNote.pitch);
     repaint();
 }
@@ -696,7 +709,7 @@ void PianoRoll::mouseDrag (const juce::MouseEvent& e)
             // Drag right to make the new note longer (at least one grid step).
             const double step = gridBeats() > 0.0 ? gridBeats() : 1.0 / 32.0;
             const double end = juce::jmax (gesture.newNote.startBeat + step, snapToGrid (xToBeat ((float) pos.x), false));
-            gesture.newNote.lengthBeats = juce::jmin (end, region->lengthBeats) - gesture.newNote.startBeat;
+            gesture.newNote.lengthBeats = juce::jmin (end, region->getContentLengthBeats()) - gesture.newNote.startBeat;
             repaint();
             break;
         }
@@ -1051,7 +1064,7 @@ void PianoRoll::paintGrid (juce::Graphics& g)
 
     // Vertical lines on the song's timeline: grid steps (when they're far
     // enough apart to see), beats, and bars.
-    const double regionStart = region->startBeat;
+    const double regionStart = contentStartBeat();
     auto drawLines = [&] (double step, float alpha)
     {
         if (step <= 0.0 || step * pixelsPerBeat < 6.0)
@@ -1070,8 +1083,8 @@ void PianoRoll::paintGrid (juce::Graphics& g)
     drawLines (1.0, 0.04f);
     drawLines (beatsPerBar, 0.1f);
 
-    // Past the end of the region: shaded.
-    const float endX = beatToX (region->lengthBeats);
+    // Past the end of the region (or of the loop): shaded.
+    const float endX = beatToX (region->getContentLengthBeats());
 
     if (endX < area.getRight())
     {

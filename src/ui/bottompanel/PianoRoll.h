@@ -104,6 +104,7 @@ private:
     double visibleBeats() const;
     double visibleRows() const;
     double regionLength() const;
+    double contentStartBeat() const;
     juce::Rectangle<float> noteBounds (const NoteInfo&) const;
 
     // Grid

@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/Icons.h"
 
 namespace ikaros
 {
@@ -12,6 +13,8 @@ namespace
 {
     constexpr float corner = 8.0f;
     constexpr int stripHeight = 20;
+    constexpr int loopCornerWidth = 14;    // the loop handle in the top-right corner
+    constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
 }
 
 RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
@@ -57,16 +60,31 @@ RegionComponent::Zone RegionComponent::getZoneAt (juce::Point<int> p) const
     if (p.x < edge)
         return Zone::leftEdge;
 
+    // The top of the right edge loops; the rest of it trims.
+    if (getWidth() >= 32 && p.y < stripHeight && p.x >= getWidth() - loopCornerWidth)
+        return Zone::loopCorner;
+
     if (p.x >= getWidth() - edge)
         return Zone::rightEdge;
 
     return p.y < stripHeight ? Zone::nameStrip : Zone::body;
 }
 
-void RegionComponent::setTrimPreview (std::optional<juce::Range<double>> range)
+void RegionComponent::setTrimPreview (std::optional<juce::Range<double>> range, bool asLoop)
 {
     trimPreview = range;
+    loopPreview = range.has_value() && asLoop;
     repaint();
+}
+
+RegionComponent::Repeat RegionComponent::getRepeat() const
+{
+    if (info.isLooped())
+        return { true, info.loopLengthBeats, info.loopOffsetBeats };
+
+    // Not looped yet, but being dragged by its loop corner: preview the
+    // whole region repeating.
+    return { loopPreview, info.lengthBeats, 0.0 };
 }
 
 juce::Range<double> RegionComponent::getDisplayRange() const
@@ -138,6 +156,18 @@ void RegionComponent::paint (juce::Graphics& g)
             paintMidiNotes (g, body);
         else
             paintWaveform (g, body);
+
+        paintLoopDividers (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
+
+        // The loop handle: a small loop arrow in the corner, while the mouse
+        // is over it or it's being dragged.
+        if (hoveringLoopCorner || loopPreview)
+        {
+            auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth + 4.0f);
+            g.setColour (colour::regionStrip (colour).darker (0.3f));
+            g.fillRect (handle);
+            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour), 12.0f, 1.6f);
+        }
     }
 
     g.setColour (selected ? colour : colour.withAlpha (0.4f));
@@ -150,28 +180,47 @@ void RegionComponent::paint (juce::Graphics& g)
 void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> area)
 {
     const auto range = getDisplayRange();
+    const auto repeat = getRepeat();
 
     if (info.notes.empty() || range.getLength() <= 0.0)
         return;
 
-    // Note positions are relative to the region's real start; shift them to
-    // the displayed start (they differ while an edge is being dragged).
+    // Positions here are in beats from the region's real start. While an
+    // edge is being dragged, the displayed start differs: shift by this.
     const double shift = info.startBeat - range.getStart();
-    auto isVisible = [&] (const NoteInfo& n)
+    const double visibleEnd = range.getEnd() - info.startBeat;
+
+    // A looped region's notes are one loop's worth (see RegionInfo); notes
+    // outside the loop don't play.
+    auto inLoop = [&] (const NoteInfo& n) { return ! repeat.looping || (n.startBeat >= 0.0 && n.startBeat < repeat.length); };
+
+    // Each repeat of the content starts at one of these beats. Unlooped,
+    // there's just the one, at 0.
+    std::vector<double> cycleStarts { -repeat.offset };
+
+    if (repeat.looping && repeat.length > 0.0)
+        for (double c = repeat.length - repeat.offset; c < visibleEnd; c += repeat.length)
+            cycleStarts.push_back (c);
+
+    auto isVisible = [&] (const NoteInfo& n, double cycleStart)
     {
-        const double start = n.startBeat + shift;
-        return start < range.getLength() && start + n.lengthBeats > 0.0;
+        const double start = cycleStart + n.startBeat + shift;
+        return inLoop (n) && start < range.getLength() && start + n.lengthBeats > 0.0;
     };
 
-    // Fit the visible notes' pitch range into the available height.
+    // Fit the pitch range of the notes on show into the available height.
     int lo = 127, hi = 0;
 
     for (auto& n : info.notes)
     {
-        if (isVisible (n))
+        for (auto c : cycleStarts)
         {
-            lo = juce::jmin (lo, n.pitch);
-            hi = juce::jmax (hi, n.pitch);
+            if (isVisible (n, c))
+            {
+                lo = juce::jmin (lo, n.pitch);
+                hi = juce::jmax (hi, n.pitch);
+                break;
+            }
         }
     }
 
@@ -184,39 +233,53 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
     const float noteH = juce::jlimit (2.0f, 4.0f, rowH);
     const float pxPerBeat = area.getWidth() / (float) range.getLength();
 
-    g.setColour (colour);
-
-    for (auto& n : info.notes)
+    for (size_t i = 0; i < cycleStarts.size(); ++i)
     {
-        if (! isVisible (n))
-            continue;
+        // The first pass is the original; the repeats are fainter.
+        g.setColour (i == 0 ? colour : colour.withAlpha (repeatAlpha));
 
-        auto x = area.getX() + (float) (n.startBeat + shift) * pxPerBeat;
-        auto w = juce::jmax (2.0f, (float) n.lengthBeats * pxPerBeat - 1.0f);
-        auto y = area.getY() + (float) (hi - n.pitch) * rowH + (rowH - noteH) * 0.5f;
-        g.fillRoundedRectangle (x, y, w, noteH, noteH * 0.5f);
+        for (auto& n : info.notes)
+        {
+            if (! isVisible (n, cycleStarts[i]))
+                continue;
+
+            auto x = area.getX() + (float) (cycleStarts[i] + n.startBeat + shift) * pxPerBeat;
+            auto w = juce::jmax (2.0f, (float) n.lengthBeats * pxPerBeat - 1.0f);
+            auto y = area.getY() + (float) (hi - n.pitch) * rowH + (rowH - noteH) * 0.5f;
+            g.fillRoundedRectangle (x, y, w, noteH, noteH * 0.5f);
+        }
     }
 }
 
 void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    // info.peaks: loudness per slice of the region (0..1), from the engine.
-    // Drawn mirrored around the centre line, one column per pixel.
+    // info.peaks: loudness per slice (0..1) of the region, or of one loop if
+    // it's looped, from the engine. Drawn mirrored around the centre line,
+    // one column per pixel.
     const auto range = getDisplayRange();
+    const auto repeat = getRepeat();
 
-    if (info.peaks.empty() || info.lengthBeats <= 0.0 || area.getWidth() <= 0.0f)
+    if (info.peaks.empty() || repeat.length <= 0.0 || area.getWidth() <= 0.0f)
         return;
 
     const float mid = area.getCentreY();
     const float halfHeight = area.getHeight() * 0.48f;
     const auto numPeaks = (int) info.peaks.size();
 
-    // The peak under a column. While an edge is dragged outwards, the new part
-    // has no peaks yet and is drawn flat until the drag ends.
+    // The beat (from the region's real start) under a column.
+    auto beatAt = [&] (float x)
+    {
+        return range.getStart() - info.startBeat + (double) (x / area.getWidth()) * range.getLength();
+    };
+
+    // The peak under a column. Unlooped, while an edge is dragged outwards,
+    // the new part has no peaks yet and is drawn flat until the drag ends.
     auto peakAt = [&] (float x)
     {
-        const double beat = range.getStart() + (double) (x / area.getWidth()) * range.getLength();
-        const double proportion = (beat - info.startBeat) / info.lengthBeats;
+        double proportion = (beatAt (x) + repeat.offset) / repeat.length;
+
+        if (repeat.looping)
+            proportion -= std::floor (proportion);   // the same place in every repeat
 
         if (proportion < 0.0 || proportion >= 1.0)
             return 0.0f;
@@ -244,17 +307,74 @@ void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> a
         wave.lineTo (area.getX() + x, mid + peakAt (x) * halfHeight);
 
     wave.closeSubPath();
+
+    if (! repeat.looping)
+    {
+        g.setColour (colour);
+        g.fillPath (wave);
+        return;
+    }
+
+    // Looped: the repeats faint, then the original (up to the end of the
+    // first loop) drawn again over them at full strength.
+    g.setColour (colour.withAlpha (repeatAlpha));
+    g.fillPath (wave);
+
+    const double firstEnd = repeat.length - repeat.offset;   // beats from the region start
+    const float firstEndX = area.getX() + (float) ((firstEnd - (range.getStart() - info.startBeat)) / range.getLength()) * area.getWidth();
+
+    juce::Graphics::ScopedSaveState save (g);
+    g.reduceClipRegion (area.withRight (juce::jmin (area.getRight(), firstEndX)).toNearestInt());
     g.setColour (colour);
     g.fillPath (wave);
+}
+
+void RegionComponent::paintLoopDividers (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const auto range = getDisplayRange();
+    const auto repeat = getRepeat();
+
+    if (! repeat.looping || repeat.length <= 0.0 || range.getLength() <= 0.0)
+        return;
+
+    // A thin line where each repeat begins.
+    const float pxPerBeat = area.getWidth() / (float) range.getLength();
+    const double shift = info.startBeat - range.getStart();
+    g.setColour (colour.withAlpha (0.6f));
+
+    for (double c = repeat.length - repeat.offset; c + shift < range.getLength(); c += repeat.length)
+    {
+        const float x = area.getX() + (float) (c + shift) * pxPerBeat;
+
+        if (x > area.getX() + 1.0f)
+            g.fillRect (x, area.getY(), 1.0f, area.getHeight());
+    }
 }
 
 //==============================================================================
 void RegionComponent::mouseMove (const juce::MouseEvent& e)
 {
-    // Edges show a resize cursor, so it's clear they can be dragged.
+    // Edges show a resize cursor, so it's clear they can be dragged; the
+    // loop corner shows its loop arrow.
     auto zone = getZoneAt (e.getPosition());
-    setMouseCursor (zone == Zone::leftEdge || zone == Zone::rightEdge ? juce::MouseCursor::LeftRightResizeCursor
-                                                                      : juce::MouseCursor::PointingHandCursor);
+    setMouseCursor (zone == Zone::leftEdge || zone == Zone::rightEdge || zone == Zone::loopCorner
+                        ? juce::MouseCursor::LeftRightResizeCursor
+                        : juce::MouseCursor::PointingHandCursor);
+
+    if ((zone == Zone::loopCorner) != hoveringLoopCorner)
+    {
+        hoveringLoopCorner = zone == Zone::loopCorner;
+        repaint();
+    }
+}
+
+void RegionComponent::mouseExit (const juce::MouseEvent&)
+{
+    if (hoveringLoopCorner)
+    {
+        hoveringLoopCorner = false;
+        repaint();
+    }
 }
 
 void RegionComponent::mouseDown (const juce::MouseEvent& e)

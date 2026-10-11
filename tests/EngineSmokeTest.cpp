@@ -795,6 +795,85 @@ int main (int argc, char* argv[])
                "takes the session's audio along");
         check (AudioEngine::getSessionFileFor (otherFile) == otherFile, "a session already in its own folder stays there");
         dir.getChildFile ("Song").deleteRecursively();   // the new session must stand on its own
+
+        std::cout << "Region looping\n";
+        {
+            engine.newSession();
+            pumpMessages();
+            auto lt = tracks.getTracks().front().id;
+            auto lr = tracks.regions().createChordRegion (lt, 0.0);   // 4 bars = 16 beats, 28 notes
+            pumpMessages();
+
+            check (tracks.regions().loopRegion (lr, 40.0), "dragging the loop corner loops a MIDI region");
+            auto looped = tracks.regions().getRegion (lr);
+            check (looped && looped->isLooped() && looped->lengthBeats == 40.0, "looping extends the region");
+            check (looped && looped->loopLengthBeats == 16.0 && looped->loopOffsetBeats == 0.0,
+                   "what the region showed becomes the part that repeats");
+            check (looped && looped->notes.size() == 28 && looped->getContentLengthBeats() == 16.0,
+                   "the notes are one loop's worth, not copies");
+            check (engine.getUndoDescription() == "Loop Region", "one \"Loop Region\" undo step");
+            check (! tracks.regions().loopRegion (lr, 40.0), "looping to the same length changes nothing");
+
+            pumpMessages();
+            engine.undo();
+            pumpMessages();
+            auto undone = tracks.regions().getRegion (lr);
+            check (undone && ! undone->isLooped() && undone->lengthBeats == 16.0, "undo restores the unlooped region");
+            engine.redo();
+            pumpMessages();
+            check (tracks.regions().getRegion (lr)->lengthBeats == 40.0, "redo loops it again");
+
+            // Trimming the start of a looped region moves where in the loop it starts.
+            tracks.regions().trimRegion (lr, 4.0, 40.0);
+            pumpMessages();
+            auto trimmed = tracks.regions().getRegion (lr);
+            check (trimmed && trimmed->startBeat == 4.0 && trimmed->lengthBeats == 36.0
+                     && trimmed->isLooped() && std::abs (trimmed->loopOffsetBeats - 4.0) < 1.0e-6,
+                   "trimming a looped region's start keeps the loop lined up");
+
+            // Growing it back out to the left wraps round the loop.
+            tracks.regions().trimRegion (lr, 0.0, 40.0);
+            pumpMessages();
+            auto regrown = tracks.regions().getRegion (lr);
+            check (regrown && regrown->startBeat == 0.0 && std::abs (regrown->loopOffsetBeats) < 1.0e-6,
+                   "trimming it back out to the left lines up again");
+
+            // Split in the middle of the second loop.
+            auto halves = tracks.regions().splitRegions ({ lr }, 20.0);
+            pumpMessages();
+            auto left = tracks.regions().getRegion (lr);
+            auto right = halves.empty() ? std::nullopt : tracks.regions().getRegion (halves.front());
+            check (left && left->isLooped() && left->lengthBeats == 20.0, "splitting a looped region keeps the left half looped");
+            check (right && right->isLooped() && right->startBeat == 20.0 && right->lengthBeats == 20.0
+                     && std::abs (right->loopOffsetBeats - 4.0) < 1.0e-6 && right->notes.size() == 28,
+                   "and the right half carries on from the same place in the loop");
+
+            // Audio: a plain file (no tempo info) loops too.
+            auto audioFile = dir.getChildFile ("LoopMe.wav");
+            check (writeWav (audioFile, 2.0), "(wrote a test WAV to loop)");
+            auto audioIds = tracks.regions().importAudioFiles (0, { audioFile.getFullPathName() }, 0.0);   // 2 s = 4 beats
+            pumpMessages();
+            auto ar = audioIds.empty() ? RegionId {} : audioIds.front();
+            check (tracks.regions().loopRegion (ar, 16.0), "an audio region loops");
+            auto loopedAudio = tracks.regions().getRegion (ar);
+            check (loopedAudio && loopedAudio->lengthBeats == 16.0 && std::abs (loopedAudio->loopLengthBeats - 4.0) < 0.01,
+                   "repeating its 4 beats");
+            check (loopedAudio && ! loopedAudio->peaks.empty() && loopedAudio->maxEndBeat > 1000.0,
+                   "it still has a waveform, and can be looped as far as you like");
+
+            auto loopSession = dir.getChildFile ("Looping");
+            check (engine.saveSessionAs (loopSession), "save the looped regions");
+            check (engine.openSession (AudioEngine::getSessionFileFor (loopSession)), "and reopen");
+            pumpMessages();
+            auto reopened = tracks.regions().getRegion (halves.empty() ? RegionId {} : halves.front());
+            auto reopenedAudio = tracks.regions().getRegion (ar);
+            check (reopened && reopened->isLooped() && reopened->loopLengthBeats == 16.0
+                     && std::abs (reopened->loopOffsetBeats - 4.0) < 1.0e-6 && reopened->notes.size() == 28,
+                   "a looped MIDI region survives save and reopen");
+            check (reopenedAudio && reopenedAudio->lengthBeats == 16.0 && std::abs (reopenedAudio->loopLengthBeats - 4.0) < 0.01,
+                   "so does a looped audio region");
+            audioFile.deleteFile();
+        }
     }
 
     {

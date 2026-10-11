@@ -20,8 +20,9 @@ namespace ikaros
 class RegionComponent  : public juce::Component
 {
 public:
-    /** The parts of a region that react differently to the mouse. */
-    enum class Zone { body, nameStrip, leftEdge, rightEdge };
+    /** The parts of a region that react differently to the mouse. The loop
+        corner is the top-right corner: dragging it repeats the content. */
+    enum class Zone { body, nameStrip, leftEdge, rightEdge, loopCorner };
 
     RegionComponent (const RegionInfo&, juce::Colour trackColour);
 
@@ -31,8 +32,9 @@ public:
     Zone getZoneAt (juce::Point<int>) const;
 
     /** While an edge is being dragged, the region is drawn with these edges
-        (in beats) instead of its real ones. std::nullopt = back to normal. */
-    void setTrimPreview (std::optional<juce::Range<double>>);
+        (in beats) instead of its real ones. std::nullopt = back to normal.
+        asLoop: the content repeats to fill the new length (a loop drag). */
+    void setTrimPreview (std::optional<juce::Range<double>>, bool asLoop = false);
 
     /** The start and end beat as currently drawn (the trim preview, if any). */
     juce::Range<double> getDisplayRange() const;
@@ -48,6 +50,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
@@ -61,13 +64,26 @@ private:
     juce::Colour colour;
     bool selected = false;
     std::optional<juce::Range<double>> trimPreview;
+    bool loopPreview = false;
+    bool hoveringLoopCorner = false;
 
     juce::TextEditor nameEditor;
     bool renaming = false;
 
     void finishRenaming (bool keepNewName);
+    // How the content repeats: one loop's length and how far into the loop
+    // the region starts. An unlooped region is one "loop" of its own length,
+    // so the same drawing code works for both.
+    struct Repeat
+    {
+        bool looping = false;
+        double length = 0.0, offset = 0.0;
+    };
+
+    Repeat getRepeat() const;
     void paintMidiNotes (juce::Graphics&, juce::Rectangle<float>);
     void paintWaveform (juce::Graphics&, juce::Rectangle<float>);
+    void paintLoopDividers (juce::Graphics&, juce::Rectangle<float>);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RegionComponent)
 };

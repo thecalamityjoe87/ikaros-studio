@@ -52,11 +52,22 @@ struct RegionInfo
     std::vector<float> peaks;      // audio regions only: waveform, 0..1 per column across the region
 
     // How far the edges can be dragged out. An audio region can't grow past
-    // the start or end of its recording; a MIDI region can grow freely.
+    // the start or end of its recording (unless it's looped); a MIDI region
+    // can grow freely.
     double minStartBeat = 0.0;
     double maxEndBeat = std::numeric_limits<double>::max();
 
-    double getEndBeat() const noexcept    { return startBeat + lengthBeats; }
+    // Looping: dragging the top-right corner repeats the region's content.
+    // A looped region's notes and peaks are one loop's worth, starting at the
+    // loop's first beat, and the region starts loopOffsetBeats into the loop.
+    double loopLengthBeats = 0.0;  // 0 = not looped
+    double loopOffsetBeats = 0.0;
+
+    double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
+    bool isLooped() const noexcept          { return loopLengthBeats > 0.0; }
+
+    /** The length of what the piano roll edits: one loop, or the whole region. */
+    double getContentLengthBeats() const noexcept   { return isLooped() ? loopLengthBeats : lengthBeats; }
 
     bool operator== (const RegionInfo&) const = default;   // compares every member, notes and peaks included
 };

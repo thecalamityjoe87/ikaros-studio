@@ -118,9 +118,10 @@ NoteEditor::NoteIndexMap NoteEditor::quantiseNotes (RegionId id, const std::vect
     if (clip == nullptr || gridBeats <= 0.0)
         return {};
 
-    // The region's start, and its notes as the piano roll sees them (from the
-    // region start), read straight from the clip.
-    const double regionStart = clip->getStartBeat().inBeats();
+    // Where the notes' beat 0 is on the timeline (the region's start, or for a
+    // looped region the start of its first loop), and the notes as the piano
+    // roll sees them, read straight from the clip.
+    const double regionStart = clip->getStartBeat().inBeats() - loopOffsetBeats (*clip);
     const auto offset = contentOffsetBeats (*clip);
     std::vector<NoteInfo> regionNotes;
 
