@@ -53,8 +53,8 @@ public:
     static constexpr int preferredWidth = buttonWidth * 3;
 
 private:
-    IconButton minimiseButton { "Minimise", Icon::windowMinimise };
-    IconButton maximiseButton { "Maximise", Icon::windowMaximise };
+    IconButton minimiseButton { "Minimize", Icon::windowMinimise };
+    IconButton maximiseButton { "Maximize", Icon::windowMaximise };
     IconButton closeButton    { "Close", Icon::windowClose };
 
     bool showingRestore = false;

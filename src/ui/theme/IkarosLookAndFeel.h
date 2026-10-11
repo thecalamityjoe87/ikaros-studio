@@ -70,7 +70,8 @@ public:
     /** Shared keyboard-focus ring, used by our custom components too. */
     static void drawFocusRing (juce::Graphics&, juce::Rectangle<float> bounds, float cornerRadius);
 
-    /** Colour ID for a knob's value arc (set per-slider to the track colour). */
+    /** Colour ID for a knob's value arc (set per-slider to the track colour).
+        Rotary sliders with the property "bipolar" = true draw the arc from the centre. */
     static constexpr int knobArcColourId = 0x7f00001;
 };
 

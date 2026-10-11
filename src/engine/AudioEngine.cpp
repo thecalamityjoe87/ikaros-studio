@@ -22,12 +22,11 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
 
     // Recorded audio goes to Documents/Ikaros Studio/Recordings rather than
     // next to the session file: an untitled session lives in a temp folder,
-    // and takes recorded there would be lost.
-    // TODO: copy a session's recordings into its own folder on Save As.
+    // and takes recorded there would be lost. Saving copies them into the
+    // session's own folder (see AudioEngine::saveSessionAs).
     juce::String getDefaultAudioRecordingFilePattern() override
     {
-        auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                          .getChildFile ("Ikaros Studio").getChildFile ("Recordings");
+        auto folder = AudioEngine::getRecordingsFolder();
         folder.createDirectory();
         return folder.getFullPathName() + "/%edit%_%track%_%date%_%time%_Take_%take%";
     }
@@ -73,6 +72,38 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     std::unique_ptr<te::Edit> edit;
     juce::File sessionFile;
     bool untitled = true;
+
+    //==============================================================================
+    std::unique_ptr<te::Edit> createEdit (const juce::ValueTree& state)
+    {
+        auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
+
+        if (! id.isValid())
+            id = te::ProjectItemID::createNewID ({});
+
+        // Designated initialisers (C++20): name the Options fields we set; the
+        // rest keep their defaults.
+        return te::Edit::createEdit ({ .engine = engine,
+                                       .editState = state,
+                                       .editProjectItemID = id,
+                                       .editFileRetriever = [this] { return sessionFile; },
+                                       .filePathResolver = [this] (const juce::String& path) { return resolvePath (path); },
+                                       .numAudioTracks = 0 });   // no default track: we add our own
+    }
+
+    // Audio regions refer to their files by path. For a file near the
+    // session, Tracktion stores a path relative to the session *file*
+    // ("../Loop.wav" for a file in the same folder), but its default
+    // resolver reads it from the session's folder, one level too high. This
+    // reads it back the way it was written.
+    juce::File resolvePath (const juce::String& path) const
+    {
+        if (path.isEmpty())
+            return {};
+
+        // getChildFile handles absolute paths too: it just returns them.
+        return sessionFile.getChildFile (path);
+    }
 
     // Master meter. The playback context (and its masterLevels measurer) can be
     // re-created by Tracktion at any time, so we hold a WeakReference and
@@ -258,16 +289,9 @@ static juce::File getUntitledSessionFile (te::Engine& engine)
 
 void AudioEngine::newSession()
 {
-    auto file = getUntitledSessionFile (impl->engine);
-    auto edit = te::createEmptyEdit (impl->engine, file);
-
-    // createEmptyEdit adds a plain audio track; we want our own instrument track instead.
-    for (auto* t : te::getAudioTracks (*edit))
-        edit->deleteTrack (t);
-
     // Start every new session with one instrument track so a beginner can play
     // the keyboard straight away.
-    loadEdit (std::move (edit), file, true);
+    loadEdit (te::createEmptyEdit (impl->engine), getUntitledSessionFile (impl->engine), true);
     auto first = trackController->addInstrumentTrack();
     trackController->setSelectedTrack (first);
 
@@ -282,12 +306,13 @@ bool AudioEngine::openSession (const juce::File& file)
     if (! file.existsAsFile())
         return false;
 
-    auto edit = te::loadEditFromFile (impl->engine, file);
+    // Read the file first, so a broken file leaves the current session alone.
+    auto state = te::loadEditFromFile (impl->engine, file, te::ProjectItemID());
 
-    if (edit == nullptr)
+    if (! state.isValid())
         return false;
 
-    loadEdit (std::move (edit), file, false);
+    loadEdit (state, file, false);
 
     auto tracks = trackController->getTracks();
     trackController->setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
@@ -296,7 +321,7 @@ bool AudioEngine::openSession (const juce::File& file)
     return true;
 }
 
-void AudioEngine::loadEdit (std::unique_ptr<te::Edit> newEdit, const juce::File& file, bool untitled)
+void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& file, bool untitled)
 {
     if (impl->edit != nullptr)
     {
@@ -311,14 +336,12 @@ void AudioEngine::loadEdit (std::unique_ptr<te::Edit> newEdit, const juce::File&
     // (meter taps, held notes) *before* the old Edit is destroyed.
     trackController->sessionChanged();
 
-    impl->edit = std::move (newEdit);
+    // Set before creating the Edit: it finds its audio files from here while loading.
     impl->sessionFile = file;
     impl->untitled = untitled;
+    impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
 
     auto& edit = *impl->edit;
-
-    // Tells Tracktion where the session lives (used to resolve relative paths).
-    edit.editFileRetriever = [file] { return file; };
 
     // Keep the audio graph running while stopped so live MIDI (keyboard) is audible.
     edit.playInStopEnabled = true;
@@ -337,17 +360,86 @@ bool AudioEngine::saveSession()
     return saveSessionAs (impl->sessionFile);
 }
 
+juce::File AudioEngine::getRecordingsFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+               .getChildFile ("Ikaros Studio").getChildFile ("Recordings");
+}
+
+juce::File AudioEngine::getRecordingsFolderFor (const juce::File& sessionFile)
+{
+    return sessionFile.getSiblingFile (sessionFile.getFileNameWithoutExtension() + " Recordings");
+}
+
+// Copies a recording into a session's recordings folder, unless an earlier
+// save already did. Returns the copy, or the original if copying failed.
+static juce::File copyRecordingInto (const juce::File& recording, const juce::File& folder)
+{
+    auto target = folder.getChildFile (recording.getFileName());
+
+    if (target.existsAsFile() && target.getSize() == recording.getSize())
+        return target;
+
+    if (target.exists())
+        target = folder.getNonexistentChildFile (recording.getFileNameWithoutExtension(),
+                                                 recording.getFileExtension(), false);
+
+    return folder.createDirectory() && recording.copyFileTo (target) ? target : recording;
+}
+
 bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
 {
     auto file = requestedFile.withFileExtension (sessionFileExtension);
+    auto& edit = *impl->edit;
+
+    // Audio regions refer to their files by a path that Tracktion stores
+    // relative to the session file when it can. Find every region's file
+    // while those paths still resolve from the old location.
+    struct Source { te::Clip::Ptr clip; juce::File file; juce::var oldPath; };
+    std::vector<Source> sources;
+
+    for (auto* track : te::getAudioTracks (edit))
+        for (auto* clip : track->getClips())
+            if (dynamic_cast<te::WaveAudioClip*> (clip) != nullptr)
+                sources.push_back ({ clip, clip->getSourceFileReference().getFile(), clip->state[te::IDs::source] });
+
+    const auto oldFile = impl->sessionFile;
+    const auto oldRecordings = impl->untitled ? juce::File() : getRecordingsFolderFor (oldFile);
+    const auto newRecordings = getRecordingsFolderFor (file);
+    impl->sessionFile = file;   // paths are now worked out from the new location
+
+    for (auto& source : sources)
+    {
+        auto target = source.file;
+
+        // The session's recordings (new takes, or ones in the folder of the
+        // session it was saved from) are copied next to the new session file.
+        // Imported audio files stay where they are.
+        const bool isRecording = source.file.isAChildOf (getRecordingsFolder())
+                                  || (oldRecordings != juce::File() && source.file.isAChildOf (oldRecordings));
+
+        if (isRecording && source.file.existsAsFile() && ! source.file.isAChildOf (newRecordings))
+            target = copyRecordingInto (source.file, newRecordings);
+
+        // Re-store every path relative to the new location. nullptr = not an
+        // undo step: the user shouldn't be able to "undo" a save.
+        source.clip->state.setProperty (te::IDs::source,
+                                        te::SourceFileReference::findPathFromFile (edit, target, true), nullptr);
+    }
 
     // writeToFile is synchronous, which keeps the menu code simple.
-    if (! te::EditFileOperations (*impl->edit).writeToFile (file, false))
-        return false;
+    if (! te::EditFileOperations (edit).writeToFile (file, false))
+    {
+        // Point everything back at the files it used before.
+        impl->sessionFile = oldFile;
 
-    impl->sessionFile = file;
+        for (auto& source : sources)
+            source.clip->state.setProperty (te::IDs::source, source.oldPath, nullptr);
+
+        return false;
+    }
+
     impl->untitled = false;
-    impl->edit->editFileRetriever = [file] { return file; };
     impl->edit->resetChangedStatus();
     notifyModelChanged();
     return true;
@@ -408,6 +500,8 @@ void AudioEngine::toggleRecord()
     if (trackController->getArmedTrack() == 0)
         return;   // no track to record onto
 
+    // With the count-in on, Tracktion starts playback a bar early and clicks
+    // through that bar (even with the metronome off); the take itself starts here.
     impl->recordStartBeats = impl->edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
     transport.record (false);
 }
@@ -458,6 +552,11 @@ void AudioEngine::setMetronomeEnabled (bool enabled)
     impl->edit->clickTrackEnabled = enabled;
 }
 
+void AudioEngine::setCountInEnabled (bool enabled)
+{
+    impl->edit->setCountInMode (enabled ? te::Edit::CountIn::oneBar : te::Edit::CountIn::none);
+}
+
 void AudioEngine::setBpm (double bpm)
 {
     // CachedValue / ValueTree writes inside Tracktion record undo automatically.
@@ -471,6 +570,16 @@ void AudioEngine::setTimeSignature (int numerator, int denominator)
     auto* sig = impl->edit->tempoSequence.getTimeSig (0);
     sig->numerator = juce::jlimit (1, 16, numerator);
     sig->denominator = denominator;
+}
+
+void AudioEngine::setKey (int root, bool minor)
+{
+    if (auto* pitch = impl->edit->pitchSequence.getPitch (0))
+    {
+        beginUndoStep ("Key");
+        pitch->setPitch (60 + juce::jlimit (0, 11, root));   // stored as a MIDI note: the root above middle C
+        pitch->setScaleID (minor ? te::Scale::minor : te::Scale::major);
+    }
 }
 
 double AudioEngine::beatsPerBar() const
@@ -497,8 +606,10 @@ TransportState AudioEngine::getTransportState() const
     s.recordStartBeats = impl->recordStartBeats;
     s.looping = transport.looping.get();
     s.metronome = edit.clickTrackEnabled.get();
+    s.countIn = edit.getCountInMode() != te::Edit::CountIn::none;
     s.positionSeconds = pos.inSeconds();
     s.positionBeats = ts.toBeats (pos).inBeats();
+    s.countingIn = s.recording && s.positionBeats < s.recordStartBeats;
 
     auto barsBeats = ts.toBarsAndBeats (pos);
     s.bar = barsBeats.bars + 1;
@@ -508,6 +619,12 @@ TransportState AudioEngine::getTransportState() const
     s.timeSigNumerator = ts.getTimeSig (0)->numerator.get();
     s.timeSigDenominator = ts.getTimeSig (0)->denominator.get();
 
+    if (auto* pitch = edit.pitchSequence.getPitch (0))
+    {
+        s.keyRoot = pitch->getPitch() % 12;
+        s.keyMinor = pitch->getScale() == te::Scale::minor || pitch->getScale() == te::Scale::aeolian;
+    }
+
     auto loop = transport.getLoopRange();
     s.loopStartBeats = ts.toBeats (loop.getStart()).inBeats();
     s.loopEndBeats = ts.toBeats (loop.getEnd()).inBeats();
@@ -516,15 +633,8 @@ TransportState AudioEngine::getTransportState() const
 
 juce::String AudioEngine::getKeyName() const
 {
-    // TODO(milestone-2): let the user change the key from the LCD.
-    if (auto* pitch = impl->edit->pitchSequence.getPitch (0))
-    {
-        auto root = juce::MidiMessage::getMidiNoteName (pitch->getPitch(), true, false, 3);
-        auto scale = te::Scale::getShortNameForType (pitch->getScale());
-        return root + " " + scale.toLowerCase();
-    }
-
-    return "C maj";
+    auto state = getTransportState();
+    return ikaros::getKeyName (state.keyRoot, state.keyMinor);
 }
 
 //==============================================================================

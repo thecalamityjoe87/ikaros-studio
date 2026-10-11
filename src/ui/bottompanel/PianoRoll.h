@@ -1,38 +1,157 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
-#include <juce_gui_basics/juce_gui_basics.h>
+#include "ui/widgets/IconButton.h"
 #include <optional>
 
 namespace ikaros
 {
 
+class AudioEngine;
+
 //==============================================================================
 /**
     The "Editor" tab: a piano roll for the selected MIDI region.
 
-    Read-only in this milestone: it shows the notes and the playhead.
-    TODO(milestone-2): add, move, resize and delete notes (via TrackController,
-    so every edit is undoable), velocity lane, quantise.
+        ┌ [Grid: 1/16] [Quantize]  hints...                ⌕──○  ♪──○ ┐  toolbar
+        │ keys │ note grid                                           │▲│
+        │      │   ▬▬▬   ▬▬▬▬▬                                       │ │
+        ├──────┼─────────────────────────────────────────────────────┤ │
+        │ Vel. │ ╷   ╷  velocity lane                                │ │
+        └──────┴ ◀═════════════ time scroll bar ════════════════▶ ───┘
+
+    Mouse: click empty space to add a note (drag to set its length), drag a
+    note to move it, drag its right end to resize, Shift-click or Shift-drag
+    to select several, drag a stem in the velocity lane to change velocity,
+    click a key to hear it. Right-click for more.
+    Keys: Delete, Ctrl/Cmd+A, Escape, Q (quantize), arrows (move/transpose).
+
+    Every change goes through TrackController as one undo step. Notes are
+    identified by index (see NoteInfo), so after each edit the roll re-reads
+    the region and updates its selection from the returned index map.
 */
-class PianoRoll  : public juce::Component
+class PianoRoll  : public juce::Component,
+                   private juce::ScrollBar::Listener
 {
 public:
-    PianoRoll();
+    explicit PianoRoll (AudioEngine&);
+    ~PianoRoll() override;
 
     void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, double beatsPerBar);
     void setPlayheadBeat (double editBeat);
 
     void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    bool keyPressed (const juce::KeyPress&) override;
+    void focusLost (FocusChangeType) override;
 
 private:
+    enum class Grid { bar, quarter, eighth, sixteenth, thirtySecond, off };
+
+    // What a mouse drag is doing.
+    struct Gesture
+    {
+        enum class Mode { none, previewKey, draw, pendingMove, move, resize, velocity, marquee };
+
+        Mode mode = Mode::none;
+        juce::Point<int> start;
+        int anchor = -1;                       // index of the note that was clicked
+        bool selectOnlyAnchorOnClick = false;
+        std::vector<NoteInfo> notes;           // the notes as they'll look if the gesture ends now
+        NoteInfo newNote;                      // draw mode: the note being drawn
+        juce::Rectangle<int> marquee;
+    };
+
+    AudioEngine& engine;
     std::optional<RegionInfo> region;
     juce::Colour colour;
     double beatsPerBar = 4.0;
     double playheadBeat = -1.0;     // relative to the region start; <0 = hidden
-    int lowNote = 60, highNote = 71;
 
-    static constexpr int keysWidth = 44;
+    // View. Rows count down from the top note (127): row r shows pitch 127 - r.
+    double pixelsPerBeat = 60.0;
+    double scrollBeats = 0.0;       // beat (from the region start) at the left edge
+    float rowHeight = 12.0f;
+    double topRow = 50.0;
+    bool needsFit = true;           // zoom to fit the region on the next layout
+
+    Grid grid = Grid::sixteenth;
+    double lastNoteLength = 0.25;   // new notes get the length of the last one drawn or resized
+    std::vector<int> selected;      // note indices, sorted
+    Gesture gesture;
+    int previewNote = -1;           // the note sounding while the mouse is held, or -1
+
+    IconButton gridButton     { "Grid", std::nullopt, "Grid: 1/16" };
+    IconButton quantizeButton { "Quantize", std::nullopt, "Quantize" };
+    juce::Slider timeZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider noteZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::ScrollBar timeScroll { false }, noteScroll { true };
+
+    juce::Rectangle<int> toolbarArea, hintArea, timeZoomIcon, noteZoomIcon;
+    juce::Rectangle<int> keysArea, gridArea, velocityLabelArea, velocityArea;
+
+    //==============================================================================
+    // Coordinates. Beats are relative to the region start.
+    float beatToX (double beat) const;
+    double xToBeat (float x) const;
+    float pitchToY (int pitch) const;
+    int yToPitch (int y) const;
+    double visibleBeats() const;
+    double visibleRows() const;
+    double regionLength() const;
+    juce::Rectangle<float> noteBounds (const NoteInfo&) const;
+
+    // Grid
+    double gridBeats() const;                              // 0 = off
+    double snapToGrid (double beat, bool roundDown) const; // on the song's timeline
+    juce::String gridName() const;
+    void showGridMenu();
+
+    // View
+    void fitToRegion();
+    void setTimeZoom (double pixelsPerBeat, float anchorX);
+    void setNoteZoom (float rowHeight, float anchorY);
+    void clampView();
+    void updateScrollBars();
+    void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
+
+    // Notes
+    const std::vector<NoteInfo>& notesToDraw() const;
+    int noteAt (juce::Point<int>) const;
+    int stemAt (juce::Point<int>) const;
+    bool isNearNoteEnd (int index, juce::Point<int>) const;
+    bool isSelected (int index) const;
+    void selectOnly (int index);
+    void toggleSelected (int index);
+
+    void rereadRegion();
+    void applyChanges (const std::vector<NoteChange>&, const juce::String& undoName);
+    void deleteSelected();
+    void quantize();
+    void nudgeSelected (double beats, int semitones);
+    void showNoteMenu();
+
+    // Gestures
+    void updateMove (juce::Point<int>);
+    void updateResize (juce::Point<int>);
+    void updateVelocity (juce::Point<int>);
+    void updateMarquee (juce::Point<int>);
+
+    // Hearing notes
+    void startPreview (int pitch, int velocity = 100);
+    void stopPreview();
+
+    // Painting
+    void paintToolbar (juce::Graphics&);
+    void paintKeys (juce::Graphics&);
+    void paintGrid (juce::Graphics&);
+    void paintNotes (juce::Graphics&);
+    void paintVelocities (juce::Graphics&);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PianoRoll)
 };

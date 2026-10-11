@@ -83,7 +83,13 @@ set(IKAROS_APP_SOURCES
 set(IKAROS_ENGINE_SOURCES
     src/engine/EngineTypes.h
     src/engine/AudioEngine.h        src/engine/AudioEngine.cpp
-    src/engine/TrackController.h    src/engine/TrackController.cpp)
+    src/engine/TrackController.h    src/engine/TrackController.cpp
+    src/engine/TrackHelpers.h
+    src/engine/InputRouter.h        src/engine/InputRouter.cpp
+    src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
+    src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
+    src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
+    src/engine/EffectsController.h  src/engine/EffectsController.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -98,6 +104,7 @@ set(IKAROS_UI_SOURCES
     # widgets: small reusable controls
     src/ui/widgets/Icons.h                  src/ui/widgets/Icons.cpp
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
+    src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
@@ -116,6 +123,12 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
+    src/ui/arrangement/ArrangementLayout.h
+    src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
+    src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
+    src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
+    src/ui/arrangement/ArrangementOverlays.h    src/ui/arrangement/ArrangementOverlays.cpp
+    src/ui/arrangement/ArrangementRegionDrag.h  src/ui/arrangement/ArrangementRegionDrag.cpp
     src/ui/arrangement/TrackHeader.h        src/ui/arrangement/TrackHeader.cpp
     src/ui/arrangement/RegionComponent.h    src/ui/arrangement/RegionComponent.cpp
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp

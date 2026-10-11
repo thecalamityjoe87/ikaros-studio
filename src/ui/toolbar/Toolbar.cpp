@@ -15,7 +15,7 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     auto raisedWithBorder = IconButton::raisedColours();
     raisedWithBorder.border = colour::border;
 
-    for (auto* b : { &libraryButton, &newTrackButton, &undoButton })
+    for (auto* b : { &libraryButton, &newTrackButton, &undoButton, &redoButton })
     {
         b->setColours (raisedWithBorder);
         addAndMakeVisible (b);
@@ -27,6 +27,7 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     libraryButton.onClick  = [this] { commands.invokeDirectly (CommandIDs::toggleLibrary, true); };
     newTrackButton.onClick = [this] { if (onNewTrackRequested) onNewTrackRequested (&newTrackButton); };
     undoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::undo, true); };
+    redoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::redo, true); };
 
     addAndMakeVisible (transport);
     addAndMakeVisible (masterMeter);
@@ -37,6 +38,8 @@ void Toolbar::update (bool libraryVisible)
     libraryButton.setToggleState (libraryVisible, juce::dontSendNotification);
     undoButton.setEnabled (engine.canUndo());
     undoButton.setTooltip (juce::String ("Undo " + engine.getUndoDescription()).trimEnd());
+    redoButton.setEnabled (engine.canRedo());
+    redoButton.setTooltip (juce::String ("Redo " + engine.getRedoDescription()).trimEnd());
 
     transport.update();
     masterMeter.setLevel (engine.getMasterLevel());
@@ -96,6 +99,7 @@ void Toolbar::resized()
     place (libraryButton, 38);
     place (newTrackButton, 124);
     place (undoButton, 38);
+    place (redoButton, 38);
 
     auto right = r.withLeft (transport.getRight() + 12);
     statsArea = right.removeFromRight (110).withSizeKeepingCentre (110, 32);

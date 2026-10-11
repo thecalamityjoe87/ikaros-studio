@@ -50,15 +50,31 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     {
         add (CommandIDs::newTrack);
         add (CommandIDs::newAudioTrack);
-        add (CommandIDs::deleteTrack);
+        add (CommandIDs::duplicateTrackSettings);
+        add (CommandIDs::duplicateTrack);
+        m.addSeparator();
+        add (CommandIDs::renameTrack);
+        add (CommandIDs::moveTrackUp);
+        add (CommandIDs::moveTrackDown);
         m.addSeparator();
         add (CommandIDs::muteTrack);
         add (CommandIDs::soloTrack);
         add (CommandIDs::armTrack);
+        m.addSeparator();
+        add (CommandIDs::deleteTrack);
     }
     else if (name == "Region")
     {
         add (CommandIDs::newRegion);
+        m.addSeparator();
+        add (CommandIDs::splitRegion);
+        add (CommandIDs::duplicateRegion);
+        m.addSeparator();
+        add (CommandIDs::cutRegions);
+        add (CommandIDs::copyRegions);
+        add (CommandIDs::pasteRegions);
+        m.addSeparator();
+        add (CommandIDs::renameRegion);
         add (CommandIDs::deleteRegion);
     }
     else if (name == "Mix")
@@ -68,12 +84,21 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::goToStart);
         add (CommandIDs::toggleLoop);
         add (CommandIDs::toggleMetronome);
+        add (CommandIDs::toggleCountIn);
         m.addSeparator();
         add (CommandIDs::showMixerTab);
     }
     else if (name == "View")
     {
         add (CommandIDs::toggleLibrary);
+        add (CommandIDs::toggleBottomPanel);
+        m.addSeparator();
+        add (CommandIDs::zoomIn);
+        add (CommandIDs::zoomOut);
+        m.addSeparator();
+        add (CommandIDs::snapToBar);
+        add (CommandIDs::snapToBeat);
+        add (CommandIDs::snapOff);
         m.addSeparator();
         add (CommandIDs::showSoundTab);
         add (CommandIDs::showEditorTab);

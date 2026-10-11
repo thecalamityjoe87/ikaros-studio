@@ -2,6 +2,7 @@
 
 #include "engine/EngineTypes.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <optional>
 
 namespace ikaros
 {
@@ -12,34 +13,59 @@ namespace ikaros
     the track colour, a darker label strip on top, and mini notes for MIDI or a
     waveform for audio.
 
-    Click selects it, double-click opens it in the Editor, Delete removes it.
+    Mouse gestures (select, move, trim) are handled by the ArrangementView,
+    which knows about the other selected regions and tracks. This component
+    reports where on the region the mouse is (getZoneAt) and draws itself.
 */
 class RegionComponent  : public juce::Component
 {
 public:
+    /** The parts of a region that react differently to the mouse. */
+    enum class Zone { body, nameStrip, leftEdge, rightEdge };
+
     RegionComponent (const RegionInfo&, juce::Colour trackColour);
 
     void update (const RegionInfo&, juce::Colour trackColour, bool isSelected);
     const RegionInfo& getInfo() const noexcept   { return info; }
 
-    std::function<void()> onSelect;
+    Zone getZoneAt (juce::Point<int>) const;
+
+    /** While an edge is being dragged, the region is drawn with these edges
+        (in beats) instead of its real ones. std::nullopt = back to normal. */
+    void setTrimPreview (std::optional<juce::Range<double>>);
+
+    /** The start and end beat as currently drawn (the trim preview, if any). */
+    juce::Range<double> getDisplayRange() const;
+
+    /** Shows a text field over the name strip. */
+    void startRenaming();
+
+    std::function<void (RegionComponent&, const juce::MouseEvent&)> onMouseDown, onMouseDrag, onMouseUp;
+    std::function<void (RegionComponent&, Zone)> onDoubleClick;
+    std::function<void (const juce::String& newName)> onRename;
     std::function<void()> onOpenEditor;
-    std::function<void()> onDelete;
 
     void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     bool keyPressed (const juce::KeyPress&) override;
     void focusGained (FocusChangeType) override     { repaint(); }
     void focusLost (FocusChangeType) override       { repaint(); }
 
-    // TODO(milestone-2): drag to move, drag edges to resize, loop by dragging the top-right corner.
-
 private:
     RegionInfo info;
     juce::Colour colour;
     bool selected = false;
+    std::optional<juce::Range<double>> trimPreview;
 
+    juce::TextEditor nameEditor;
+    bool renaming = false;
+
+    void finishRenaming (bool keepNewName);
     void paintMidiNotes (juce::Graphics&, juce::Rectangle<float>);
     void paintWaveform (juce::Graphics&, juce::Rectangle<float>);
 

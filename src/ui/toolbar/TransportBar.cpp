@@ -1,5 +1,6 @@
 #include "ui/toolbar/TransportBar.h"
 #include "engine/AudioEngine.h"
+#include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
 namespace ikaros
@@ -17,7 +18,7 @@ namespace
 
 TransportBar::TransportBar (AudioEngine& e) : engine (e)
 {
-    for (auto* b : { &toStartButton, &recordButton, &loopButton, &metronomeButton })
+    for (auto* b : { &toStartButton, &recordButton, &loopButton, &metronomeButton, &countInButton })
     {
         b->setCornerRadius (size::radiusLarge);
         addAndMakeVisible (b);
@@ -38,15 +39,22 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     // state changes elsewhere (menu, keyboard shortcut, loading a session).
     loopButton.setClickingTogglesState (true);
     metronomeButton.setClickingTogglesState (true);
+    countInButton.setClickingTogglesState (true);
+
+    // "1234", like a count-in: one bar of clicks before recording starts.
+    countInButton.setFont (fonts::monoBold (11.0f));
+    countInButton.setTooltip ("Count-in: one bar of clicks before recording starts");
 
     toStartButton.onClick   = [this] { engine.goToStart(); };
     playButton.onClick      = [this] { engine.togglePlay(); };
     recordButton.onClick    = [this] { engine.toggleRecord(); };
     loopButton.onClick      = [this] { engine.setLooping (loopButton.getToggleState()); };
     metronomeButton.onClick = [this] { engine.setMetronomeEnabled (metronomeButton.getToggleState()); };
+    countInButton.onClick   = [this] { engine.setCountInEnabled (countInButton.getToggleState()); };
 
     lcd.onBpmChanged = [this] (double bpm) { engine.setBpm (bpm); };
     lcd.onTimeSignatureChanged = [this] (int num, int den) { engine.setTimeSignature (num, den); };
+    lcd.onKeyChanged = [this] (int root, bool minor) { engine.setKey (root, minor); };
     addAndMakeVisible (lcd);
 
     update();
@@ -54,7 +62,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
 int TransportBar::getPreferredWidth() const
 {
-    return padding * 2 + buttonSize * 4 + playWidth + LcdDisplay::preferredWidth + gap * 5 + 4;
+    return padding * 2 + buttonSize * 5 + playWidth + LcdDisplay::preferredWidth + gap * 6 + 4;
 }
 
 void TransportBar::update()
@@ -73,6 +81,7 @@ void TransportBar::update()
     recordButton.setTitle (state.recording ? "Stop recording" : "Record");
     loopButton.setToggleState (state.looping, juce::dontSendNotification);
     metronomeButton.setToggleState (state.metronome, juce::dontSendNotification);
+    countInButton.setToggleState (state.countIn, juce::dontSendNotification);
     lcd.setState (state, engine.getKeyName());
 }
 
@@ -100,8 +109,9 @@ void TransportBar::resized()
     place (recordButton, buttonSize);
     place (loopButton, buttonSize);
     r.removeFromLeft (4);
-    place (lcd, juce::jmax (120, r.getWidth() - buttonSize - gap));
+    place (lcd, juce::jmax (120, r.getWidth() - (buttonSize + gap) * 2));
     place (metronomeButton, buttonSize);
+    place (countInButton, buttonSize);
 }
 
 } // namespace ikaros

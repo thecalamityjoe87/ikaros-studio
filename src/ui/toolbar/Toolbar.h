@@ -11,7 +11,7 @@ class AudioEngine;
 
 //==============================================================================
 /**
-    The 64px toolbar: library toggle, "+ New Track" and Undo on the left, the
+    The 64px toolbar: library toggle, "+ New Track", Undo and Redo on the left, the
     TransportBar in the centre, master meters and CPU / sample-rate / latency on
     the right.
 
@@ -39,6 +39,7 @@ private:
     IconButton libraryButton  { "Show or hide the sound library", Icon::library };
     IconButton newTrackButton { "New Track", Icon::plus, "New Track" };
     IconButton undoButton     { "Undo", Icon::undo };
+    IconButton redoButton     { "Redo", Icon::redo };
     TransportBar transport;
     LevelMeter masterMeter;
 

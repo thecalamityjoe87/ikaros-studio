@@ -1,4 +1,10 @@
 #include "ui/arrangement/ArrangementView.h"
+#include "ui/arrangement/ArrangementContent.h"
+#include "ui/arrangement/ArrangementLayout.h"
+#include "ui/arrangement/ArrangementOverlays.h"
+#include "ui/arrangement/ArrangementRegionDrag.h"
+#include "ui/arrangement/ArrangementRuler.h"
+#include "app/CommandIDs.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -7,474 +13,38 @@ namespace ikaros
 {
 
 using namespace tokens;
+using namespace arrangement;
 
 namespace
 {
-    constexpr int headerWidth = size::trackHeaderWidth;
-    constexpr int rowHeight = size::trackRowHeight;
-    constexpr int dropZoneHeight = 84;
-    constexpr int dropZoneMargin = 12;
-    constexpr int loopStripHeight = 14;    // top part of the ruler where dragging sets the loop
+    constexpr int scrollBarHeight = 12;
+
+    // Zoom range, in pixels per beat: from about 200 bars across the window
+    // down to a single beat filling a large part of it.
+    constexpr double minPixelsPerBeat = 1.5;
+    constexpr double maxPixelsPerBeat = 240.0;
+
+    // The zoom slider is logarithmic: each step along it zooms by the same factor.
+    double zoomToSlider (double pixelsPerBeat)
+    {
+        return std::log (pixelsPerBeat / minPixelsPerBeat) / std::log (maxPixelsPerBeat / minPixelsPerBeat);
+    }
+
+    double sliderToZoom (double value)
+    {
+        return minPixelsPerBeat * std::pow (maxPixelsPerBeat / minPixelsPerBeat, value);
+    }
 }
 
 //==============================================================================
-// Ruler: bar numbers + loop range. Click/drag the lower part to move the
-// playhead; drag along the top strip to set the loop range.
-class ArrangementView::Ruler  : public juce::Component,
-                               public juce::SettableTooltipClient   // adds setTooltip()
+ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::ApplicationCommandManager& cm)
+    : engine (e), selection (s), commands (cm)
 {
-public:
-    Ruler (AudioEngine& e, const Geometry& g) : engine (e), geometry (g)
-    {
-        setTitle ("Bar ruler");
-        setTooltip ("Click to move the playhead. Drag along the top edge to set the loop.");
-    }
-
-    void setLoop (bool on, double start, double end)
-    {
-        if (on != looping || start != loopStart || end != loopEnd)
-        {
-            looping = on;
-            loopStart = start;
-            loopEnd = end;
-            repaint();
-        }
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds();
-        g.fillAll (colour::sidebarBg);
-        g.setColour (colour::divider);
-        g.fillRect (r.removeFromBottom (1));
-
-        auto label = r.removeFromLeft (headerWidth);
-        g.setColour (colour::divider);
-        g.fillRect (label.removeFromRight (1));
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
-        g.drawText ("TRACKS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
-
-        // Loop range: an amber bar along the top.
-        if (looping && loopEnd > loopStart)
-        {
-            auto x1 = (float) r.getX() + geometry.beatToX (loopStart);
-            auto x2 = (float) r.getX() + geometry.beatToX (loopEnd);
-            g.setColour (colour::accent.withAlpha (0.4f));
-            g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, 3.5f);
-        }
-
-        // Bar numbers with a tick on the left of each.
-        g.setFont (fonts::mono (11.0f));
-
-        for (int bar = 0; bar < geometry.numBars; ++bar)
-        {
-            auto x = r.getX() + juce::roundToInt (geometry.beatToX (bar * geometry.beatsPerBar));
-            g.setColour (colour::borderStrong);
-            g.fillRect (x, r.getBottom() - 17, 1, 14);
-            g.setColour (colour::textSecondary);
-            g.drawText (juce::String (bar + 1), x + 4, r.getBottom() - 17, 40, 14, juce::Justification::centredLeft);
-        }
-    }
-
-    void mouseDown (const juce::MouseEvent& e) override
-    {
-        draggingLoop = e.y < loopStripHeight;
-        dragStartBeat = beatAt (e.x);
-        mouseDrag (e);
-    }
-
-    void mouseDrag (const juce::MouseEvent& e) override
-    {
-        auto beat = beatAt (e.x);
-
-        if (draggingLoop)
-        {
-            // Snap the loop to whole bars.
-            auto bpb = geometry.beatsPerBar;
-            auto a = std::floor (juce::jmin (dragStartBeat, beat) / bpb) * bpb;
-            auto b = std::ceil (juce::jmax (dragStartBeat, beat) / bpb) * bpb;
-
-            if (b <= a)
-                b = a + bpb;
-
-            engine.setLoopRangeBeats (a, b);
-            engine.setLooping (true);
-        }
-        else
-        {
-            engine.setPositionBeats (beat);
-        }
-    }
-
-private:
-    AudioEngine& engine;
-    const Geometry& geometry;
-    bool looping = false, draggingLoop = false;
-    double loopStart = 0.0, loopEnd = 0.0, dragStartBeat = 0.0;
-
-    double beatAt (int x) const   { return juce::jmax (0.0, geometry.xToBeat ((float) (x - headerWidth))); }
-};
-
-//==============================================================================
-// One track's timeline lane: grid + regions. Double-click creates a region.
-class ArrangementView::Lane  : public juce::Component,
-                              public juce::SettableTooltipClient
-{
-public:
-    Lane (ArrangementView& o, TrackId id) : owner (o), trackId (id)
-    {
-        setTitle ("Track lane");
-        setTooltip ("Double-click to add a 4-bar chord region");
-
-        // Clicking a lane takes keyboard focus, so focus doesn't stay on (say)
-        // a Mute button that would then swallow the Space key.
-        setWantsKeyboardFocus (true);
-    }
-
-    void focusGained (FocusChangeType cause) override
-    {
-        // Only show a focus ring when focus arrived from the keyboard (Tab).
-        showFocusRing = cause != focusChangedByMouseClick;
-        repaint();
-    }
-
-    void focusLost (FocusChangeType) override    { showFocusRing = false; repaint(); }
-
-    void update (const TrackInfo& t, const std::vector<RegionInfo>& regionInfos, bool isSelected, RegionId selectedRegion)
-    {
-        colour = t.colour;
-        selected = isSelected;
-        setAlpha (t.silencedBySolo || t.muted ? 0.4f : 1.0f);
-
-        // Reconcile region components by ID: keep existing ones (so keyboard
-        // focus survives), add new ones, remove deleted ones.
-        std::map<RegionId, std::unique_ptr<RegionComponent>> next;
-
-        for (auto& info : regionInfos)
-        {
-            auto it = regions.find (info.id);
-            std::unique_ptr<RegionComponent> comp;
-
-            if (it != regions.end())
-            {
-                comp = std::move (it->second);
-            }
-            else
-            {
-                comp = std::make_unique<RegionComponent> (info, colour);
-                addAndMakeVisible (*comp);
-
-                auto rid = info.id;
-                comp->onSelect = [this, rid] { owner.selection.selectRegion (trackId, rid); };
-                comp->onOpenEditor = [this, rid]
-                {
-                    owner.selection.selectRegion (trackId, rid);
-
-                    if (owner.onOpenRegionInEditor)
-                        owner.onOpenRegionInEditor (rid);
-                };
-                comp->onDelete = [this, rid] { owner.engine.getTracks().deleteRegion (rid); };
-            }
-
-            comp->update (info, colour, info.id == selectedRegion);
-            next[info.id] = std::move (comp);
-        }
-
-        regions = std::move (next);   // components not moved across are destroyed here
-        resized();
-        repaint();
-    }
-
-    /** The take being recorded on this lane, from startBeat to the playhead
-        (nothing when endBeat <= startBeat). */
-    void setRecordingRange (double startBeat, double endBeat)
-    {
-        if (startBeat != recordStart || endBeat != recordEnd)
-        {
-            recordStart = startBeat;
-            recordEnd = endBeat;
-            repaint();
-        }
-    }
-
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        if (recordEnd <= recordStart)
-            return;
-
-        // A red region that grows with the playhead while recording.
-        auto& geo = owner.geometry;
-        auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
-        auto r = juce::Rectangle<float> (x1, 5.0f, juce::jmax (4.0f, x2 - x1), (float) getHeight() - 11.0f);
-
-        g.setColour (colour::record.withAlpha (0.25f));
-        g.fillRoundedRectangle (r, 8.0f);
-        g.setColour (colour::record);
-        g.drawRoundedRectangle (r, 8.0f, 1.5f);
-
-        g.setFont (fonts::uiBold (11.0f));
-        g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds();
-
-        if (selected)
-            g.fillAll (colour::accent.withAlpha (0.05f));
-
-        // Beat lines (faint) and bar lines (stronger).
-        auto& geo = owner.geometry;
-        const int totalBeats = juce::roundToInt (geo.numBars * geo.beatsPerBar);
-
-        for (int beat = 0; beat <= totalBeats; ++beat)
-        {
-            const bool isBar = std::fmod ((double) beat, geo.beatsPerBar) == 0.0;
-            g.setColour (juce::Colours::white.withAlpha (isBar ? 0.05f : 0.025f));
-            g.fillRect (juce::roundToInt (geo.beatToX (beat)), 0, 1, r.getHeight());
-        }
-
-        g.setColour (colour::divider);
-        g.fillRect (r.removeFromBottom (1));
-
-        if (showFocusRing && hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), 4.0f);
-    }
-
-    void resized() override
-    {
-        auto& geo = owner.geometry;
-
-        for (auto& [id, comp] : regions)   // structured binding: unpacks each map entry into key + value
-        {
-            auto& info = comp->getInfo();
-            auto x = juce::roundToInt (geo.beatToX (info.startBeat));
-            auto w = juce::jmax (8, juce::roundToInt (geo.beatToX (info.lengthBeats)));
-            comp->setBounds (x, 5, w, getHeight() - 11);
-        }
-    }
-
-    void mouseDown (const juce::MouseEvent&) override
-    {
-        owner.selection.selectRegion (trackId, 0);
-    }
-
-    void mouseDoubleClick (const juce::MouseEvent& e) override
-    {
-        auto beat = owner.geometry.xToBeat ((float) e.x);
-
-        if (auto rid = owner.engine.getTracks().createChordRegion (trackId, beat))
-            owner.selection.selectRegion (trackId, rid);
-    }
-
-private:
-    ArrangementView& owner;
-    const TrackId trackId;
-    juce::Colour colour;
-    bool selected = false, showFocusRing = false;
-    double recordStart = 0.0, recordEnd = 0.0;
-    std::map<RegionId, std::unique_ptr<RegionComponent>> regions;
-};
-
-//==============================================================================
-// The dashed "Drop a sound, loop or audio file here" zone. Clicking it adds a track.
-class ArrangementView::DropZone  : public juce::Button
-{
-public:
-    DropZone() : juce::Button ("Add a track")
-    {
-        setTitle ("Add a track");
-        setMouseClickGrabsKeyboardFocus (false);
-        setTooltip ("Click to add a new instrument track");
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
-    }
-
-    // TODO(milestone-3): implement juce::FileDragAndDropTarget here to accept
-    // audio files and loops from the OS and from the library.
-
-    void paintButton (juce::Graphics& g, bool over, bool) override
-    {
-        auto r = getLocalBounds().toFloat().reduced (1.0f);
-
-        juce::Path outline, dashed;
-        outline.addRoundedRectangle (r, 12.0f);
-        const float dashes[] = { 5.0f, 4.0f };
-        juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
-
-        if (over)
-        {
-            g.setColour (colour::raised.withAlpha (0.4f));
-            g.fillPath (outline);
-        }
-
-        g.setColour (over ? colour::textSecondary : colour::borderStrong);
-        g.fillPath (dashed);
-
-        auto text = juce::String ("Drop a sound, loop or audio file here");
-        auto font = fonts::ui (14.0f);
-        auto textW = juce::GlyphArrangement::getStringWidth (font, text);
-        auto group = r.withSizeKeepingCentre (textW + 26.0f, 20.0f);
-
-        icons::draw (g, Icon::plus, group.removeFromLeft (18.0f), colour::textSecondary, 18.0f, 2.0f);
-        group.removeFromLeft (8.0f);
-        g.setColour (colour::textSecondary);
-        g.setFont (font);
-        g.drawText (text, group, juce::Justification::centredLeft);
-
-        if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
-    }
-};
-
-//==============================================================================
-// The playhead: amber line with a rounded head, drawn over the ruler and lanes.
-class ArrangementView::Playhead  : public juce::Component
-{
-public:
-    Playhead()
-    {
-        setInterceptsMouseClicks (false, false);   // clicks pass through to the ruler/lanes
-        setAccessible (false);
-    }
-
-    void setX (float newX)
-    {
-        if (std::abs (newX - x) < 0.25f)
-            return;
-
-        // Only repaint the thin strips that changed, not the whole timeline.
-        repaint (stripAt (x));
-        x = newX;
-        repaint (stripAt (x));
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        if (x < -8.0f || x > (float) getWidth() + 8.0f)
-            return;
-
-        g.setColour (colour::accent);
-        g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight());
-        g.fillRoundedRectangle (x - 7.0f, 0.0f, 14.0f, 12.0f, 4.0f);
-    }
-
-private:
-    float x = -100.0f;
-
-    juce::Rectangle<int> stripAt (float px) const
-    {
-        return { juce::roundToInt (px) - 9, 0, 18, getHeight() };
-    }
-};
-
-//==============================================================================
-// Everything that scrolls vertically: headers on the left, lanes on the right.
-class ArrangementView::Content  : public juce::Component
-{
-public:
-    explicit Content (ArrangementView& o) : owner (o)
-    {
-        dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested (&dropZone); };
-        addAndMakeVisible (dropZone);
-    }
-
-    void sync (const std::vector<TrackInfo>& tracks,
-               const std::map<TrackId, std::vector<RegionInfo>>& regions)
-    {
-        std::map<TrackId, std::unique_ptr<TrackHeader>> nextHeaders;
-        std::map<TrackId, std::unique_ptr<Lane>> nextLanes;
-        order.clear();
-
-        auto selectedTrack = owner.selection.getTrack();
-        auto selectedRegion = owner.selection.getRegion();
-
-        for (auto& t : tracks)
-        {
-            auto header = std::move (headers[t.id]);
-            auto lane = std::move (lanes[t.id]);
-
-            if (header == nullptr)
-            {
-                header = std::make_unique<TrackHeader> (owner.engine, owner.selection, t);
-                addAndMakeVisible (*header);
-            }
-
-            if (lane == nullptr)
-            {
-                lane = std::make_unique<Lane> (owner, t.id);
-                addAndMakeVisible (*lane);
-            }
-
-            header->update (t, t.id == selectedTrack);
-            auto it = regions.find (t.id);
-            lane->update (t, it != regions.end() ? it->second : std::vector<RegionInfo> {},
-                          t.id == selectedTrack, selectedRegion);
-
-            order.push_back (t.id);
-            nextHeaders[t.id] = std::move (header);
-            nextLanes[t.id] = std::move (lane);
-        }
-
-        headers = std::move (nextHeaders);
-        lanes = std::move (nextLanes);
-    }
-
-    void setRecording (TrackId track, double startBeat, double endBeat)
-    {
-        for (auto& [id, lane] : lanes)
-        {
-            if (id == track)
-                lane->setRecordingRange (startBeat, endBeat);
-            else
-                lane->setRecordingRange (0.0, 0.0);
-        }
-    }
-
-    int getIdealHeight() const
-    {
-        return (int) order.size() * rowHeight + dropZoneHeight + dropZoneMargin * 2;
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (colour::windowBg);
-        g.setColour (colour::sidebarBg);
-        g.fillRect (0, 0, headerWidth - 1, getHeight());
-        g.setColour (colour::divider);
-        g.fillRect (headerWidth - 1, 0, 1, getHeight());
-    }
-
-    void resized() override
-    {
-        int y = 0;
-
-        for (auto id : order)
-        {
-            headers[id]->setBounds (0, y, headerWidth - 1, rowHeight);
-            lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, rowHeight);
-            y += rowHeight;
-        }
-
-        dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,
-                            getWidth() - headerWidth - dropZoneMargin * 2, dropZoneHeight);
-    }
-
-private:
-    ArrangementView& owner;
-    std::map<TrackId, std::unique_ptr<TrackHeader>> headers;
-    std::map<TrackId, std::unique_ptr<Lane>> lanes;
-    std::vector<TrackId> order;
-    DropZone dropZone;
-};
-
-//==============================================================================
-ArrangementView::ArrangementView (AudioEngine& e, Selection& s)
-    : engine (e), selection (s)
-{
-    ruler = std::make_unique<Ruler> (engine, geometry);
+    ruler = std::make_unique<Ruler> (*this);
     content = std::make_unique<Content> (*this);
-    playhead = std::make_unique<Playhead>();
+    overlay = std::make_unique<Overlay>();
+    playhead = std::make_unique<Playhead> (*this);
+    regionDrag = std::make_unique<RegionDrag> (*this);
 
     addAndMakeVisible (*ruler);
 
@@ -482,14 +52,39 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s)
     viewport.setScrollBarsShown (true, false);
     addAndMakeVisible (viewport);
 
+    timeScrollBar.setAutoHide (false);
+    timeScrollBar.addListener (this);
+    addAndMakeVisible (timeScrollBar);
+
+    // Snap and zoom live above the track headers, next to "TRACKS".
+    auto snapColours = IconButton::raisedColours();
+    snapColours.border = colour::border;
+    snapButton.setColours (snapColours);
+    snapButton.setFont (fonts::ui (12.0f));
+    snapButton.setCornerRadius (size::radiusSmall);
+    snapButton.setTooltip ("Snap to grid: where moved regions and edges land");
+    snapButton.onClick = [this] { showSnapMenu(); };
+    addAndMakeVisible (snapButton);
+
+    zoomSlider.setTitle ("Zoom");
+    zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
+    zoomSlider.setRange (0.0, 1.0);
+    zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), (float) getLaneWidth() * 0.5f); };
+    addAndMakeVisible (zoomSlider);
+
+    addAndMakeVisible (*overlay);
     addAndMakeVisible (*playhead);   // added last so it's drawn on top
 
+    setSnap (Snap::beat);
     refresh();
 }
 
 // Defined here (not in the header) because the unique_ptr members point to
 // classes that are only complete in this file.
-ArrangementView::~ArrangementView() = default;
+ArrangementView::~ArrangementView()
+{
+    timeScrollBar.removeListener (this);
+}
 
 void ArrangementView::refresh()
 {
@@ -504,26 +99,13 @@ void ArrangementView::refresh()
         auto& list = regions[t.id] = tc.getRegions (t.id);
 
         for (auto& r : list)
-            contentEndBeat = juce::jmax (contentEndBeat, r.startBeat + r.lengthBeats);
+            contentEndBeat = juce::jmax (contentEndBeat, r.getEndBeat());
     }
 
-    updateGeometry();
+    geometry.beatsPerBar = engine.beatsPerBar();
     content->sync (tracks, regions);
     layoutContent();
-    ruler->repaint();
-}
-
-void ArrangementView::updateGeometry()
-{
-    geometry.beatsPerBar = engine.beatsPerBar();
-
-    // Show at least 16 bars, and always 4 empty bars after the last region,
-    // rounded up to a multiple of 4.
-    auto barsNeeded = (int) std::ceil (contentEndBeat / geometry.beatsPerBar) + 4;
-    geometry.numBars = juce::jmax (16, ((barsNeeded + 3) / 4) * 4);
-
-    auto laneWidth = juce::jmax (100, viewport.getMaximumVisibleWidth() - headerWidth);
-    geometry.pixelsPerBeat = laneWidth / (geometry.numBars * geometry.beatsPerBar);
+    timelineChanged();
 }
 
 void ArrangementView::layoutContent()
@@ -536,11 +118,166 @@ void ArrangementView::layoutContent()
     content->resized();
 }
 
+//==============================================================================
+// Zoom and horizontal scroll
+int ArrangementView::getLaneWidth() const
+{
+    return juce::jmax (1, viewport.getMaximumVisibleWidth() - headerWidth);
+}
+
+double ArrangementView::getVisibleBeats() const
+{
+    return getLaneWidth() / geometry.pixelsPerBeat;
+}
+
+double ArrangementView::getTotalBeats() const
+{
+    // You can scroll to 16 bars past the last region (and at least 32 bars in).
+    const double bpb = geometry.beatsPerBar;
+    return juce::jmax (32.0 * bpb, (std::ceil (contentEndBeat / bpb) + 16.0) * bpb);
+}
+
+void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
+{
+    // Keep the beat under anchorX (the mouse, say) in the same place.
+    const double anchorBeat = geometry.xToBeat (anchorX);
+    geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat, pixelsPerBeat);
+    geometry.scrollBeats = anchorBeat - anchorX / geometry.pixelsPerBeat;
+    timelineChanged();
+}
+
+void ArrangementView::zoomIn()
+{
+    // Zoom around the playhead if it's on screen, or else the middle.
+    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
+    setZoom (geometry.pixelsPerBeat * 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+}
+
+void ArrangementView::zoomOut()
+{
+    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
+    setZoom (geometry.pixelsPerBeat / 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+}
+
+void ArrangementView::scrollToBeat (double beat)
+{
+    geometry.scrollBeats = beat;
+    timelineChanged();
+}
+
+void ArrangementView::timelineChanged()
+{
+    geometry.scrollBeats = juce::jlimit (0.0, juce::jmax (0.0, getTotalBeats() - getVisibleBeats()), geometry.scrollBeats);
+
+    content->timelineChanged();
+    ruler->repaint();
+    updateScrollBar();
+    zoomSlider.setValue (zoomToSlider (geometry.pixelsPerBeat), juce::dontSendNotification);
+    playhead->setX (geometry.beatToX (engine.getTransportState().positionBeats));
+}
+
+void ArrangementView::updateScrollBar()
+{
+    // setRangeLimits/setCurrentRange call scrollBarMoved asynchronously only
+    // when the user moves it, so this doesn't loop back.
+    timeScrollBar.setRangeLimits (0.0, juce::jmax (getTotalBeats(), geometry.scrollBeats + getVisibleBeats()),
+                                  juce::dontSendNotification);
+    timeScrollBar.setCurrentRange (geometry.scrollBeats, getVisibleBeats(), juce::dontSendNotification);
+    timeScrollBar.setSingleStepSize (geometry.beatsPerBar);
+}
+
+void ArrangementView::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
+{
+    scrollToBeat (newRangeStart);
+}
+
+bool ArrangementView::handleWheel (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel, bool wheelScrollsTime)
+{
+    auto e = event.getEventRelativeTo (this);
+
+    if (e.mods.isCommandDown())
+    {
+        // Ctrl/Cmd + wheel: zoom around the mouse. One wheel notch zooms ~1.4×.
+        const float anchorX = (float) (e.x - headerWidth);
+        setZoom (geometry.pixelsPerBeat * std::pow (2.0, (double) wheel.deltaY * 2.5), anchorX);
+        return true;
+    }
+
+    // Shift + wheel (or a sideways swipe on a touchpad) scrolls in time.
+    const bool sideways = wheelScrollsTime || e.mods.isShiftDown();
+    float amount = wheel.deltaX;
+
+    if (sideways && amount == 0.0f)
+        amount = wheel.deltaY;
+
+    if (amount == 0.0f || (! sideways && std::abs (wheel.deltaX) < std::abs (wheel.deltaY)))
+        return false;
+
+    if (wheel.isReversed)
+        amount = -amount;
+
+    scrollToBeat (geometry.scrollBeats - amount * 300.0 / geometry.pixelsPerBeat);
+    return true;
+}
+
+//==============================================================================
+// Snap
+void ArrangementView::setSnap (Snap newSnap)
+{
+    snap = newSnap;
+    snapButton.setText (snap == Snap::bar ? "Snap: Bar" : snap == Snap::beat ? "Snap: Beat" : "Snap: Off");
+
+    if (onSnapChanged)
+        onSnapChanged();
+}
+
+double ArrangementView::snapBeat (double beat) const
+{
+    const double grid = snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+    return grid > 0.0 ? std::round (beat / grid) * grid : beat;
+}
+
+void ArrangementView::showSnapMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Snap to grid");
+
+    // PopupMenu::Item lets each entry run its own lambda.
+    auto add = [&] (const juce::String& name, Snap value)
+    {
+        menu.addItem (juce::PopupMenu::Item (name).setTicked (snap == value).setAction ([this, value] { setSnap (value); }));
+    };
+
+    add ("Bar", Snap::bar);
+    add ("Beat", Snap::beat);
+    add ("Off", Snap::off);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&snapButton));
+}
+
+//==============================================================================
 void ArrangementView::updateTransport()
 {
     auto state = engine.getTransportState();
     ruler->setLoop (state.looping, state.loopStartBeats, state.loopEndBeats);
-    playhead->setX (geometry.beatToX (state.positionBeats));
+
+    auto x = geometry.beatToX (state.positionBeats);
+    const auto width = (float) getLaneWidth();
+
+    // While playing, turn the page when the playhead leaves the screen (it
+    // ran off the right edge, or jumped back to the start of a loop), but
+    // not while the user is dragging something.
+    const bool wasVisible = lastPlayheadX >= 0.0f && lastPlayheadX <= width - 20.0f;
+    const bool isVisible = x >= 0.0f && x <= width - 20.0f;
+
+    if (state.playing && wasVisible && ! isVisible && ! regionDrag->isDragging()
+         && ! juce::Component::isMouseButtonDownAnywhere())
+    {
+        scrollToBeat (state.positionBeats - getVisibleBeats() * 0.05);
+        x = geometry.beatToX (state.positionBeats);
+    }
+
+    lastPlayheadX = x;
+    playhead->setX (x);
 
     if (state.recording)
         content->setRecording (engine.getTracks().getArmedTrack(), state.recordStartBeats, state.positionBeats);
@@ -551,21 +288,367 @@ void ArrangementView::updateTransport()
 void ArrangementView::paint (juce::Graphics& g)
 {
     g.fillAll (colour::windowBg);
+
+    // The corner under the track headers, beside the scroll bar.
+    auto corner = getLocalBounds().removeFromBottom (scrollBarHeight).withWidth (headerWidth);
+    g.setColour (colour::sidebarBg);
+    g.fillRect (corner.withTrimmedRight (1));
+    g.setColour (colour::divider);
+    g.fillRect (corner.removeFromRight (1));
+}
+
+void ArrangementView::paintOverChildren (juce::Graphics& g)
+{
+    icons::draw (g, Icon::search, zoomIconArea.toFloat(), colour::textSecondary, 13.0f, 1.6f);
 }
 
 void ArrangementView::resized()
 {
     auto r = getLocalBounds();
-    ruler->setBounds (r.removeFromTop (size::rulerHeight));
+    auto top = r.removeFromTop (size::rulerHeight);
+    ruler->setBounds (top);
+
+    // Controls in the ruler's header part: "TRACKS" | snap | zoom.
+    snapButton.setBounds (68, top.getY() + 4, 90, top.getHeight() - 9);
+    zoomIconArea = { 166, top.getY() + 8, 14, 14 };
+    zoomSlider.setBounds (182, top.getY() + 4, headerWidth - 182 - 10, top.getHeight() - 9);
+
+    timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
     viewport.setBounds (r);
 
-    updateGeometry();
+    // The first time there's room, zoom so 16 bars fill the lanes (as milestone 1 did).
+    if (! zoomInitialised && getLaneWidth() > 100)
+    {
+        zoomInitialised = true;
+        geometry.beatsPerBar = engine.beatsPerBar();
+        geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
+                                               getLaneWidth() / (16.0 * geometry.beatsPerBar));
+    }
+
     layoutContent();
 
-    // Playhead covers the ruler and lanes, but not the track headers column.
-    playhead->setBounds (getLocalBounds().withTrimmedLeft (headerWidth)
-                                         .withWidth (viewport.getMaximumVisibleWidth() - headerWidth));
-    ruler->repaint();
+    // Overlays: ghosts over the lanes; the playhead over the ruler and lanes,
+    // but not the track headers column.
+    overlay->setBounds (headerWidth, r.getY(), getLaneWidth(), viewport.getMaximumVisibleHeight());
+    playhead->setBounds (headerWidth, 0, getLaneWidth(), r.getBottom());
+
+    timelineChanged();
+}
+
+//==============================================================================
+// Region gestures
+RegionComponent* ArrangementView::findRegion (RegionId id) const
+{
+    return content->findRegion (id);
+}
+
+int ArrangementView::rowOf (TrackId id) const
+{
+    for (size_t i = 0; i < tracks.size(); ++i)
+        if (tracks[i].id == id)
+            return (int) i;
+
+    return -1;
+}
+
+int ArrangementView::rowAt (int y) const
+{
+    const int contentY = y - viewport.getY() + viewport.getViewPositionY();
+    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / rowHeight);
+}
+
+juce::Rectangle<float> ArrangementView::rowAreaInOverlay (int row) const
+{
+    return { 0.0f, (float) (row * rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) rowHeight };
+}
+
+void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDown (comp, e); }
+void ArrangementView::regionMouseDrag (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDrag (comp, e); }
+void ArrangementView::regionMouseUp (RegionComponent& comp, const juce::MouseEvent& e)     { regionDrag->regionMouseUp (comp, e); }
+
+void ArrangementView::regionDoubleClicked (RegionComponent& comp, RegionComponent::Zone zone)
+{
+    if (zone == RegionComponent::Zone::nameStrip)
+    {
+        comp.startRenaming();
+        return;
+    }
+
+    const auto& info = comp.getInfo();
+    selection.selectRegion (info.trackId, info.id);
+
+    if (onOpenRegionInEditor)
+        onOpenRegionInEditor (info.id);
+}
+
+void ArrangementView::showRegionMenu()
+{
+    // The same commands as the Region menu, so names, shortcuts and enabled
+    // state all come from one place (MainComponent::getCommandInfo).
+    juce::PopupMenu menu;
+
+    for (auto id : { CommandIDs::splitRegion, CommandIDs::duplicateRegion })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+
+    for (auto id : { CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+    menu.addCommandItem (&commands, CommandIDs::renameRegion);
+    menu.addCommandItem (&commands, CommandIDs::deleteRegion);
+    menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+}
+
+void ArrangementView::startRenaming (RegionId id)
+{
+    auto region = engine.getTracks().getRegion (id);
+    const int row = region ? rowOf (region->trackId) : -1;
+
+    if (row < 0)
+        return;
+
+    // Scroll the region into view first, so the text field can be seen.
+    const double visibleEnd = geometry.scrollBeats + getVisibleBeats();
+
+    if (region->startBeat < geometry.scrollBeats || region->startBeat > visibleEnd - 1.0)
+        scrollToBeat (region->startBeat - geometry.beatsPerBar);
+
+    scrollRowIntoView (row);
+
+    if (auto* comp = findRegion (id))
+        comp->startRenaming();
+}
+
+void ArrangementView::startRenamingTrack (TrackId id)
+{
+    const int row = rowOf (id);
+
+    if (row < 0)
+        return;
+
+    scrollRowIntoView (row);
+
+    if (auto* header = content->findHeader (id))
+        header->startRenaming();
+}
+
+void ArrangementView::scrollRowIntoView (int row)
+{
+    const int rowY = row * rowHeight;
+
+    if (rowY < viewport.getViewPositionY() || rowY + rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
+        viewport.setViewPosition (0, rowY);
+}
+
+//==============================================================================
+// Track context menus
+juce::PopupMenu ArrangementView::createTrackMenu()
+{
+    // Commands, as in the Track menu, so names, shortcuts and enabled state
+    // come from one place (MainComponent::getCommandInfo).
+    juce::PopupMenu menu;
+    const auto track = selection.getTrack();
+
+    for (auto id : { CommandIDs::newTrack, CommandIDs::newAudioTrack,
+                     CommandIDs::duplicateTrackSettings, CommandIDs::duplicateTrack })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+    menu.addCommandItem (&commands, CommandIDs::renameTrack);
+    menu.addSubMenu ("Track Color", createColourMenu (track), track != 0);
+    menu.addSubMenu ("Track Icon", TrackHeader::createIconMenu (engine, track), track != 0);
+    menu.addCommandItem (&commands, CommandIDs::moveTrackUp);
+    menu.addCommandItem (&commands, CommandIDs::moveTrackDown);
+    menu.addSeparator();
+
+    for (auto id : { CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack })
+        menu.addCommandItem (&commands, id);
+
+    menu.addSeparator();
+    menu.addCommandItem (&commands, CommandIDs::deleteTrack);
+    return menu;
+}
+
+juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
+{
+    // Names for TrackController::getTrackColours(), in the same order.
+    static const juce::StringArray names { "Blue", "Orange", "Green", "Purple", "Yellow" };
+
+    juce::PopupMenu menu;
+    const auto info = engine.getTracks().getTrack (track);
+    const auto colours = TrackController::getTrackColours();
+
+    for (size_t i = 0; i < colours.size(); ++i)
+    {
+        const auto c = colours[i];
+
+        // A small rounded swatch beside each name.
+        auto swatch = std::make_unique<juce::DrawablePath>();
+        juce::Path shape;
+        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, 3.0f);
+        swatch->setPath (shape);
+        swatch->setFill (c);
+
+        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Color " + juce::String (i + 1))
+                          .setImage (std::move (swatch))
+                          .setTicked (info && info->colour == c)
+                          .setAction ([this, track, c] { engine.getTracks().setTrackColour (track, c); }));
+    }
+
+    return menu;
+}
+
+void ArrangementView::showTrackMenu()
+{
+    createTrackMenu().showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+}
+
+void ArrangementView::showLaneMenu (TrackId track, double beat)
+{
+    auto& tc = engine.getTracks();
+    const auto info = tc.getTrack (track);
+
+    if (! info)
+        return;
+
+    const auto at = snapBeat (juce::jmax (0.0, beat));
+    const auto regions = tc.getRegions (track);
+    juce::PopupMenu menu;
+
+    if (info->kind == TrackKind::instrument)
+    {
+        menu.addItem (juce::PopupMenu::Item ("Add Chord Region Here").setAction ([this, track, at]
+        {
+            if (auto rid = engine.getTracks().createChordRegion (track, at))
+                selection.selectRegion (track, rid);
+        }));
+    }
+
+    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.canPaste()).setAction ([this, track, at]
+    {
+        auto pasted = engine.getTracks().pasteRegions (track, at);
+
+        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().getRegion (pasted.front()))
+            selection.selectRegions (first->trackId, pasted);
+    }));
+
+    menu.addItem (juce::PopupMenu::Item ("Select All Regions on Track").setEnabled (! regions.empty()).setAction ([this, track]
+    {
+        std::vector<RegionId> ids;
+
+        for (auto& r : engine.getTracks().getRegions (track))
+            ids.push_back (r.id);
+
+        selection.selectRegions (track, ids);
+    }));
+
+    menu.addItem (juce::PopupMenu::Item ("Move Playhead Here").setAction ([this, at] { engine.setPositionBeats (at); }));
+    menu.addSeparator();
+    menu.addSubMenu ("Track", createTrackMenu());
+    menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+}
+
+//==============================================================================
+void ArrangementView::dragPlayheadTo (float laneX)
+{
+    const auto width = (float) getLaneWidth();
+
+    // Past an edge: scroll by a fraction of the overshoot, so the further out
+    // the mouse is, the faster the timeline scrolls.
+    if (laneX < 0.0f || laneX > width)
+    {
+        const float overshoot = laneX < 0.0f ? laneX : laneX - width;
+        scrollToBeat (geometry.scrollBeats + overshoot * 0.25f / geometry.pixelsPerBeat);
+    }
+
+    const auto beat = snapBeat (juce::jmax (0.0, geometry.xToBeat (juce::jlimit (0.0f, width, laneX))));
+    engine.setPositionBeats (beat);
+    playhead->setX (geometry.beatToX (beat));
+}
+
+//==============================================================================
+// Audio files dragged in from the file manager
+ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
+{
+    DropTarget target;
+    target.beat = snapBeat (juce::jmax (0.0, geometry.xToBeat ((float) (juce::jmax (x, headerWidth) - headerWidth))));
+
+    const int contentY = y - viewport.getY() + viewport.getViewPositionY();
+
+    if (y >= viewport.getY() && contentY < (int) tracks.size() * rowHeight)
+    {
+        target.row = rowAt (y);
+
+        // On an audio track: add to it. On an instrument track: a new audio track.
+        if (tracks[(size_t) target.row].kind == TrackKind::audio)
+            target.track = tracks[(size_t) target.row].id;
+    }
+
+    return target;
+}
+
+bool ArrangementView::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (engine.getTracks().isSupportedAudioFile (juce::File (f)))
+            return true;
+
+    return false;
+}
+
+void ArrangementView::fileDragEnter (const juce::StringArray& files, int x, int y)
+{
+    fileDragMove (files, x, y);
+}
+
+void ArrangementView::fileDragMove (const juce::StringArray&, int x, int y)
+{
+    auto target = findDropTarget (x, y);
+    juce::Rectangle<float> area;
+    juce::String text;
+
+    if (target.track != 0)
+    {
+        area = rowAreaInOverlay (target.row).reduced (2.0f);
+        text = "Add to " + tracks[(size_t) target.row].name;
+    }
+    else if (target.row >= 0)
+    {
+        area = rowAreaInOverlay (target.row).reduced (2.0f);
+        text = "Add on a new audio track";
+    }
+    else
+    {
+        // Below the tracks: the drop zone.
+        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+                 (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
+        text = "Add on a new audio track";
+    }
+
+    overlay->setDropTarget (area, geometry.beatToX (target.beat), text);
+}
+
+void ArrangementView::fileDragExit (const juce::StringArray&)
+{
+    overlay->clear();
+}
+
+void ArrangementView::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    overlay->clear();
+    auto target = findDropTarget (x, y);
+    auto& tc = engine.getTracks();
+    auto ids = tc.importAudioFiles (target.track, files, target.beat);
+
+    if (ids.empty())
+        return;
+
+    refresh();
+
+    if (auto first = tc.getRegion (ids.front()))
+        selection.selectRegions (first->trackId, ids);
 }
 
 } // namespace ikaros
