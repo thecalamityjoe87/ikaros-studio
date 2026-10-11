@@ -73,7 +73,7 @@ int main (int argc, char* argv[])
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("IkarosSmokeTest");
     dir.deleteRecursively();
     dir.createDirectory();
-    auto file = dir.getChildFile ("Smoke.tracktionedit");
+    auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke/Smoke.tracktionedit
 
     {
         AudioEngine engine { testSettings };
@@ -330,11 +330,48 @@ int main (int argc, char* argv[])
         check (file.existsAsFile(), "file exists on disk");
         check (! engine.hasUnsavedChanges(), "saved state is clean");
         check (engine.getSessionName() == "Smoke", "session takes the file name");
+        {
+            auto recent = engine.getRecentSessions();
+            check (! recent.empty() && recent.front().file == file && recent.front().name == "Smoke",
+                   "a saved session goes to the top of the recent list");
+            check (! recent.empty() && recent.front().preview == file.getSiblingFile ("Preview.png"),
+                   "its preview lives in the session's folder");
+        }
 
         pumpMessages();
         std::cout << "New session again\n";
         engine.newSession();
         check (engine.getTracks().getTracks().size() == 1, "new session replaces the old one");
+
+        std::cout << "Session templates\n";
+        engine.newSession ({ SessionTemplate::songwriter, 92.0, 3, 4, 9, true });
+        pumpMessages();
+        auto songwriter = engine.getTracks().getTracks();
+        check (songwriter.size() == 5, "Songwriter has five tracks");
+
+        if (songwriter.size() == 5)
+        {
+            check (songwriter[0].name == "Lo-fi Kit" && songwriter[3].name == "Soft Piano",
+                   "instrument tracks are named after their sounds");
+            check (songwriter[4].kind == TrackKind::audio && songwriter[4].name == "Voice", "and there's a vocal track");
+        }
+
+        check (std::abs (engine.getTransportState().bpm - 92.0) < 0.01, "the template takes the chosen tempo");
+        check (engine.getTransportState().timeSigNumerator == 3, "time signature");
+        check (engine.getKeyName() == "A min", "and key");
+        // Instruments finish loading in the background; the engine then wipes
+        // the undo history once things go quiet (see startFromCleanSlateSoon).
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (1500);
+        check (! engine.hasUnsavedChanges() && ! engine.canUndo(), "a new session starts clean, with nothing to undo");
+
+        for (auto kind : { SessionTemplate::keyboards, SessionTemplate::voice, SessionTemplate::beats })
+        {
+            engine.newSession ({ kind });
+            pumpMessages();
+            check (engine.getTracks().getTracks().size() >= 2, "every template makes its tracks");
+        }
+
+        engine.newSession();
     }
 
     {
@@ -668,26 +705,42 @@ int main (int argc, char* argv[])
         check (writeWav (take, 1.0), "(wrote a test take)");
         tracks.regions().importAudioFiles (audioTrackId, { take.getFullPathName() }, 20.0);
 
-        auto songFile = dir.getChildFile ("Song.tracktionedit");
-        check (engine.saveSessionAs (songFile), "Save As");
-        auto songRecordings = AudioEngine::getRecordingsFolderFor (songFile);
-        check (songRecordings.getChildFile (take.getFileName()).existsAsFile(), "copies recordings next to the session");
-        check (! songRecordings.getChildFile (imported.getFileName()).exists(), "but not imported files");
-        take.deleteFile();   // the session must now use its own copy
+        auto songFile = AudioEngine::getSessionFileFor (dir.getChildFile ("Song"));
+        check (songFile == dir.getChildFile ("Song").getChildFile ("Song.tracktionedit"), "a session gets a folder of its own");
+        check (engine.saveSessionAs (dir.getChildFile ("Song")), "Save As");
+        check (songFile.existsAsFile() && engine.getSessionFile() == songFile, "saved in that folder");
+        auto songAudio = AudioEngine::getAudioFolderFor (songFile);
+        check (songAudio.getChildFile (take.getFileName()).existsAsFile(), "copies recordings into the session");
+        check (songAudio.getChildFile (imported.getFileName()).existsAsFile(), "and imported files");
+        check (songAudio.findChildFiles (juce::File::findFiles, false, "Loop*").size() == 1,
+               "a file used by two regions is copied once");
+        check (engine.saveSession() && engine.saveSession(), "saving again (paths must read back the same every time)");
+        take.deleteFile();   // the session must now use its own copies
+        imported.deleteFile();
 
         auto moveDir = dir.getChildFile ("Elsewhere");
         moveDir.createDirectory();
-        auto otherFile = moveDir.getChildFile ("Other.tracktionedit");
+        auto otherFile = AudioEngine::getSessionFileFor (moveDir.getChildFile ("Other"));
         check (engine.saveSessionAs (otherFile), "Save As somewhere else");
-        check (AudioEngine::getRecordingsFolderFor (otherFile).getChildFile (take.getFileName()).existsAsFile(),
-               "takes the session's recordings along");
-        take.deleteFile();
+        check (engine.saveSession(), "and save again");
+
+        // A file added to a session that's already saved (Tracktion stores
+        // its path differently once the session file exists).
+        auto late = dir.getChildFile ("Late.wav");
+        check (writeWav (late, 1.0), "(wrote another test WAV)");
+        tracks.regions().importAudioFiles (audioTrackId, { late.getFullPathName() }, 40.0);
+        check (engine.saveSession() && engine.saveSession(), "save twice after adding a file");
+        late.deleteFile();
+        check (AudioEngine::getAudioFolderFor (otherFile).getChildFile (take.getFileName()).existsAsFile(),
+               "takes the session's audio along");
+        check (AudioEngine::getSessionFileFor (otherFile) == otherFile, "a session already in its own folder stays there");
+        dir.getChildFile ("Song").deleteRecursively();   // the new session must stand on its own
     }
 
     {
         // A fresh engine: Tracktion expects only one at a time.
         AudioEngine reopened { testSettings };
-        check (reopened.openSession (dir.getChildFile ("Elsewhere").getChildFile ("Other.tracktionedit")), "reopen");
+        check (reopened.openSession (dir.getChildFile ("Elsewhere").getChildFile ("Other").getChildFile ("Other.tracktionedit")), "reopen");
         pumpMessages();
         int withWaveforms = 0;
 
@@ -696,7 +749,7 @@ int main (int argc, char* argv[])
                 if (! r.isMidi && ! r.peaks.empty())
                     ++withWaveforms;
 
-        check (withWaveforms == 3, "imported files and recordings still load from the new location");
+        check (withWaveforms == 4, "imported files and recordings load from the session's own Audio folder");
         check (reopened.getKeyName() == "Eb min", "the key round-trips");
         check (std::abs (reopened.getTracks().getTrack (reopened.getTracks().getTracks().front().id)->pan + 0.5f) < 0.01f,
                "pan round-trips");
@@ -708,7 +761,7 @@ int main (int argc, char* argv[])
     if (testPlugins.getChildFile ("Good").isDirectory())
     {
         std::cout << "Third-party plug-ins\n";
-        auto pluginSession = dir.getChildFile ("Plugins.tracktionedit");
+        auto pluginSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Plugins"));
         juce::String gainName ("Ikaros Test Gain");
 
         {

@@ -4,6 +4,7 @@
 #include "engine/AudioEngine.h"
 #include "ui/arrangement/ArrangementView.h"
 #include "ui/bottompanel/BottomPanel.h"
+#include "ui/dialogs/SessionChooser.h"
 #include "ui/library/LibrarySidebar.h"
 #include "ui/titlebar/MenuBar.h"
 #include "ui/state/Selection.h"
@@ -87,8 +88,13 @@ private:
     void timerCallback() override;
 
     // Session commands (all asynchronous: dialogs never block the message loop)
-    void newSession();
-    void openSession();
+    void newSession();          // the session chooser's templates
+    void openSession();         // the session chooser's recent sessions
+    void closeSession();        // back to the session chooser
+    void showSessionChooser (SessionChooser::Page);
+    void openOtherSession();    // the computer's file dialog
+    void openSessionFile (const juce::File&);
+    void writeSessionPreview();
     void saveSession (std::function<void (bool saved)> afterSave = nullptr);
     void saveSessionAs (std::function<void (bool saved)> afterSave = nullptr);
     void confirmDiscardChanges (std::function<void()> thenDo);

@@ -23,13 +23,15 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
 
-    // Recorded audio goes to Documents/Ikaros Studio/Recordings rather than
-    // next to the session file: an untitled session lives in a temp folder,
-    // and takes recorded there would be lost. Saving copies them into the
-    // session's own folder (see AudioEngine::saveSessionAs).
+    // A saved session records into its own Audio folder. An untitled one
+    // lives in a temp folder, where takes would be lost, so its takes go to
+    // Documents/Ikaros Studio/Recordings until it's saved (saving copies them
+    // into the session, see AudioEngine::saveSessionAs).
+    std::function<juce::File()> getRecordingFolder;   // set by AudioEngine::Impl
+
     juce::String getDefaultAudioRecordingFilePattern() override
     {
-        auto folder = AudioEngine::getRecordingsFolder();
+        auto folder = getRecordingFolder != nullptr ? getRecordingFolder() : AudioEngine::getRecordingsFolder();
         folder.createDirectory();
         return folder.getFullPathName() + "/%edit%_%track%_%date%_%time%_Take_%take%";
     }
@@ -178,6 +180,12 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
         engine.getDeviceManager().initialise (2, 2);
 
+        // The Engine owns the behaviour we gave it, so this cast always works.
+        dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
+        {
+            return untitled ? AudioEngine::getRecordingsFolder() : AudioEngine::getAudioFolderFor (sessionFile);
+        };
+
         // Listen for MIDI devices being plugged in or removed so they can be
         // routed to the selected track.
         engine.getDeviceManager().addChangeListener (this);
@@ -220,18 +228,46 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
                                        .numAudioTracks = 0 });   // no default track: we add our own
     }
 
-    // Audio regions refer to their files by path. For a file near the
-    // session, Tracktion stores a path relative to the session *file*
-    // ("../Loop.wav" for a file in the same folder), but its default
-    // resolver reads it from the session's folder, one level too high. This
-    // reads it back the way it was written.
+    // Audio regions refer to their files by path, relative to the session's
+    // folder for files near it (see saveSessionAs). Sessions saved by earlier
+    // versions can also hold paths relative to the session *file* (one ".."
+    // more), which is what Tracktion writes when the file doesn't exist yet;
+    // if the folder reading finds nothing, try that.
     juce::File resolvePath (const juce::String& path) const
     {
         if (path.isEmpty())
             return {};
 
         // getChildFile handles absolute paths too: it just returns them.
-        return sessionFile.getChildFile (path);
+        auto fromFolder = sessionFile.getParentDirectory().getChildFile (path);
+
+        if (! fromFolder.exists())
+        {
+            auto fromFile = sessionFile.getChildFile (path);
+
+            if (fromFile.exists())
+                return fromFile;
+        }
+
+        return fromFolder;
+    }
+
+    // The recently opened sessions, kept in the app's settings file.
+    juce::RecentlyOpenedFilesList getRecentSessionsList()
+    {
+        juce::RecentlyOpenedFilesList list;
+        list.setMaxNumberOfItems (24);
+        list.restoreFromString (engine.getPropertyStorage().getPropertiesFile().getValue ("recentSessions"));
+        return list;
+    }
+
+    void addToRecentSessions (const juce::File& file)
+    {
+        auto list = getRecentSessionsList();
+        list.addFile (file);   // moves it to the top if it's already there
+        auto& props = engine.getPropertyStorage().getPropertiesFile();
+        props.setValue ("recentSessions", list.toString());
+        props.saveIfNeeded();
     }
 
     // Master meter. The playback context (and its masterLevels measurer) can be
@@ -433,14 +469,71 @@ static juce::File getUntitledSessionFile (te::Engine& engine)
     return dir.getNonexistentChildFile ("Untitled Session", AudioEngine::sessionFileExtension, false);
 }
 
-void AudioEngine::newSession()
+void AudioEngine::newSession (const NewSessionSettings& settings)
 {
-    // Start every new session with one instrument track so a beginner can play
-    // the keyboard straight away.
     loadEdit (te::createEmptyEdit (impl->engine), getUntitledSessionFile (impl->engine), true);
-    auto first = trackController->addInstrumentTrack();
-    trackController->setSelectedTrack (first);
 
+    setBpm (settings.bpm);
+    setTimeSignature (settings.numerator, settings.denominator);
+    setKey (settings.keyRoot, settings.minor);
+
+    // Instrument tracks take the sound's name ("Soft Piano"). If a sound pack
+    // has been removed, the track keeps the built-in synth.
+    auto& tc = *trackController;
+    const juce::String pack ("sampler:Ikaros Basics/");
+
+    auto instrument = [&tc] (const juce::String& soundId)
+    {
+        auto id = tc.addInstrumentTrack();
+        tc.effects().setSound (id, soundId, false);
+        return id;
+    };
+
+    auto audio = [&tc] (const juce::String& name)
+    {
+        auto id = tc.addAudioTrack();
+        tc.renameTrack (id, name);
+        return id;
+    };
+
+    // Every template has at least one instrument track, so a beginner can
+    // play the keyboard straight away.
+    switch (settings.kind)
+    {
+        case SessionTemplate::empty:
+            tc.addInstrumentTrack();
+            break;
+
+        case SessionTemplate::keyboards:
+            instrument (pack + "Soft Piano");
+            instrument (pack + "Electric Piano");
+            instrument ("synth:Vintage Organ");
+            break;
+
+        case SessionTemplate::voice:
+            audio ("Voice");
+            instrument (pack + "Soft Piano");
+            break;
+
+        case SessionTemplate::beats:
+            instrument (pack + "Electronic Kit");
+            instrument ("synth:Synth Bass");
+            instrument ("synth:Warm Pad");
+            break;
+
+        case SessionTemplate::songwriter:
+            instrument (pack + "Lo-fi Kit");
+            instrument (pack + "Picked Bass");
+            instrument (pack + "Nylon Guitar");
+            instrument (pack + "Soft Piano");
+            audio ("Voice");
+            break;
+    }
+
+    auto tracks = tc.getTracks();
+    tc.setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
+
+    // Building the template isn't something to undo.
     impl->edit->getUndoManager().clearUndoHistory();
     impl->edit->resetChangedStatus();
     impl->startFromCleanSlateSoon();
@@ -459,6 +552,7 @@ bool AudioEngine::openSession (const juce::File& file)
         return false;
 
     loadEdit (state, file, false);
+    impl->addToRecentSessions (file);
 
     auto tracks = trackController->getTracks();
     trackController->setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
@@ -512,34 +606,70 @@ juce::File AudioEngine::getRecordingsFolder()
                .getChildFile ("Ikaros Studio").getChildFile ("Recordings");
 }
 
-juce::File AudioEngine::getRecordingsFolderFor (const juce::File& sessionFile)
+juce::File AudioEngine::getSessionFileFor (const juce::File& chosenFile)
 {
-    return sessionFile.getSiblingFile (sessionFile.getFileNameWithoutExtension() + " Recordings");
+    const auto name = chosenFile.getFileNameWithoutExtension();
+    const auto file = chosenFile.withFileExtension (sessionFileExtension);
+
+    if (file.getParentDirectory().getFileName() == name)
+        return file;
+
+    return chosenFile.getParentDirectory().getChildFile (name).getChildFile (name + sessionFileExtension);
 }
 
-// Copies a recording into a session's recordings folder, unless an earlier
-// save already did. Returns the copy, or the original if copying failed.
-static juce::File copyRecordingInto (const juce::File& recording, const juce::File& folder)
+juce::File AudioEngine::getAudioFolderFor (const juce::File& sessionFile)
 {
-    auto target = folder.getChildFile (recording.getFileName());
+    return sessionFile.getSiblingFile ("Audio");
+}
 
-    if (target.existsAsFile() && target.getSize() == recording.getSize())
+juce::File AudioEngine::getPreviewFileFor (const juce::File& sessionFile)
+{
+    return sessionFile.getSiblingFile ("Preview.png");
+}
+
+std::vector<RecentSession> AudioEngine::getRecentSessions() const
+{
+    std::vector<RecentSession> result;
+    auto list = impl->getRecentSessionsList();
+
+    for (int i = 0; i < list.getNumFiles(); ++i)
+    {
+        auto file = list.getFile (i);
+
+        if (file.existsAsFile())
+            result.push_back ({ file, file.getFileNameWithoutExtension(), file.getLastModificationTime(),
+                                getPreviewFileFor (file) });
+    }
+
+    return result;
+}
+
+// Copies an audio file into a session's Audio folder, unless an earlier
+// save already did (a file of the same name and content is there). Returns
+// the copy, or the original if copying failed.
+static juce::File copyIntoFolder (const juce::File& source, const juce::File& folder)
+{
+    auto target = folder.getChildFile (source.getFileName());
+
+    if (target.existsAsFile() && target.hasIdenticalContentTo (source))
         return target;
 
     if (target.exists())
-        target = folder.getNonexistentChildFile (recording.getFileNameWithoutExtension(),
-                                                 recording.getFileExtension(), false);
+        target = folder.getNonexistentChildFile (source.getFileNameWithoutExtension(),
+                                                 source.getFileExtension(), false);
 
-    return folder.createDirectory() && recording.copyFileTo (target) ? target : recording;
+    return folder.createDirectory() && source.copyFileTo (target) ? target : source;
 }
 
 bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
 {
-    auto file = requestedFile.withFileExtension (sessionFileExtension);
+    const auto file = getSessionFileFor (requestedFile);
     auto& edit = *impl->edit;
 
-    // Audio regions refer to their files by a path that Tracktion stores
-    // relative to the session file when it can. Find every region's file
+    if (! file.getParentDirectory().createDirectory())
+        return false;
+
+    // Audio regions refer to their files by path. Find every region's file
     // while those paths still resolve from the old location.
     struct Source { te::Clip::Ptr clip; juce::File file; juce::var oldPath; };
     std::vector<Source> sources;
@@ -550,27 +680,40 @@ bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
                 sources.push_back ({ clip, clip->getSourceFileReference().getFile(), clip->state[te::IDs::source] });
 
     const auto oldFile = impl->sessionFile;
-    const auto oldRecordings = impl->untitled ? juce::File() : getRecordingsFolderFor (oldFile);
-    const auto newRecordings = getRecordingsFolderFor (file);
+    const auto audioFolder = getAudioFolderFor (file);
     impl->sessionFile = file;   // paths are now worked out from the new location
+
+    // Each file is copied once, however many regions use it.
+    std::map<juce::String, juce::File> copies;
 
     for (auto& source : sources)
     {
         auto target = source.file;
 
-        // The session's recordings (new takes, or ones in the folder of the
-        // session it was saved from) are copied next to the new session file.
-        // Imported audio files stay where they are.
-        const bool isRecording = source.file.isAChildOf (getRecordingsFolder())
-                                  || (oldRecordings != juce::File() && source.file.isAChildOf (oldRecordings));
+        // Everything the session plays lives in its Audio folder, so the
+        // session folder can be moved, backed up or shared on its own.
+        if (source.file.existsAsFile() && ! source.file.isAChildOf (audioFolder))
+        {
+            auto& copy = copies[source.file.getFullPathName()];
 
-        if (isRecording && source.file.existsAsFile() && ! source.file.isAChildOf (newRecordings))
-            target = copyRecordingInto (source.file, newRecordings);
+            if (copy == juce::File())
+                copy = copyIntoFolder (source.file, audioFolder);
 
-        // Re-store every path relative to the new location. nullptr = not an
-        // undo step: the user shouldn't be able to "undo" a save.
-        source.clip->state.setProperty (te::IDs::source,
-                                        te::SourceFileReference::findPathFromFile (edit, target, true), nullptr);
+            target = copy;
+        }
+
+        // Re-store every path relative to the new location. Tracktion decides
+        // whether a relative path makes sense, but works it out from the
+        // session file's folder only if the file already exists (otherwise
+        // from the file itself, one ".." more). Always use the folder, so a
+        // path reads back the same after any number of saves.
+        // nullptr = not an undo step: the user shouldn't be able to "undo" a save.
+        auto path = te::SourceFileReference::findPathFromFile (edit, target, true);
+
+        if (! juce::File::isAbsolutePath (path))
+            path = target.getRelativePathFrom (file.getParentDirectory());
+
+        source.clip->state.setProperty (te::IDs::source, path, nullptr);
     }
 
     // writeToFile is synchronous, which keeps the menu code simple.
@@ -586,6 +729,7 @@ bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
     }
 
     impl->untitled = false;
+    impl->addToRecentSessions (file);
     impl->edit->resetChangedStatus();
     notifyModelChanged();
     return true;

@@ -128,6 +128,7 @@ set(IKAROS_UI_SOURCES
 
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+    src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp

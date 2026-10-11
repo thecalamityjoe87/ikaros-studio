@@ -4,7 +4,7 @@ A simple music studio for Linux, Windows and macOS, in the spirit of GarageBand.
 
 Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone, a guitar or a stereo source (with a count-in if you like), pick sounds and loops from the library, edit regions and notes, add effects, send tracks to a shared reverb and delay, and save sessions. VST3 and LV2 plug-ins work on Linux and Windows, and VST3 and Audio Units on macOS.
 
-New recordings go to `Documents/Ikaros Studio/Recordings`. When you save a session, its recordings are copied into a folder next to the session file, so you can move or back up the two together.
+A saved session is a folder of its own, like a GarageBand project: `My Song/My Song.tracktionedit` plus an `Audio` folder holding every recording, loop and audio file it uses, so you can move, back up or share the folder on its own. Takes recorded before the first save wait in `Documents/Ikaros Studio/Recordings` until then.
 
 ## Sounds and plug-ins
 

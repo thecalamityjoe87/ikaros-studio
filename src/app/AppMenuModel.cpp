@@ -30,6 +30,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::saveSession);
         add (CommandIDs::saveSessionAs);
+        add (CommandIDs::closeSession);
         m.addSeparator();
         add (CommandIDs::audioSettings);
         // TODO(milestone-4): Export / Share submenu.

@@ -227,6 +227,34 @@ inline juce::String getKeyName (int root, bool minor)
     return juce::String (names[((root % 12) + 12) % 12]) + (minor ? " min" : " maj");
 }
 
+/** How a new session starts: the templates on the session chooser's New page. */
+enum class SessionTemplate
+{
+    empty,        // one instrument track
+    keyboards,    // piano, electric piano and organ
+    voice,        // a vocal track with a piano to sing along to
+    beats,        // drum kit, synth bass and pad
+    songwriter    // drums, bass, guitar, piano and a vocal track
+};
+
+struct NewSessionSettings
+{
+    SessionTemplate kind = SessionTemplate::empty;
+    double bpm = 120.0;
+    int numerator = 4, denominator = 4;
+    int keyRoot = 0;       // 0 = C ... 11 = B
+    bool minor = false;
+};
+
+/** A session in the recently opened list, newest first. */
+struct RecentSession
+{
+    juce::File file;
+    juce::String name;
+    juce::Time modified;
+    juce::File preview;    // a picture of its tracks; missing for sessions saved before previews existed
+};
+
 struct SystemStats
 {
     float cpuPercent = 0.0f;

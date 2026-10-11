@@ -57,20 +57,43 @@ public:
     ~AudioEngine() override;
 
     //==============================================================================
-    // Sessions ("Sessions" in the UI, .tracktionedit files on disk)
+    // Sessions ("Sessions" in the UI). Like a GarageBand project, a saved
+    // session is self-contained: a folder named after it holding the session
+    // file and an Audio folder with every audio file its regions use
+    // (imported files, library loops and recordings):
+    //
+    //     My Song/My Song.tracktionedit
+    //     My Song/Audio/...
+    //
+    // Instruments' samples aren't copied: they belong to the sound library.
     static constexpr const char* sessionFileExtension = ".tracktionedit";
 
-    void newSession();
+    /** Replaces the session with a new, untitled one built from a template. */
+    void newSession (const NewSessionSettings& = {});
     bool openSession (const juce::File&);
     bool saveSession();                         // returns false if the session is untitled
+    /** Saves to getSessionFileFor (file), copying the audio the session uses
+        into its Audio folder. */
     bool saveSessionAs (const juce::File&);
 
-    /** Where a saved session keeps its recordings: a folder next to the
-        session file, e.g. "My Song Recordings" beside "My Song.tracktionedit". */
-    static juce::File getRecordingsFolderFor (const juce::File& sessionFile);
+    /** Where a session saved as "Dir/My Song" goes: "Dir/My Song/My
+        Song.tracktionedit" (or just the file, if it's already in a folder of
+        its own name). */
+    static juce::File getSessionFileFor (const juce::File& chosenFile);
 
-    /** Where new recordings are written: Documents/Ikaros Studio/Recordings.
-        Saving copies a session's recordings into its own folder. */
+    /** A saved session's own audio: the Audio folder beside its file. */
+    static juce::File getAudioFolderFor (const juce::File& sessionFile);
+
+    /** Where the session chooser's picture of a session is kept: Preview.png
+        beside its file. The UI writes it when saving (see MainComponent). */
+    static juce::File getPreviewFileFor (const juce::File& sessionFile);
+
+    /** Sessions opened or saved lately, newest first (missing files left out). */
+    std::vector<RecentSession> getRecentSessions() const;
+
+    /** Where an untitled session's recordings are written:
+        Documents/Ikaros Studio/Recordings. A saved session records straight
+        into its Audio folder; saving copies an untitled one's takes there. */
     static juce::File getRecordingsFolder();
 
     bool isUntitled() const;

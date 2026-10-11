@@ -69,6 +69,16 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     refreshAll();
     startTimerHz (30);   // playhead, meters, CPU
     setSize (1440, 900);
+
+    // Like GarageBand, start with the session chooser: recent sessions if
+    // there are any, otherwise the templates. (Async: the window isn't on
+    // screen yet.)
+    juce::MessageManager::callAsync ([safeThis = SafePointer<MainComponent> (this)]
+    {
+        if (safeThis != nullptr)
+            safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                                                      : SessionChooser::Page::recent);
+    });
 }
 
 MainComponent::~MainComponent()
@@ -92,6 +102,11 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::resized()
 {
+    // Dialogs drawn over the window (session chooser, new track) cover all of it.
+    for (auto* child : getChildren())
+        if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr)
+            child->setBounds (getLocalBounds());
+
     auto r = getLocalBounds();
     menuBar.setBounds (r.removeFromTop (size::menuBarHeight));
     toolbar.setBounds (r.removeFromTop (size::toolbarHeight));
@@ -235,7 +250,7 @@ void MainComponent::timerCallback()
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
-                                   CommandIDs::saveSessionAs, CommandIDs::audioSettings,
+                                   CommandIDs::saveSessionAs, CommandIDs::closeSession, CommandIDs::audioSettings,
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
@@ -268,7 +283,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
     switch (id)
     {
         case CommandIDs::newSession:
-            info.setInfo ("New Session", "Start a new, empty session", "File", 0);
+            info.setInfo ("New Session...", "Start a new session from a template", "File", 0);
             info.addDefaultKeypress ('n', cmd);
             break;
         case CommandIDs::openSession:
@@ -282,6 +297,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case CommandIDs::saveSessionAs:
             info.setInfo ("Save As...", "Save the session under a new name", "File", 0);
             info.addDefaultKeypress ('s', cmd | shift);
+            break;
+        case CommandIDs::closeSession:
+            info.setInfo ("Close Session", "Close the session and choose another", "File", 0);
+            info.addDefaultKeypress ('w', cmd);
             break;
         case CommandIDs::audioSettings:
             info.setInfo ("Audio & MIDI Settings...", "Choose audio and MIDI devices", "File", 0);
@@ -515,6 +534,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::openSession:     openSession(); break;
         case CommandIDs::saveSession:     saveSession(); break;
         case CommandIDs::saveSessionAs:   saveSessionAs(); break;
+        case CommandIDs::closeSession:    closeSession(); break;
         case CommandIDs::audioSettings:   showAudioSettings(); break;
 
         case CommandIDs::undo:            engine.undo(); break;
@@ -724,10 +744,48 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
 
 void MainComponent::newSession()
 {
-    confirmDiscardChanges ([this] { engine.newSession(); });
+    showSessionChooser (SessionChooser::Page::newSession);
 }
 
 void MainComponent::openSession()
+{
+    showSessionChooser (SessionChooser::Page::recent);
+}
+
+// Like closing a GarageBand project: after asking about unsaved changes,
+// the session is replaced by an empty one and the chooser comes up.
+void MainComponent::closeSession()
+{
+    confirmDiscardChanges ([this]
+    {
+        engine.newSession();
+        showSessionChooser (engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                               : SessionChooser::Page::recent);
+    });
+}
+
+void MainComponent::showSessionChooser (SessionChooser::Page page)
+{
+    // The chooser only reports the choice; unsaved changes are asked about
+    // after it, so cancelling the chooser never loses anything.
+    SessionChooser::Callbacks callbacks;
+
+    callbacks.onNew = [this] (const NewSessionSettings& settings)
+    {
+        confirmDiscardChanges ([this, settings] { engine.newSession (settings); });
+    };
+
+    callbacks.onOpen = [this] (const juce::File& file)
+    {
+        confirmDiscardChanges ([this, file] { openSessionFile (file); });
+    };
+
+    callbacks.onOpenOther = [this] { openOtherSession(); };
+
+    SessionChooser::show (*this, engine, page, std::move (callbacks));
+}
+
+void MainComponent::openOtherSession()
 {
     confirmDiscardChanges ([this]
     {
@@ -737,12 +795,16 @@ void MainComponent::openSession()
         fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                   [this] (const juce::FileChooser& fc)
         {
-            auto file = fc.getResult();
-
-            if (file != juce::File() && ! engine.openSession (file))
-                showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read.");
+            if (auto file = fc.getResult(); file != juce::File())
+                openSessionFile (file);
         });
     });
+}
+
+void MainComponent::openSessionFile (const juce::File& file)
+{
+    if (! engine.openSession (file))
+        showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read.");
 }
 
 void MainComponent::saveSession (std::function<void (bool)> afterSave)
@@ -755,6 +817,9 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
 
     const bool ok = engine.saveSession();
 
+    if (ok)
+        writeSessionPreview();
+
     if (! ok)
         showError ("Couldn't save session", "Check that the folder still exists and that you can write to it.");
 
@@ -764,31 +829,106 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
 
 void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
 {
-    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile ("My Session")
-                                       : engine.getSessionFile();
+    // A saved session lives in a folder of its own ("My Song/My Song.tracktionedit"),
+    // so offer the folder that one is in, not the session's own folder.
+    auto initial = getDefaultSessionFolder().getChildFile ("My Session");
+
+    if (! engine.isUntitled())
+    {
+        auto current = engine.getSessionFile();
+        initial = AudioEngine::getSessionFileFor (current) == current
+                    ? current.getParentDirectory().getSiblingFile (current.getFileNameWithoutExtension())
+                    : current;
+    }
 
     fileChooser = std::make_unique<juce::FileChooser> ("Save Session As", initial,
                                                        juce::String ("*") + AudioEngine::sessionFileExtension);
 
-    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode
-                                | juce::FileBrowserComponent::canSelectFiles
-                                | juce::FileBrowserComponent::warnAboutOverwriting,
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
                               [this, afterSave] (const juce::FileChooser& fc)
     {
-        auto file = fc.getResult();
-        bool ok = false;
+        auto chosen = fc.getResult();
 
-        if (file != juce::File())
+        if (chosen == juce::File())
         {
-            ok = engine.saveSessionAs (file);
+            if (afterSave)
+                afterSave (false);
 
-            if (! ok)
-                showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + file.getFullPathName() + "\".");
+            return;
         }
 
-        if (afterSave)
-            afterSave (ok);
+        auto save = [this, chosen, afterSave]
+        {
+            const bool ok = engine.saveSessionAs (chosen);
+
+            if (ok)
+                writeSessionPreview();
+
+            if (! ok)
+                showError ("Couldn't save session", "Ikaros Studio couldn't write \""
+                             + AudioEngine::getSessionFileFor (chosen).getFullPathName() + "\".");
+
+            if (afterSave)
+                afterSave (ok);
+        };
+
+        // The session goes in a folder named after it, so check that folder
+        // (the file dialog only knows about the name that was typed).
+        const auto target = AudioEngine::getSessionFileFor (chosen);
+
+        if (! target.exists() || target == engine.getSessionFile())
+        {
+            save();
+            return;
+        }
+
+        auto options = juce::MessageBoxOptions()
+                           .withIconType (juce::MessageBoxIconType::WarningIcon)
+                           .withTitle ("Replace session?")
+                           .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
+                                           + "\" already exists in " + target.getParentDirectory().getParentDirectory().getFullPathName()
+                                           + ". Replace it?")
+                           .withButton ("Replace")
+                           .withButton ("Cancel")
+                           .withAssociatedComponent (this);
+
+        juce::AlertWindow::showAsync (options, [save, afterSave] (int result)
+        {
+            if (result == 1)
+                save();
+            else if (afterSave)
+                afterSave (false);
+        });
     });
+}
+
+// A picture of the tracks for the session chooser, saved in the session's
+// folder. It's taken from what's on screen, so it shows the session the way
+// the user left it.
+void MainComponent::writeSessionPreview()
+{
+    if (arrangement.getWidth() <= 0 || arrangement.getHeight() <= 0)
+        return;
+
+    // The left part (track names and the first bars), in the chooser tiles'
+    // 16:10 shape, reads better at tile size than the whole arrangement.
+    auto area = arrangement.getLocalBounds();
+    area = area.withWidth (juce::jmin (area.getWidth(), area.getHeight() * 16 / 10));
+    auto snapshot = arrangement.createComponentSnapshot (area, true, 1.0f);
+    const int width = juce::jmin (800, snapshot.getWidth());
+    auto image = snapshot.rescaled (width, snapshot.getHeight() * width / snapshot.getWidth(),
+                                    juce::Graphics::highResamplingQuality);
+
+    auto file = AudioEngine::getPreviewFileFor (engine.getSessionFile());
+    file.deleteFile();   // FileOutputStream appends to an existing file
+    juce::FileOutputStream out (file);
+    juce::PNGImageFormat png;
+
+    if (out.openedOk())
+        png.writeImageToStream (image, out);
+
+    // The chooser caches decoded previews by file; drop the old picture.
+    juce::ImageCache::releaseUnusedImages();
 }
 
 void MainComponent::requestQuit()

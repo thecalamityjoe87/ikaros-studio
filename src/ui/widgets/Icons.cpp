@@ -75,6 +75,7 @@ namespace
             case Icon::chevronRight:   return "M10 7l5 5-5 5";
             case Icon::chevronUp:      return "M7 14l5-5 5 5";
             case Icon::chevronLeft:    return "M14 7l-5 5 5 5";
+            case Icon::clock:          return "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3.5 2";
             case Icon::headphones:     return "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z";
             case Icon::waveform:       return "M4 10v4 M8 7v10 M12 4v16 M16 7v10 M20 10v4";
             case Icon::mute:           return "M3 9h4l5-4v14l-5-4H3z M16 9l5 6 M21 9l-5 6";   // speaker with a cross

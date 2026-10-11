@@ -16,6 +16,7 @@ namespace CommandIDs
         openSession,
         saveSession,
         saveSessionAs,
+        closeSession,
         audioSettings,
 
         undo,
