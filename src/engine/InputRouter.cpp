@@ -53,7 +53,20 @@ void InputRouter::sessionChanged()
 
 void InputRouter::setSelectedTrack (TrackId id)
 {
+    const bool changed = id != selectedTrack;
     selectedTrack = id;
+
+    // The arm follows the selection, but not mid-take: the take stays on the
+    // track it started on. Only on a change, so a track the user disarmed
+    // stays disarmed while it's still selected.
+    if (changed && ! owner.getTransportState().recording)
+    {
+        if (id != 0)
+            setArmed (id, true);
+        else
+            setArmed (armedTrack, false);
+    }
+
     routeMidiInputs();
 }
 

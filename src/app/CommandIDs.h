@@ -51,6 +51,7 @@ namespace CommandIDs
         toggleCountIn,
 
         toggleLibrary,
+        toggleBottomPanel,
         zoomIn,
         zoomOut,
         snapToBar,

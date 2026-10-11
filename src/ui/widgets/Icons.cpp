@@ -1,6 +1,27 @@
 #include "ui/widgets/Icons.h"
 #include <map>
 
+/*
+    The keyboard (piano), drums, bass (bass clef) and guitar icons are from
+    Lucide 1.55.0 (https://lucide.dev), converted to plain SVG paths:
+
+    ISC License
+
+    Copyright (c) 2026 Lucide Icons and Contributors
+
+    Permission to use, copy, modify, and/or distribute this software for any
+    purpose with or without fee is hereby granted, provided that the above
+    copyright notice and this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+*/
+
 namespace ikaros::icons
 {
 
@@ -10,9 +31,10 @@ namespace
     {
         switch (icon)
         {
-            case Icon::library:   return "M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M9 4v16";
+            case Icon::library:   return "M4 4v16 M8 8v12 M12 6v14 M16 6l4 14";   // books on a shelf, one leaning
             case Icon::plus:      return "M12 5v14 M5 12h14";
             case Icon::undo:      return "M9 14L4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-3";
+            case Icon::redo:      return "M15 14l5-5-5-5 M20 9H9a5 5 0 0 0 0 10h3";   // undo, mirrored
             case Icon::toStart:   return "M6 5v14 M19 5l-9 7 9 7z";
             case Icon::play:      return "M8 5v14l11-7z";
             case Icon::pause:     return "M7 5h3v14H7z M14 5h3v14h-3z";
@@ -20,11 +42,23 @@ namespace
             case Icon::loop:      return "M17 2l3 3-3 3 M4 11V9a4 4 0 0 1 4-4h12 M7 22l-3-3 3-3 M20 13v2a4 4 0 0 1-4 4H4";
             case Icon::metronome: return "M9 3h6l4 18H5z M12 15l5-8 M7 17h10";
             case Icon::search:    return "M11 5a6 6 0 1 1 0 12a6 6 0 1 1 0-12z M20 20l-4.5-4.5";
-            case Icon::keyboards: return "M3 5h18v14H3z M8 5v8 M12 5v8 M16 5v8 M6.5 13v6 M10 13v6 M14 13v6 M17.5 13v6";
-            case Icon::drums:     return "M4 9c0-2 3.6-3 8-3s8 1 8 3-3.6 3-8 3-8-1-8-3z M4 9v6c0 2 3.6 3 8 3s8-1 8-3V9 M15 3l-3 6";
-            case Icon::bass:      return "M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0";
+            // Lucide "piano": a grand piano from the side.
+            case Icon::keyboards: return "M10 13v4 M14 13v4 M18 13v4 M2 13h20 M6 13v4 "
+                                         "M22 11.5A3.5 3.5 0 0 0 18.5 8a3.52 3.52 0 0 1-3.173-2A7 7 0 0 0 2 9v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2z";
+            // Lucide "drum": a drum with two crossed sticks.
+            case Icon::drums:     return "M2 2l8 8 M22 2l-8 8 M2 9a10 5 0 1 0 20 0a10 5 0 1 0-20 0z "
+                                         "M7 13.4v7.9 M12 14v8 M17 13.4v7.9 M2 9v8a10 5 0 0 0 20 0V9";
+            // Lucide "clef-bass": the bass clef. (There's no bass guitar icon,
+            // and a second guitar would be hard to tell apart.)
+            case Icon::bass:      return "M19 11h.01 M19 6h.01 M5 8c0-4 4-4 4-4 6 0 6 6 6 6 0 7-10 11-10 11 "
+                                         "M5 8a2 2 0 1 0 4 0a2 2 0 1 0-4 0z";
             case Icon::synths:    return "M5 20V4 M10 20V4 M15 20V4 M20 20V4 M3 8h4 M8 15h4 M13 10h4 M18 13h4";
-            case Icon::guitar:    return "M19 3l2 2 M20 4l-8 8 M11.5 12.5a4 4 0 1 0-1 6.5 3 3 0 0 0 2-5z";
+            // Lucide "guitar": an acoustic guitar with its headstock.
+            case Icon::guitar:    return "M11.9 12.1l4.514-4.514 M6 16l2 2 "
+                                         "M20.1 2.3a1 1 0 0 0-1.4 0l-1.114 1.114A2 2 0 0 0 17 4.828v1.344a2 2 0 0 1-.586 1.414"
+                                         "A2 2 0 0 1 17.828 7h1.344a2 2 0 0 0 1.414-.586L21.7 5.3a1 1 0 0 0 0-1.4z "
+                                         "M8.23 9.85A3 3 0 0 1 11 8a5 5 0 0 1 5 5 3 3 0 0 1-1.85 2.77l-.92.38A2 2 0 0 0 12 18"
+                                         "a4 4 0 0 1-4 4 6 6 0 0 1-6-6 4 4 0 0 1 4-4 2 2 0 0 0 1.85-1.23z";
             case Icon::strings:   return "M8 3v18 M12 3v18 M16 3v18 M5 17h14";
             case Icon::loops:     return "M17 2l3 3-3 3 M4 11V9a4 4 0 0 1 4-4h12 M7 22l-3-3 3-3 M20 13v2a4 4 0 0 1-4 4H4";
             case Icon::mic:       return "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M6 11a6 6 0 0 0 12 0 M12 17v4";
@@ -39,6 +73,10 @@ namespace
             case Icon::more:           return "M5.5 12h.5 M12 12h.5 M18.5 12h.5";   // three dots (round caps)
             case Icon::chevronDown:    return "M7 10l5 5 5-5";
             case Icon::chevronRight:   return "M10 7l5 5-5 5";
+            case Icon::chevronUp:      return "M7 14l5-5 5 5";
+            case Icon::headphones:     return "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z";
+            case Icon::waveform:       return "M4 10v4 M8 7v10 M12 4v16 M16 7v10 M20 10v4";
+            case Icon::mute:           return "M3 9h4l5-4v14l-5-4H3z M16 9l5 6 M21 9l-5 6";   // speaker with a cross
         }
 
         return "";
@@ -92,6 +130,44 @@ Icon forCategory (const juce::String& c)
     if (c == "Loops")       return Icon::loops;
     if (c == "Audio Files") return Icon::mic;
     return Icon::synths;
+}
+
+const std::vector<TrackIconChoice>& getTrackIconChoices()
+{
+    static const std::vector<TrackIconChoice> choices {
+        { "keyboard", "Keyboard",   Icon::keyboards },
+        { "synth",    "Synth",      Icon::synths },
+        { "bass",     "Bass",       Icon::bass },
+        { "guitar",   "Guitar",     Icon::guitar },
+        { "drums",    "Drums",      Icon::drums },
+        { "strings",  "Strings",    Icon::strings },
+        { "loops",    "Loops",      Icon::loops },
+        { "mic",      "Microphone", Icon::mic },
+    };
+
+    return choices;
+}
+
+Icon forTrack (const juce::String& iconKey, const juce::String& category)
+{
+    for (auto& choice : getTrackIconChoices())
+        if (choice.key == iconKey)
+            return choice.icon;
+
+    return forCategory (category);   // automatic (or a key from a newer version)
+}
+
+std::unique_ptr<juce::Drawable> createDrawable (Icon icon, juce::Colour colour)
+{
+    // Drawn into a fixed square, so every icon keeps the same size and
+    // padding (a path's own bounds would differ from icon to icon).
+    juce::Image image (juce::Image::ARGB, 48, 48, true);
+    juce::Graphics g (image);
+    draw (g, icon, { 0.0f, 0.0f, 48.0f, 48.0f }, colour, 44.0f, 1.8f);
+
+    auto drawable = std::make_unique<juce::DrawableImage>();
+    drawable->setImage (image);
+    return drawable;
 }
 
 } // namespace ikaros::icons

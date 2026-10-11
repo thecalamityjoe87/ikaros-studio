@@ -69,4 +69,4 @@ The manifest in `packaging/flatpak` is a starting point, not ready for Flathub y
 
 ## License
 
-Not decided yet. JUCE and Tracktion Engine are GPLv3 for open-source projects, so it'll likely be GPL. Figtree and JetBrains Mono are under the SIL Open Font License (see `resources/fonts`).
+Not decided yet. JUCE and Tracktion Engine are GPLv3 for open-source projects, so it'll likely be GPL. Figtree and JetBrains Mono are under the SIL Open Font License (see `resources/fonts`). Some instrument icons are from [Lucide](https://lucide.dev) (ISC License; the notice is in `src/ui/widgets/Icons.cpp`).

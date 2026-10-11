@@ -54,8 +54,8 @@ void WindowControls::update()
     {
         showingRestore = maximised;
         maximiseButton.setIcon (maximised ? Icon::windowRestore : Icon::windowMaximise);
-        maximiseButton.setTitle (maximised ? "Restore" : "Maximise");
-        maximiseButton.setTooltip (maximised ? "Restore" : "Maximise");
+        maximiseButton.setTitle (maximised ? "Restore" : "Maximize");
+        maximiseButton.setTooltip (maximised ? "Restore" : "Maximize");
     }
 }
 

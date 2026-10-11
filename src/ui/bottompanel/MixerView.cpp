@@ -42,7 +42,7 @@ public:
         pan.setRange (-1.0, 1.0);
         pan.setDoubleClickReturnValue (true, 0.0);
         pan.getProperties().set ("bipolar", true);   // read by IkarosLookAndFeel::drawRotarySlider
-        pan.setTooltip ("Pan: left or right (double-click to centre)");
+        pan.setTooltip ("Pan: left or right (double-click to center)");
         pan.onDragStart = [this] { engine.beginUndoStep ("Pan"); selection.selectTrack (trackId); };
         pan.onValueChange = [this]
         {

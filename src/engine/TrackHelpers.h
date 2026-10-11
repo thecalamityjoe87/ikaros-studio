@@ -24,6 +24,7 @@ inline const juce::Identifier categoryProp  ("ikarosCategory");
 inline const juce::Identifier kindProp      ("ikarosKind");      // "audio" for audio tracks
 inline const juce::Identifier inputProp     ("ikarosInput");     // audio input device ID
 inline const juce::Identifier monitorProp   ("ikarosMonitor");   // hear the input live
+inline const juce::Identifier iconProp      ("ikarosIcon");      // the track icon the user chose (empty = automatic)
 
 inline bool isAudioTrack (const te::AudioTrack& t)   { return t.state.getProperty (kindProp).toString() == "audio"; }
 

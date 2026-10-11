@@ -457,7 +457,8 @@ juce::PopupMenu ArrangementView::createTrackMenu()
 
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::renameTrack);
-    menu.addSubMenu ("Track Colour", createColourMenu (track), track != 0);
+    menu.addSubMenu ("Track Color", createColourMenu (track), track != 0);
+    menu.addSubMenu ("Track Icon", TrackHeader::createIconMenu (engine, track), track != 0);
     menu.addCommandItem (&commands, CommandIDs::moveTrackUp);
     menu.addCommandItem (&commands, CommandIDs::moveTrackDown);
     menu.addSeparator();
@@ -490,7 +491,7 @@ juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
         swatch->setPath (shape);
         swatch->setFill (c);
 
-        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Colour " + juce::String (i + 1))
+        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Color " + juce::String (i + 1))
                           .setImage (std::move (swatch))
                           .setTicked (info && info->colour == c)
                           .setAction ([this, track, c] { engine.getTracks().setTrackColour (track, c); }));

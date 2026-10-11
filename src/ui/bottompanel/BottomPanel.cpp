@@ -112,7 +112,8 @@ public:
     {
         auto r = getLocalBounds().reduced (18, 14);
 
-        keyboard.setBounds (r.removeFromBottom (92));
+        // A taller panel gives the keyboard longer keys, up to a point.
+        keyboard.setBounds (r.removeFromBottom (juce::jlimit (92, 150, r.getHeight() - Knob::preferredHeight - 14)));
         r.removeFromBottom (14);
 
         auto top = r;
@@ -191,6 +192,11 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     addAndMakeVisible (detailsButton);
 
+    collapseButton.setColours (IconButton::ghostColours());
+    collapseButton.setTooltip ("Hide panel");
+    collapseButton.onClick = [this] { if (onCollapseRequested) onCollapseRequested (! collapsed); };
+    addAndMakeVisible (collapseButton);
+
     updateTabButtons();
     refresh();
 }
@@ -211,11 +217,33 @@ void BottomPanel::setTab (Tab t)
 void BottomPanel::showTabPage()
 {
     const bool effect = isShowingEffect();
-    soundPage->setVisible (! effect && tab == Tab::sound);
-    pianoRoll.setVisible (! effect && tab == Tab::editor);
-    mixer.setVisible (! effect && tab == Tab::mixer);
-    effectViewport.setVisible (effect);
+    soundPage->setVisible (! collapsed && ! effect && tab == Tab::sound);
+    pianoRoll.setVisible (! collapsed && ! effect && tab == Tab::editor);
+    mixer.setVisible (! collapsed && ! effect && tab == Tab::mixer);
+    effectViewport.setVisible (! collapsed && effect);
     updateTabButtons();
+}
+
+void BottomPanel::setCollapsed (bool shouldCollapse)
+{
+    if (collapsed == shouldCollapse)
+        return;
+
+    collapsed = shouldCollapse;
+    const auto label = collapsed ? juce::String ("Show panel") : juce::String ("Hide panel");
+    collapseButton.setIcon (collapsed ? Icon::chevronUp : Icon::chevronDown);
+    collapseButton.setTitle (label);
+    collapseButton.setTooltip (label);
+
+    for (auto* c : std::initializer_list<juce::Component*> { &inspector, &detailsButton, &soundTab, &editorTab, &mixerTab })
+        c->setVisible (! collapsed);
+
+    // Collapsed, the whole strip is a button that opens the panel.
+    setMouseCursor (collapsed ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    showTabPage();
+    resized();
+    refresh();   // the mixer only refreshes while it's visible
+    repaint();
 }
 
 //==============================================================================
@@ -326,6 +354,9 @@ void BottomPanel::refresh()
 
 void BottomPanel::update()
 {
+    if (collapsed)
+        return;
+
     inspector.update();
 
     if (tab == Tab::mixer)
@@ -339,8 +370,12 @@ void BottomPanel::paint (juce::Graphics& g)
     g.fillAll (colour::toolbarBg);
     g.setColour (colour::divider);
     g.fillRect (getLocalBounds().removeFromTop (1));
-    g.setColour (colour::wellBg);
-    g.fillRect (inspector.getRight(), headerHeight, getWidth() - inspector.getRight(), 1);
+
+    if (! collapsed)
+    {
+        g.setColour (colour::wellBg);
+        g.fillRect (inspector.getRight(), headerHeight, getWidth() - inspector.getRight(), 1);
+    }
 
     auto r = headerArea;
 
@@ -368,13 +403,31 @@ void BottomPanel::paint (juce::Graphics& g)
     }
 
     // Outline around the segmented control.
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (tabsArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
+    if (! collapsed)
+    {
+        g.setColour (colour::border);
+        g.drawRoundedRectangle (tabsArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
+    }
+}
+
+void BottomPanel::mouseUp (const juce::MouseEvent& e)
+{
+    if (collapsed && e.mouseWasClicked() && ! e.mods.isPopupMenu() && onCollapseRequested)
+        onCollapseRequested (false);
 }
 
 void BottomPanel::resized()
 {
     auto r = getLocalBounds();
+
+    if (collapsed)
+    {
+        // The slim strip: track name on the left, the show button on the right.
+        auto strip = r.withTrimmedTop (1).reduced (14, 0);
+        collapseButton.setBounds (strip.removeFromRight (26).withSizeKeepingCentre (26, 26));
+        headerArea = strip.withTrimmedRight (12);
+        return;
+    }
 
     // Track inspector: full-height column on the left, visible on every tab.
     inspector.setBounds (r.removeFromLeft (TrackInspector::preferredWidth).withTrimmedTop (1));
@@ -387,6 +440,8 @@ void BottomPanel::resized()
     editorTab.setBounds (t.removeFromLeft (tabWidth));
     mixerTab.setBounds (t);
 
+    collapseButton.setBounds (header.removeFromRight (32).withSizeKeepingCentre (32, 32));
+    header.removeFromRight (8);
     detailsButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 32));
     headerArea = header.withRight (tabsArea.getX() - 12);
 

@@ -194,19 +194,25 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
 
     // A "bipolar" knob (e.g. pan) draws its arc out from 12 o'clock instead of
     // from the start. Set with slider.getProperties().set ("bipolar", true).
-    const auto arcStart = s.getProperties()["bipolar"] ? (startAngle + endAngle) * 0.5f : startAngle;
+    const bool bipolar = s.getProperties()["bipolar"];
+    const auto arcStart = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
+
+    // Exactly in the middle (pan: dead centre), that arc is just a dot at
+    // 12 o'clock. It turns green, so "centred" can be seen at a glance.
+    const bool atMiddle = bipolar && std::abs (pos - 0.5f) < 0.001f;
 
     juce::Path value;
     value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
                          juce::jmin (arcStart, valueAngle), juce::jmax (arcStart + 0.001f, valueAngle), true);
-    g.setColour (s.findColour (knobArcColourId));
+    g.setColour (atMiddle ? colour::effectOn : s.findColour (knobArcColourId));
     g.strokePath (value, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
 
     auto capRadius = radius * 0.68f;
+    const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
     g.setColour (colour::controlFill);
-    g.fillEllipse (juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre));
+    g.fillEllipse (cap);
     g.setColour (colour::borderStrong);
-    g.drawEllipse (juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre), 1.0f);
+    g.drawEllipse (cap, 1.0f);
 
     // getPointOnCircumference measures angles clockwise from 12 o'clock, like the slider does.
     auto inner = centre.getPointOnCircumference (capRadius * 0.27f, valueAngle);

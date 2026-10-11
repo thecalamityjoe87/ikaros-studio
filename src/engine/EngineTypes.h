@@ -78,11 +78,13 @@ struct TrackInfo
     juce::String name;
     juce::String soundName;        // e.g. "Grand Piano" (the preset shown in the library)
     juce::String category;         // library category, used to pick the icon
+    juce::String icon;             // the icon the user chose ("guitar", "drums"...), or empty to follow the category
     juce::Colour colour;
     bool muted = false;
     bool solo = false;
     bool silencedBySolo = false;   // another track is soloed, so this one is quiet
     bool armed = false;            // record-enabled
+    bool monitoring = false;       // audio tracks: the input is heard live
     float volume = 0.75f;          // fader position 0..1 (Tracktion's slider curve)
     float volumeDb = 0.0f;
     float pan = 0.0f;              // -1 (left) .. 0 (centre) .. 1 (right)

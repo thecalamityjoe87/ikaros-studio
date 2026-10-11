@@ -83,15 +83,17 @@ std::vector<TrackInfo> TrackController::getTracks() const
         info.kind = isAudioTrack (*t) ? TrackKind::audio : TrackKind::instrument;
         info.soundName = t->state.getProperty (soundNameProp, "Basic Synth").toString();
         info.category = t->state.getProperty (categoryProp, "Synths").toString();
+        info.icon = t->state.getProperty (iconProp).toString();
 
         if (info.kind == TrackKind::audio)
         {
             // Show the input it records from, e.g. "Input 1".
             info.soundName = "No input";
-            auto inputId = inputRouter->getRecordingSettings (info.id).inputId;
+            auto settings = inputRouter->getRecordingSettings (info.id);
+            info.monitoring = settings.monitoring;
 
             for (auto& in : inputRouter->getAudioInputs())
-                if (in.id == inputId)
+                if (in.id == settings.inputId)
                     info.soundName = in.name;
         }
         info.colour = t->getColour();
@@ -272,8 +274,20 @@ void TrackController::setTrackColour (TrackId id, juce::Colour c)
     {
         if (t->getColour() != c)
         {
-            owner.beginUndoStep ("Track Colour");
+            owner.beginUndoStep ("Track Color");
             t->setColour (c);
+        }
+    }
+}
+
+void TrackController::setTrackIcon (TrackId id, const juce::String& iconKey)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        if (t->state.getProperty (iconProp).toString() != iconKey)
+        {
+            owner.beginUndoStep ("Track Icon");
+            t->state.setProperty (iconProp, iconKey, &owner.getEdit()->getUndoManager());
         }
     }
 }
@@ -327,22 +341,19 @@ void TrackController::setSelectedTrack (TrackId id)
     inputRouter->setSelectedTrack (selectedTrack);   // re-routes the inputs
 }
 
+// Mute and solo are about what you're listening to, not changes to the song,
+// so they aren't undoable (Tracktion keeps them out of the undo history too).
+// They're still saved with the session.
 void TrackController::setMute (TrackId id, bool mute)
 {
     if (auto* t = findTrack (owner.getEdit(), id))
-    {
-        owner.beginUndoStep ("Mute");
         t->setMute (mute);
-    }
 }
 
 void TrackController::setSolo (TrackId id, bool solo)
 {
     if (auto* t = findTrack (owner.getEdit(), id))
-    {
-        owner.beginUndoStep ("Solo");
         t->setSolo (solo);
-    }
 }
 
 void TrackController::setVolume (TrackId id, float pos)

@@ -61,6 +61,10 @@ public:
     void renameTrack (TrackId, const juce::String& newName);
     void setTrackColour (TrackId, juce::Colour);
 
+    /** The icon shown in the track header, as a key such as "guitar" (the UI
+        maps keys to pictures). Empty = automatic: follow the sound's category. */
+    void setTrackIcon (TrackId, const juce::String& iconKey);
+
     /** The colours offered for tracks, in the order new tracks use them. */
     static std::vector<juce::Colour> getTrackColours();
 

@@ -8,6 +8,7 @@
 #include "ui/titlebar/MenuBar.h"
 #include "ui/state/Selection.h"
 #include "ui/toolbar/Toolbar.h"
+#include "ui/widgets/ResizeHandle.h"
 
 namespace ikaros
 {
@@ -60,9 +61,22 @@ private:
 
     juce::TooltipWindow tooltipWindow { this, 700 };
     std::unique_ptr<juce::FileChooser> fileChooser;
+
+    // Panel layout. The sizes are kept while a panel is hidden, so it comes
+    // back the way it was. TODO: remember them between sessions.
+    ResizeHandle libraryResizer { ResizeHandle::Orientation::vertical };
+    ResizeHandle bottomResizer { ResizeHandle::Orientation::horizontal };
     bool libraryVisible = true;
+    bool bottomPanelVisible = true;
+    int libraryWidth = tokens::size::sidebarWidth;
+    int bottomPanelHeight = BottomPanel::preferredHeight;
+    int resizeStartSize = 0;   // the panel's size when a resize drag started
 
     void refreshAll();
+    void setLibraryVisible (bool);
+    void setBottomPanelVisible (bool);
+    void setUpResizers();
+    int getMaxBottomPanelHeight() const;
 
     /** Split works on the selected regions, or if none are selected, on the
         selected track's regions. */

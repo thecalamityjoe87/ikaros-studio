@@ -91,6 +91,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     else if (name == "View")
     {
         add (CommandIDs::toggleLibrary);
+        add (CommandIDs::toggleBottomPanel);
         m.addSeparator();
         add (CommandIDs::zoomIn);
         add (CommandIDs::zoomOut);

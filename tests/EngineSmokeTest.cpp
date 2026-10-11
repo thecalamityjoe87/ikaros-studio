@@ -168,6 +168,16 @@ int main()
             pumpMessages();
             check (tracks.getTrack (fullCopy)->colour == purple, "track colour can be changed");
 
+            check (tracks.getTrack (fullCopy)->icon.isEmpty(), "track icons start automatic");
+            tracks.setTrackIcon (fullCopy, "guitar");
+            pumpMessages();
+            check (tracks.getTrack (fullCopy)->icon == "guitar", "a track icon can be chosen");
+            auto iconCopy = tracks.duplicateTrack (fullCopy, false);
+            pumpMessages();
+            check (tracks.getTrack (iconCopy)->icon == "guitar", "duplicates keep the icon");
+            tracks.deleteTrack (iconCopy);
+            pumpMessages();
+
             // Order is now t2, fullCopy, settingsCopy.
             tracks.moveTrack (fullCopy, 1);
             pumpMessages();
@@ -197,6 +207,13 @@ int main()
         {
             auto t3 = tracks.addInstrumentTrack();
             tracks.setSelectedTrack (t3);
+            check (tracks.getArmedTrack() == t3, "selecting a track arms it");
+            tracks.setSelectedTrack (t2);
+            check (tracks.getArmedTrack() == t2 && ! tracks.getTrack (t3)->armed, "selecting another moves the arm");
+            tracks.setSelectedTrack (t3);
+            tracks.setArmed (t3, false);
+            tracks.setSelectedTrack (t3);
+            check (tracks.getArmedTrack() == 0, "disarming the selected track sticks");
             engine.goToStart();
             pumpMessages();
 
@@ -204,6 +221,9 @@ int main()
             pumpMessages();
             check (engine.getTransportState().recording, "Record starts recording");
             check (tracks.getArmedTrack() == t3, "the selected track is armed for the take");
+            tracks.setSelectedTrack (t2);
+            check (tracks.getArmedTrack() == t3, "selecting another track mid-take doesn't move the arm");
+            tracks.setSelectedTrack (t3);
 
             for (int note : { 60, 64, 67 })
             {
@@ -222,6 +242,14 @@ int main()
             auto regions = tracks.getRegions (t3);
             check (regions.size() == 1, "the take becomes a region");
             check (! regions.empty() && regions[0].notes.size() == 3, "the region holds the played notes");
+
+            tracks.setSelectedTrack (t2);
+            tracks.setSelectedTrack (t3);   // armed by selecting it this time
+            engine.toggleRecord();
+            pumpMessages();
+            engine.toggleRecord();
+            pumpMessages();
+            check (tracks.getArmedTrack() == t3, "a track armed by selecting it stays armed after the take");
 
             tracks.setArmed (t3, true);
             check (tracks.getTrack (t3)->armed, "a track can be armed explicitly");

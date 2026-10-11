@@ -17,6 +17,10 @@ class AudioEngine;
     owns the selection and passes it on with setSelectedTrack(), so this class
     doesn't depend on TrackController.
 
+    Like GarageBand, selecting a track arms it (and disarms the previous one),
+    except during a take, which stays on the track it started on. Disarming
+    the selected track sticks until another track is selected.
+
     Every method runs on the message thread.
 */
 class InputRouter
@@ -26,7 +30,8 @@ public:
     ~InputRouter();
 
     /** Called by TrackController whenever the selected track changes (or
-        input devices change). Re-routes the inputs. */
+        input devices change). Re-routes the inputs, and arms a newly
+        selected track. */
     void setSelectedTrack (TrackId);
 
     /** Arms a track for recording (one at a time). An armed track also gets
