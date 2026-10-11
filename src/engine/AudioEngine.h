@@ -156,6 +156,12 @@ public:
         The name appears in the Edit menu, e.g. "Undo Add Track". */
     void beginUndoStep (const juce::String& name = {});
 
+    /** Renders part of the session offline (not through the speakers) and
+        returns its loudest sample, 0..1. The smoke test uses it to check
+        that instruments really play; an Export command can build on the
+        same rendering later. */
+    float renderPeak (double startBeat, double endBeat);
+
     //==============================================================================
     // Meters and stats, polled by the UI at ~30 Hz
     StereoLevel getMasterLevel();

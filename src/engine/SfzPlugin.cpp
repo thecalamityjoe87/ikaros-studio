@@ -1,0 +1,251 @@
+#include "engine/SfzPlugin.h"
+#include <sfizz.hpp>
+
+namespace te = tracktion;
+
+namespace ikaros
+{
+
+const char* SfzPlugin::xmlTypeName = "ikarosSfz";
+const juce::Identifier SfzPlugin::sfzFileProp ("sfzFile");
+
+//==============================================================================
+// Loads SFZ files on a thread of its own, and deletes synths the audio thread
+// has finished with. It wakes up when asked to load, and every 50 ms anyway
+// to tidy up.
+class SfzPlugin::Loader  : public juce::Thread
+{
+public:
+    explicit Loader (SfzPlugin& o) : juce::Thread ("SFZ loader"), owner (o)
+    {
+        startThread();
+    }
+
+    ~Loader() override
+    {
+        stopThread (10000);   // a big library can take a moment to stop loading
+    }
+
+    void request (const juce::File& file, int id)
+    {
+        {
+            const juce::ScopedLock sl (lock);
+            requestedFile = file;
+            requestedId = id;
+        }
+
+        notify();
+    }
+
+    void run() override
+    {
+        int finishedId = 0;
+
+        while (! threadShouldExit())
+        {
+            // A synth the audio thread has swapped out (delete of nullptr does nothing).
+            delete owner.outgoing.exchange (nullptr);
+
+            juce::File file;
+            int id = 0;
+
+            {
+                const juce::ScopedLock sl (lock);
+                file = requestedFile;
+                id = requestedId;
+            }
+
+            if (id != finishedId)
+            {
+                // A fresh synth for the new sound. If loading fails it stays
+                // empty, and playing it is silent.
+                auto synth = std::make_unique<sfz::Sfizz>();
+                synth->setSampleRate ((float) owner.currentSampleRate.load());
+                synth->setSamplesPerBlock (maxBlockSize);
+
+                const bool ok = file.existsAsFile() && synth->loadSfzFile (file.getFullPathName().toStdString());
+                owner.numRegions = ok ? synth->getNumRegions() : 0;
+
+                // Hand it over. If an earlier one is still waiting (never
+                // played), it's out of date: delete it.
+                delete owner.incoming.exchange (synth.release());
+
+                finishedId = id;
+                owner.loadedRequest = id;
+                continue;   // another request may have arrived meanwhile
+            }
+
+            wait (50);
+        }
+    }
+
+private:
+    SfzPlugin& owner;
+    juce::CriticalSection lock;   // guards the request (the message thread writes it, this thread reads it)
+    juce::File requestedFile;
+    int requestedId = 0;
+};
+
+//==============================================================================
+SfzPlugin::SfzPlugin (te::PluginCreationInfo info) : te::Plugin (info)
+{
+    loader = std::make_unique<Loader> (*this);
+    requestLoad();
+}
+
+SfzPlugin::~SfzPlugin()
+{
+    notifyListenersOfDeletion();
+
+    // Stop the loader first, so nothing hands over a synth while we tidy up.
+    loader.reset();
+    delete active;
+    delete incoming.exchange (nullptr);
+    delete outgoing.exchange (nullptr);
+}
+
+juce::File SfzPlugin::getSfzFile() const
+{
+    return juce::File (state.getProperty (sfzFileProp).toString());
+}
+
+void SfzPlugin::requestLoad()
+{
+    loader->request (getSfzFile(), ++requestCounter);
+}
+
+void SfzPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id)
+{
+    // A new file (or the old one back, after an undo): load it.
+    if (v == state && id == sfzFileProp)
+        requestLoad();
+
+    te::Plugin::valueTreePropertyChanged (v, id);
+}
+
+void SfzPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v)
+{
+    if (v.hasProperty (sfzFileProp))
+        state.setProperty (sfzFileProp, v.getProperty (sfzFileProp), getUndoManager());
+}
+
+//==============================================================================
+void SfzPlugin::initialise (const te::PluginInitialisationInfo& info)
+{
+    scratch.setSize (2, maxBlockSize);
+
+    // A different sample rate needs a synth made for it. (Tracktion doesn't
+    // run this while the plugin is processing, so `active` can be touched.)
+    if (info.sampleRate != currentSampleRate.load())
+    {
+        currentSampleRate = info.sampleRate;
+
+        if (active != nullptr)
+            active->setSampleRate ((float) info.sampleRate);
+
+        requestLoad();
+    }
+
+    takeIncomingSynth();
+}
+
+void SfzPlugin::deinitialise()
+{
+    if (active != nullptr)
+        active->allSoundOff();
+}
+
+void SfzPlugin::reset()
+{
+    if (active != nullptr)
+        active->allSoundOff();
+}
+
+void SfzPlugin::takeIncomingSynth()
+{
+    // Only swap when the loader has deleted the last synth we gave back, so
+    // there's never more than one waiting to be deleted.
+    if (outgoing.load() != nullptr)
+        return;
+
+    if (auto* next = incoming.exchange (nullptr))
+    {
+        outgoing.store (active);   // the loader deletes it (nullptr the first time)
+        active = next;
+    }
+}
+
+//==============================================================================
+void SfzPlugin::applyToBuffer (const te::PluginRenderContext& fc)
+{
+    if (fc.destBuffer == nullptr)
+        return;
+
+    takeIncomingSynth();
+
+    auto& dest = *fc.destBuffer;
+    const int start = fc.bufferStartSample;
+    const int total = fc.bufferNumSamples;
+
+    // The instrument's output replaces whatever came in.
+    for (int ch = 0; ch < dest.getNumChannels(); ++ch)
+        dest.clear (ch, start, total);
+
+    if (active == nullptr)
+        return;
+
+    auto* midi = fc.bufferForMidiMessages;
+
+    if (midi != nullptr && midi->isAllNotesOff)
+        active->allSoundOff();
+
+    // Render in pieces of at most maxBlockSize samples (sfizz's limit),
+    // sending each MIDI message along with the piece it falls in. Message
+    // times are in seconds from the start of this block.
+    for (int done = 0; done < total; done += maxBlockSize)
+    {
+        const int num = juce::jmin (maxBlockSize, total - done);
+        const bool lastPiece = done + num >= total;
+
+        if (midi != nullptr)
+        {
+            for (auto& m : *midi)
+            {
+                const int at = juce::roundToInt (m.getTimeStamp() * sampleRate);
+
+                // Messages before this piece were sent with an earlier one;
+                // ones after the end of the block go with the last piece.
+                if (at < done || (at >= done + num && ! lastPiece))
+                    continue;
+
+                const int delay = juce::jlimit (0, num - 1, at - done);
+
+                if (m.isNoteOn())                    active->noteOn (delay, m.getNoteNumber(), m.getVelocity());
+                else if (m.isNoteOff())              active->noteOff (delay, m.getNoteNumber(), m.getVelocity());
+                else if (m.isController())           active->cc (delay, m.getControllerNumber(), m.getControllerValue());
+                else if (m.isPitchWheel())           active->pitchWheel (delay, m.getPitchWheelValue() - 8192);
+                else if (m.isChannelPressure())      active->channelAftertouch (delay, m.getChannelPressureValue());
+                else if (m.isAftertouch())           active->polyAftertouch (delay, m.getNoteNumber(), m.getAfterTouchValue());
+                else if (m.isAllNotesOff() || m.isAllSoundOff())  active->allSoundOff();
+            }
+        }
+
+        float* outputs[] { scratch.getWritePointer (0), scratch.getWritePointer (1) };
+        active->renderBlock (outputs, (size_t) num);
+
+        if (dest.getNumChannels() >= 2)
+        {
+            dest.copyFrom (0, start + done, scratch, 0, 0, num);
+            dest.copyFrom (1, start + done, scratch, 1, 0, num);
+        }
+        else if (dest.getNumChannels() == 1)
+        {
+            // A mono track: the average of left and right.
+            dest.copyFrom (0, start + done, scratch, 0, 0, num);
+            dest.addFrom (0, start + done, scratch, 1, 0, num);
+            dest.applyGain (0, start + done, num, 0.5f);
+        }
+    }
+}
+
+} // namespace ikaros

@@ -1,6 +1,7 @@
 #include "engine/EffectsController.h"
 #include "engine/AudioEngine.h"
 #include "engine/PluginLibrary.h"
+#include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
 #include <array>
@@ -40,7 +41,7 @@ namespace
         if (dynamic_cast<te::FourOscPlugin*> (&p) != nullptr)
             return "4OSC Synth";
 
-        if (dynamic_cast<te::SamplerPlugin*> (&p) != nullptr)
+        if (dynamic_cast<te::SamplerPlugin*> (&p) != nullptr || dynamic_cast<SfzPlugin*> (&p) != nullptr)
             return "Sampler";
 
         return p.getName();
@@ -155,6 +156,15 @@ namespace
             sampler->flushPendingUpdates();
 
         return plugin;
+    }
+
+    // Our sfizz instrument, playing an SFZ file (see SfzPlugin). It loads
+    // the file in the background, so this returns straight away.
+    te::Plugin::Ptr createSfzInstrument (te::Edit& edit, const juce::File& sfzFile)
+    {
+        auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, SfzPlugin::xmlTypeName);
+        state.setProperty (SfzPlugin::sfzFileProp, sfzFile.getFullPathName(), nullptr);
+        return edit.getPluginCache().createNewPlugin (state);
     }
 
     // Where in the plugin list effect number `position` should go: before
@@ -325,7 +335,8 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
     }
     else if (auto* sampled = owner.getSounds().findSampledInstrument (soundId))
     {
-        instrument = createSampler (*edit, *sampled);
+        instrument = sampled->sfzFile.existsAsFile() ? createSfzInstrument (*edit, sampled->sfzFile)
+                                                     : createSampler (*edit, *sampled);
         name = sampled->info.name;
         category = sampled->info.category;
     }
@@ -396,6 +407,16 @@ juce::String EffectsController::getSoundId (TrackId id) const
 
 //==============================================================================
 // Plug-ins
+bool EffectsController::isInstrumentReady (TrackId id) const
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : t->pluginList)
+            if (auto* sfz = dynamic_cast<SfzPlugin*> (p))
+                return sfz->isLoaded();
+
+    return true;
+}
+
 std::optional<PluginSlot> EffectsController::getInstrument (TrackId id) const
 {
     if (auto* t = findTrack (owner.getEdit(), id))

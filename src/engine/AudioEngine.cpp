@@ -1,6 +1,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/AudioPreview.h"
 #include "engine/PluginLibrary.h"
+#include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 
@@ -110,6 +111,16 @@ struct IkarosUIBehaviour  : public te::UIBehaviour
 {
     PluginWindowFactory factory;
 
+    // Tracktion hands long jobs (like rendering offline, see
+    // AudioEngine::renderPeak) to the UI to run "with a progress bar". There's
+    // no progress bar yet: just run the job here until it's finished.
+    void runTaskWithProgressBar (te::ThreadPoolJobWithProgress& task) override
+    {
+        while (task.runJob() == juce::ThreadPoolJob::jobNeedsRunningAgain)
+        {
+        }
+    }
+
     std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& state) override
     {
         auto* windowState = dynamic_cast<te::Plugin::WindowState*> (&state);
@@ -179,6 +190,10 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
         engine.getDeviceManager().initialise (2, 2);
+
+        // Our own instrument for SFZ sounds, next to Tracktion's built-in
+        // ones, so sessions can create it (and load it back) by type name.
+        engine.getPluginManager().createBuiltInType<SfzPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
@@ -874,6 +889,19 @@ bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
     impl->edit->resetChangedStatus();
     notifyModelChanged();
     return true;
+}
+
+float AudioEngine::renderPeak (double startBeat, double endBeat)
+{
+    auto& edit = *impl->edit;
+    const te::TimeRange range { edit.tempoSequence.toTime (te::BeatPosition::fromBeats (startBeat)),
+                                edit.tempoSequence.toTime (te::BeatPosition::fromBeats (endBeat)) };
+
+    // Every track (the renderer takes them as a set of track indexes).
+    juce::BigInteger tracks;
+    tracks.setRange (0, te::getAllTracks (edit).size(), true);
+
+    return te::Renderer::measureStatistics ("Peak", edit, range, tracks, 512).peak;
 }
 
 bool AudioEngine::isUntitled() const                { return impl->untitled; }

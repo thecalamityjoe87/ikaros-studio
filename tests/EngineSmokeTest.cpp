@@ -983,6 +983,65 @@ int main (int argc, char* argv[])
                    "so does a looped audio region");
             audioFile.deleteFile();
         }
+
+        std::cout << "SFZ instruments (sfizz)\n";
+        {
+            engine.newSession();
+            pumpMessages();
+            engine.getSounds().addPackFolder (juce::File (IKAROS_TEST_FIXTURES));
+            const juce::String sfzSound ("sampler:Test Pack/Test Keys");
+            check (engine.getSounds().findSound (sfzSound).has_value(), "an instrument.json can name an SFZ file");
+
+            auto st = tracks.getTracks().front().id;
+            check (tracks.effects().setSound (st, sfzSound), "an SFZ sound loads onto a track");
+            check (tracks.effects().getInstrument (st).has_value() && tracks.effects().getInstrument (st)->name == "Sampler",
+                   "it shows as the track's Sampler");
+
+            // It loads in the background; wait for it.
+            for (int i = 0; i < 100 && ! tracks.effects().isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            check (tracks.effects().isInstrumentReady (st), "the SFZ file finishes loading");
+
+            // A region with three middle Cs: loud, loud again, then soft. The
+            // test samples play at 0.8 and 0.6 (the loud layer's two
+            // round-robins) and 0.2 (the soft layer), whatever the velocity.
+            auto sr = tracks.regions().createChordRegion (st, 0.0);
+            pumpMessages();
+            std::vector<NoteId> chordNotes;
+
+            for (auto& n : tracks.regions().getRegion (sr)->notes)
+                chordNotes.push_back (n.id);
+
+            tracks.notes().deleteNotes (sr, chordNotes);
+            tracks.notes().addNote (sr, { 60, 0.0, 1.0, 120 });
+            tracks.notes().addNote (sr, { 60, 2.0, 1.0, 120 });
+            tracks.notes().addNote (sr, { 60, 4.0, 1.0, 30 });
+            pumpMessages();
+
+            // Rendered offline, one note at a time (never through the speakers).
+            const auto loudA = engine.renderPeak (0.0, 1.5);
+            const auto loudB = engine.renderPeak (2.0, 3.5);
+            const auto soft = engine.renderPeak (4.0, 5.5);
+            std::cout << "  (peaks: " << loudA << ", " << loudB << ", " << soft << ")\n";
+
+            check (loudA > 0.05f && loudB > 0.05f && soft > 0.01f, "the SFZ instrument plays");
+            check (soft < juce::jmin (loudA, loudB) * 0.5f, "a soft note plays the soft velocity layer");
+            check (std::abs (loudA - loudB) > juce::jmax (loudA, loudB) * 0.1f,
+                   "repeated loud notes take turns between the round-robin samples");
+
+            // Saved with the session: reopening loads the SFZ again.
+            auto sfzSession = dir.getChildFile ("SFZ");
+            check (engine.saveSessionAs (sfzSession), "(save)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (sfzSession)), "(reopen)");
+            st = tracks.getTracks().front().id;
+
+            for (int i = 0; i < 100 && ! tracks.effects().isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            check (tracks.effects().getSoundId (st) == sfzSound && engine.renderPeak (0.0, 1.5) > 0.05f,
+                   "an SFZ instrument survives save and reopen, and still plays");
+        }
     }
 
     {

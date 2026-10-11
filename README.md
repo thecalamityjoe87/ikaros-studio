@@ -14,7 +14,7 @@ Plug-ins are found by a scan in the background at startup. Each plug-in is loade
 
 ## Building
 
-You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`. The first build takes a while because it compiles both.
+You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`, and sfizz, which plays SFZ instruments, in `external/sfizz`. The first build takes a while because it compiles all of them. The projects Ikaros Studio is built on, and their licenses, are listed in `CREDITS`.
 
 ```sh
 git clone --recursive https://github.com/thecalamityjoe87/ikaros-studio.git

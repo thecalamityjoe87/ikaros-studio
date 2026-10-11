@@ -149,6 +149,12 @@ juce::File SoundLibrary::getBundledSoundsFolder()
     return {};
 }
 
+void SoundLibrary::addPackFolder (const juce::File& folder)
+{
+    extraPackFolders.push_back (folder);
+    rescan();
+}
+
 void SoundLibrary::rescan()
 {
     sounds.clear();
@@ -158,7 +164,10 @@ void SoundLibrary::rescan()
     for (auto& patch : synthPatches())
         sounds.push_back ({ synthPrefix + patch.name, patch.name, patch.category, "Synth" });
 
-    for (auto& root : { getBundledSoundsFolder(), getUserSoundsFolder() })
+    std::vector<juce::File> roots { getBundledSoundsFolder(), getUserSoundsFolder() };
+    roots.insert (roots.end(), extraPackFolders.begin(), extraPackFolders.end());
+
+    for (auto& root : roots)
         if (root.isDirectory())
             for (auto& pack : root.findChildFiles (juce::File::findDirectories, false))
                 readPack (pack);
@@ -196,6 +205,9 @@ void SoundLibrary::readPack (const juce::File& pack)
         instrument.info.detail = "Sampled";
         instrument.oneShot = json.getProperty ("oneShot", false);
 
+        if (auto sfz = json["sfz"].toString(); sfz.isNotEmpty() && folder.getChildFile (sfz).existsAsFile())
+            instrument.sfzFile = folder.getChildFile (sfz);
+
         if (auto* samples = json["samples"].getArray())
         {
             for (auto& s : *samples)
@@ -213,7 +225,8 @@ void SoundLibrary::readPack (const juce::File& pack)
         }
 
         // Another pack may have an instrument with the same name; the first wins.
-        if (! instrument.zones.empty() && findSampledInstrument (instrument.info.id) == nullptr)
+        if ((! instrument.zones.empty() || instrument.sfzFile.existsAsFile())
+              && findSampledInstrument (instrument.info.id) == nullptr)
         {
             sounds.push_back (instrument.info);
             sampled.push_back (std::move (instrument));

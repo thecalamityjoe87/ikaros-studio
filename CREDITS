@@ -1,0 +1,74 @@
+Ikaros Studio is built on the work of these projects. Thank you.
+
+
+Tracktion Engine and JUCE
+  https://github.com/Tracktion/tracktion_engine
+  https://juce.com
+  GPLv3 for open-source projects (see external/tracktion_engine).
+
+
+sfizz, the SFZ sample player
+  https://sfz.tools/sfizz
+  BSD 2-Clause License
+  Copyright (c) 2021-2023, sfizz contributors (detailed in external/sfizz/AUTHORS.md)
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+  sfizz includes these libraries, which are built into Ikaros Studio with it.
+  Each one's full license text is in its folder under external/sfizz.
+
+    Abseil                Apache License 2.0           external/abseil-cpp
+    atomic_queue          MIT                          external/atomic_queue
+    cephes                BSD, with the author's permission (see its LICENSE.txt)
+                                                       external/cephes
+    cpuid                 BSD 3-Clause                 src/external/cpuid
+    dr_libs               Public domain (Unlicense) or MIT-0
+                                                       external/st_audiofile/thirdparty/dr_libs
+    ghc::filesystem       MIT                          external/filesystem
+    hiir                  WTFPL                        src/external/hiir
+    jsl                   Boost Software License 1.0   external/jsl
+    KISS FFT              BSD 3-Clause                 src/external/kiss_fft
+    libaiff               MIT                          external/st_audiofile/thirdparty/libaiff
+    pugixml               MIT                          src/external/pugixml
+    SIMDe                 MIT                          external/simde
+    spline                BSD 3-Clause                 src/external/spline
+    st_audiofile          BSD 2-Clause                 external/st_audiofile
+    stb_vorbis            Public domain or MIT         external/st_audiofile/thirdparty/stb_vorbis
+    ThreadPool            zlib                         external/threadpool
+    Tunings (Surge)       MIT                          src/external/tunings
+    WavPack               BSD 3-Clause                 external/st_audiofile/thirdparty/wavpack
+    fverb and the other   BSD 2-Clause (Jean Pierre    src/sfizz/effects/gen
+    generated effects     Cimalando)
+
+
+Fonts
+  Figtree and JetBrains Mono, SIL Open Font License 1.1 (see resources/fonts).
+
+
+Icons
+  Some instrument icons are from Lucide (https://lucide.dev), ISC License.
+  The notice is in src/ui/widgets/Icons.cpp.
+
+
+Sounds
+  Ikaros Basics, the sound pack that comes with the app, is made from scratch
+  by tools/generate_sounds.py. It contains no third-party samples.

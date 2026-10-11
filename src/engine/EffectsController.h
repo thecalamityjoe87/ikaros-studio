@@ -40,6 +40,10 @@ public:
     /** The library sound the track uses (SoundInfo::id), or empty if unknown. */
     juce::String getSoundId (TrackId) const;
 
+    /** False while the track's instrument is still loading its samples in
+        the background (big SFZ instruments take a moment); true otherwise. */
+    bool isInstrumentReady (TrackId) const;
+
     //==============================================================================
     // Plug-ins: the track's instrument and its chain of effects (the
     // "Plug-ins" inspector). Effects are processed top to bottom. They can be

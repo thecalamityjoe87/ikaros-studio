@@ -24,9 +24,13 @@ namespace ikaros
             Instruments/<Instrument name>/instrument.json   + its samples
             Loops/loops.json                                 + the loop files
 
-    instrument.json:
+    instrument.json, either with simple key zones (played by Tracktion's
+    sampler):
         { "category": "Keyboards", "oneShot": false,
           "samples": [ { "file": "C3.wav", "root": 48, "low": 0, "high": 53, "gain": 0 } ] }
+    or naming an SFZ file in the same folder (played by sfizz, see SfzPlugin),
+    for velocity layers, round-robins and big sample sets:
+        { "category": "Keyboards", "sfz": "Grand Piano.sfz" }
 
     loops.json:
         [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C" } ]
@@ -43,6 +47,10 @@ public:
 
     /** Re-reads the sound packs (e.g. after the user added one). */
     void rescan();
+
+    /** Also reads the packs in this folder (each subfolder is a pack), and
+        rescans. For the smoke test's test pack. */
+    void addPackFolder (const juce::File& folderOfPacks);
 
     /** Every sound from the built-in patches and the sound packs, grouped
         by category in library order. (Plug-in instruments come from PluginLibrary.) */
@@ -88,6 +96,7 @@ public:
     struct SampledInstrument
     {
         SoundInfo info;
+        juce::File sfzFile;            // set for an SFZ instrument (then zones is empty)
         std::vector<SampleZone> zones;
         bool oneShot = false;          // samples play to the end (drums) instead of stopping at key-up
     };
@@ -98,6 +107,7 @@ private:
     std::vector<SoundInfo> sounds;
     std::vector<SampledInstrument> sampled;
     std::vector<LibraryFile> loops;
+    std::vector<juce::File> extraPackFolders;
 
     void readPack (const juce::File& packFolder);
 

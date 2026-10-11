@@ -41,6 +41,44 @@ endif()
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
 add_subdirectory("${TE_DIR}/modules"      "${CMAKE_BINARY_DIR}/tracktion" EXCLUDE_FROM_ALL)
 
+# sfizz plays SFZ instruments (velocity layers, round-robins, samples
+# streamed from disk) for the library's sampled sounds; see
+# src/engine/SfzPlugin.h. Only its library is built: no stand-alone apps,
+# JACK client or MIDI renderer. Pinned to a release tag (1.2.3).
+set(SFIZZ_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz")
+
+if(NOT EXISTS "${SFIZZ_DIR}/external/abseil-cpp/CMakeLists.txt")
+    message(FATAL_ERROR
+        "The sfizz submodule (or its own submodules) is missing. Run:\n"
+        "  git submodule update --init --recursive external/sfizz")
+endif()
+
+set(SFIZZ_JACK OFF CACHE BOOL "" FORCE)
+set(SFIZZ_RENDER OFF CACHE BOOL "" FORCE)
+set(SFIZZ_SHARED OFF CACHE BOOL "" FORCE)
+set(SFIZZ_TESTS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_DEMOS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_DEVTOOLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_LTO OFF CACHE BOOL "" FORCE)   # sfizz's own option; keeps its build quick
+
+# Two settings just for sfizz's code. The values a subdirectory sees are
+# fixed when it's added, so restoring them afterwards leaves our own targets
+# as they were:
+#  - C++17: sfizz doesn't build as C++20 (which the app uses).
+#  - <cstdint>: sfizz's copy of abseil uses uintptr_t in its debug-build
+#    asserts without including it, which newer GCC versions reject.
+set(IKAROS_SAVED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_STANDARD 17)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    string(APPEND CMAKE_CXX_FLAGS " -include cstdint")
+endif()
+
+add_subdirectory("${SFIZZ_DIR}" "${CMAKE_BINARY_DIR}/sfizz" EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_FLAGS "${IKAROS_SAVED_CXX_FLAGS}")
+set(CMAKE_CXX_STANDARD 20)
+
 # Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
 # Units on macOS. JUCE ships everything needed to host them.
 if(APPLE)
@@ -100,6 +138,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
+    src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
@@ -190,6 +229,7 @@ target_compile_definitions(IkarosStudio PRIVATE
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
         tracktion::tracktion_graph
@@ -260,6 +300,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
     install(DIRECTORY resources/sounds/
             DESTINATION ${CMAKE_INSTALL_DATADIR}/ikaros-studio/Sounds)
+    install(FILES CREDITS
+            DESTINATION ${CMAKE_INSTALL_DOCDIR})
 endif()
 
 # ------------------------------------------------------------------------------
@@ -278,6 +320,10 @@ if(IKAROS_BUILD_TESTS)
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
 
+    # The test sound pack (made by tests/fixtures/generate_test_pack.py).
+    target_compile_definitions(IkarosEngineSmokeTest PRIVATE
+        IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
         JUCE_USE_CURL=0
@@ -287,6 +333,7 @@ if(IKAROS_BUILD_TESTS)
         TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
         tracktion::tracktion_graph
