@@ -47,6 +47,10 @@ public:
     std::function<void (const juce::String& newName)> onRename;
     std::function<void()> onOpenEditor;
 
+    /** Escape was pressed on the region. Return true if it was used (it
+        cancelled a drag), so it doesn't go on to the app's shortcuts. */
+    std::function<bool()> onEscape;
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;

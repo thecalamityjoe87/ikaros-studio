@@ -556,35 +556,69 @@ int main (int argc, char* argv[])
         check (tracks.regions().getRegions (t1).size() == 2, "...in one undo step");
 
         std::cout << "Notes\n";
-        auto region = tracks.regions().getRegion (r2);
-        const auto noteCount = region->notes.size();
-        auto index = tracks.notes().addNote (r2, { 72, 1.1, 0.5, 90 });
-        pumpMessages();
-        region = tracks.regions().getRegion (r2);
-        check (index >= 0 && region->notes.size() == noteCount + 1, "add a note");
-        check (index >= 0 && region->notes[(size_t) index].pitch == 72 && std::abs (region->notes[(size_t) index].startBeat - 1.1) < 1e-6,
-               "the note is where it was drawn");
+        {
+            auto region = tracks.regions().getRegion (r2);
+            const auto noteCount = region->notes.size();
 
-        auto map = tracks.notes().changeNotes (r2, { { index, { 74, 2.3, 1.0, 40 } } }, "Move Note");
-        pumpMessages();
-        region = tracks.regions().getRegion (r2);
-        check (map.size() == region->notes.size(), "a change reports where every note went");
-        index = map.empty() ? -1 : map[(size_t) index];
-        auto note = index >= 0 ? region->notes[(size_t) index] : NoteInfo {};
-        check (note.pitch == 74 && std::abs (note.startBeat - 2.3) < 1e-6 && note.lengthBeats == 1.0 && note.velocity == 40,
-               "move, resize and velocity");
-        check (engine.getUndoDescription() == "Move Note", "the note edit has its own undo step");
+            // Finds a note by its ID in a fresh read of the region.
+            auto findNote = [&] (NoteId id) -> std::optional<NoteInfo>
+            {
+                if (auto r = tracks.regions().getRegion (r2))
+                    for (auto& n : r->notes)
+                        if (n.id == id)
+                            return n;
 
-        map = tracks.notes().quantiseNotes (r2, { index }, 0.25);
-        pumpMessages();
-        region = tracks.regions().getRegion (r2);
-        index = map.empty() ? -1 : map[(size_t) index];
-        check (index >= 0 && region->notes[(size_t) index].pitch == 74 && std::abs (region->notes[(size_t) index].startBeat - 2.25) < 1e-6,
-               "quantize snaps to the grid");
+                return std::nullopt;
+            };
 
-        tracks.notes().deleteNotes (r2, { index });
-        pumpMessages();
-        check (tracks.regions().getRegion (r2)->notes.size() == noteCount, "delete a note");
+            std::set<NoteId> ids;
+
+            for (auto& n : region->notes)
+                ids.insert (n.id);
+
+            check (ids.size() == noteCount && ids.count (0) == 0, "every note has an ID of its own");
+
+            auto id = tracks.notes().addNote (r2, { 72, 1.1, 0.5, 90 });
+            pumpMessages();
+            auto note = findNote (id);
+            check (id != 0 && ids.count (id) == 0 && tracks.regions().getRegion (r2)->notes.size() == noteCount + 1,
+                   "add a note (it gets a new ID)");
+            check (note && note->pitch == 72 && std::abs (note->startBeat - 1.1) < 1e-6, "the note is where it was drawn");
+
+            // Moving it past other notes re-orders the list, but the ID stays.
+            tracks.notes().changeNotes (r2, { { 74, 2.3, 1.0, 40, id } }, "Move Note");
+            pumpMessages();
+            note = findNote (id);
+            check (note && note->pitch == 74 && std::abs (note->startBeat - 2.3) < 1e-6 && note->lengthBeats == 1.0
+                     && note->velocity == 40, "move, resize and velocity keep the note's ID");
+            check (engine.getUndoDescription() == "Move Note", "the note edit has its own undo step");
+
+            tracks.notes().quantiseNotes (r2, { id }, 0.25);
+            pumpMessages();
+            note = findNote (id);
+            check (note && note->pitch == 74 && std::abs (note->startBeat - 2.25) < 1e-6, "quantize snaps to the grid, same ID");
+
+            engine.undo();   // the quantize
+            pumpMessages();
+            note = findNote (id);
+            check (note && std::abs (note->startBeat - 2.3) < 1e-6, "undo puts the note back, same ID");
+            engine.redo();
+            pumpMessages();
+            note = findNote (id);
+            check (note && std::abs (note->startBeat - 2.25) < 1e-6, "and redo, same ID");
+
+            auto notesSession = dir.getChildFile ("Notes");
+            check (engine.saveSessionAs (notesSession), "(save)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (notesSession)), "(reopen)");
+            pumpMessages();
+            note = findNote (id);
+            check (note && note->pitch == 74 && std::abs (note->startBeat - 2.25) < 1e-6,
+                   "the note keeps its ID through save and reopen");
+
+            tracks.notes().deleteNotes (r2, { id });
+            pumpMessages();
+            check (tracks.regions().getRegion (r2)->notes.size() == noteCount && ! findNote (id), "delete a note by ID");
+        }
 
         std::cout << "Count-in\n";
         engine.setCountInEnabled (true);

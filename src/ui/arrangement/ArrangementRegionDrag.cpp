@@ -97,15 +97,24 @@ void ArrangementView::RegionDrag::updateMoveDrag (juce::Point<int> pos)
     const int anchorIndex = (int) std::distance (drag.regions.begin(), anchor);
 
     // Time: snap the clicked region's start to the grid; the others keep their spacing.
-    double delta = (pos.x - drag.start.x) / owner.geometry.pixelsPerBeat;
-    delta = owner.snapBeat (anchor->startBeat + delta) - anchor->startBeat;
-
     double earliest = anchor->startBeat;
 
     for (auto& r : drag.regions)
         earliest = juce::jmin (earliest, r.startBeat);
 
-    delta = juce::jmax (delta, -earliest);   // nothing goes before the start of the song
+    // Nothing goes before the start of the song, so the clicked region can't
+    // start before this. Clamp first and snap after, so it still lands on the
+    // grid when the group is stopped at beat 0.
+    const double lowestStart = anchor->startBeat - earliest;
+    const double wanted = anchor->startBeat + (pos.x - drag.start.x) / owner.geometry.pixelsPerBeat;
+    double newStart = owner.snapBeat (juce::jmax (wanted, lowestStart));
+
+    // Rounding to the nearest line can land just before the limit: use the
+    // next line up instead.
+    if (newStart < lowestStart - 1.0e-9)
+        newStart += owner.getSnapBeats();
+
+    const double delta = newStart - anchor->startBeat;
 
     // Tracks: follow the mouse up and down, as long as every region lands on
     // a track of its own kind (MIDI on instrument tracks, audio on audio
@@ -195,6 +204,34 @@ void ArrangementView::RegionDrag::updateLoopDrag (int dx)
 
     if (auto* lane = comp->getParentComponent())
         lane->resized();
+}
+
+bool ArrangementView::RegionDrag::cancel()
+{
+    if (drag.mode == Drag::Mode::none || drag.mode == Drag::Mode::pending)
+        return false;
+
+    // std::exchange takes the drag state and resets it, so the mouse-up that
+    // follows finds nothing to do.
+    auto cancelled = std::exchange (drag, {});
+
+    if (cancelled.mode == Drag::Mode::move)
+    {
+        owner.overlay->clear();
+
+        for (auto& r : cancelled.regions)
+            if (auto* c = owner.findRegion (r.id))
+                c->setAlpha (1.0f);
+    }
+    else if (auto* comp = owner.findRegion (cancelled.anchor))
+    {
+        comp->setTrimPreview (std::nullopt);
+
+        if (auto* lane = comp->getParentComponent())
+            lane->resized();
+    }
+
+    return true;
 }
 
 void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::MouseEvent&)

@@ -280,9 +280,14 @@ void ArrangementView::setSnap (Snap newSnap)
         onSnapChanged();
 }
 
+double ArrangementView::getSnapBeats() const
+{
+    return snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+}
+
 double ArrangementView::snapBeat (double beat) const
 {
-    const double grid = snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+    const double grid = getSnapBeats();
     return grid > 0.0 ? std::round (beat / grid) * grid : beat;
 }
 

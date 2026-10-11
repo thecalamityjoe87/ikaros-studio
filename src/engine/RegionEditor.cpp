@@ -122,11 +122,16 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
         r.isMidi = true;
         auto contentOffset = contentOffsetBeats (clip);
 
+        // Recorded notes (and ones from older sessions) get their IDs the
+        // first time anyone looks at them.
+        assignNoteIds (*midi);
+
         for (auto* n : midi->getSequence().getNotes())
             r.notes.push_back ({ n->getNoteNumber(),
                                  n->getStartBeat().inBeats() + contentOffset,
                                  n->getLengthBeats().inBeats(),
-                                 n->getVelocity() });
+                                 n->getVelocity(),
+                                 getNoteId (*n) });
     }
     else
     {

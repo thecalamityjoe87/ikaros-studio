@@ -128,6 +128,45 @@ inline double timeToBeat (te::Edit& edit, te::TimePosition time)
     return edit.tempoSequence.toBeats (time).inBeats();
 }
 
+// Notes get an ID of their own, stored on the note's ValueTree so it's saved
+// with the session and restored by undo. Tracktion's notes don't have one.
+inline const juce::Identifier noteIdProp ("ikarosNoteId");
+
+inline NoteId getNoteId (const te::MidiNote& note)
+{
+    return (NoteId) (juce::int64) note.state.getProperty (noteIdProp, 0);
+}
+
+// Gives every note in the clip that hasn't got an ID yet (recorded notes,
+// notes from sessions saved before IDs existed) the next free one. Not an
+// undo step: an ID is bookkeeping, not an edit. (If an undo later removes
+// the note and a redo brings it back, it's the same ValueTree, ID included.)
+inline void assignNoteIds (te::MidiClip& clip)
+{
+    NoteId highest = 0;
+    bool anyMissing = false;
+
+    for (auto* n : clip.getSequence().getNotes())
+    {
+        highest = std::max (highest, getNoteId (*n));
+        anyMissing = anyMissing || getNoteId (*n) == 0;
+    }
+
+    if (anyMissing)
+        for (auto* n : clip.getSequence().getNotes())
+            if (getNoteId (*n) == 0)
+                n->state.setProperty (noteIdProp, (juce::int64) ++highest, nullptr);
+}
+
+inline te::MidiNote* findNote (te::MidiClip& clip, NoteId id)
+{
+    for (auto* n : clip.getSequence().getNotes())
+        if (getNoteId (*n) == id)
+            return n;
+
+    return nullptr;
+}
+
 // Looped regions: how far into the repeating part the region starts, in
 // beats (0 up to, not including, one loop's length). Tracktion lets the
 // clip's offset run past one loop (a split or a left trim does that), so

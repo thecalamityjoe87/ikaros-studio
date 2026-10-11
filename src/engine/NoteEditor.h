@@ -10,7 +10,7 @@ class AudioEngine;
 //==============================================================================
 /**
     Notes in a MIDI region (the piano roll). Positions are in beats from the
-    region start, and notes are identified by index (see NoteInfo).
+    region start, and notes are identified by their NoteId (see NoteInfo).
 
     Every method runs on the message thread and records into the session's
     UndoManager.
@@ -20,21 +20,19 @@ class NoteEditor
 public:
     explicit NoteEditor (AudioEngine&);
 
-    /** Adds a note and returns its index, or -1. */
-    int addNote (RegionId, const NoteInfo&);
+    /** Adds a note and returns its ID, or 0. */
+    NoteId addNote (RegionId, const NoteInfo&);
 
-    /** Notes are kept in time order, so changing one note can renumber the
-        others. After a change, map[oldIndex] is where each note is now. */
-    using NoteIndexMap = std::vector<int>;
+    /** Changes several notes in one undo step, e.g. a drag of a selection.
+        Each note's ID says which note it is; the rest is its new pitch,
+        position, length and velocity. */
+    void changeNotes (RegionId, const std::vector<NoteInfo>&, const juce::String& undoName);
 
-    /** Changes several notes in one undo step, e.g. a drag of a selection. */
-    NoteIndexMap changeNotes (RegionId, const std::vector<NoteChange>&, const juce::String& undoName);
-
-    void deleteNotes (RegionId, const std::vector<int>& indices);
+    void deleteNotes (RegionId, const std::vector<NoteId>&);
 
     /** Moves note starts to the nearest grid line (on the song's timeline).
         An empty list quantises every note in the region. */
-    NoteIndexMap quantiseNotes (RegionId, const std::vector<int>& indices, double gridBeats);
+    void quantiseNotes (RegionId, const std::vector<NoteId>&, double gridBeats);
 
 private:
     AudioEngine& owner;

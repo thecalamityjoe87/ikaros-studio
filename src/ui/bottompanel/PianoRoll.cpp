@@ -105,15 +105,28 @@ void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, double b
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
-    // Selection is by note index. If the notes changed behind our back (undo,
-    // recording), the indices may mean different notes now, so start afresh.
-    if (! sameRegion || ! sameNotes (r->notes, region->notes))
-        selected.clear();
-
     if (! sameRegion)
     {
+        selected.clear();
         gesture = {};
         needsFit = true;
+    }
+    else
+    {
+        // The selection is by note ID, so it survives edits; just drop notes
+        // that are gone (deleted, or undone).
+        std::erase_if (selected, [&r] (NoteId id)
+        {
+            return std::none_of (r->notes.begin(), r->notes.end(), [id] (const NoteInfo& n) { return n.id == id; });
+        });
+
+        // A drag works on a copy of the notes as they were at mouse-down. If
+        // they changed underneath it (an undo, recording), it can't go on.
+        if (gesture.mode != Gesture::Mode::none && ! sameNotes (r->notes, region->notes))
+        {
+            gesture = {};
+            stopPreview();
+        }
     }
 
     region = std::move (r);
@@ -156,7 +169,7 @@ void PianoRoll::setPlayheadBeat (double editBeat)
 void PianoRoll::rereadRegion()
 {
     // Called right after our own edits, so the notes on screen are always the
-    // engine's (and the index-based selection matches them).
+    // engine's.
     if (region.has_value())
         if (auto fresh = engine.getTracks().regions().getRegion (region->id))
             region = std::move (fresh);
@@ -436,41 +449,57 @@ bool PianoRoll::isNearNoteEnd (int index, juce::Point<int> p) const
 
 bool PianoRoll::isSelected (int index) const
 {
-    return std::binary_search (selected.begin(), selected.end(), index);
+    return std::binary_search (selected.begin(), selected.end(), region->notes[(size_t) index].id);
 }
 
 void PianoRoll::selectOnly (int index)
 {
-    selected = { index };
+    selected = { region->notes[(size_t) index].id };
     repaint();
 }
 
 void PianoRoll::toggleSelected (int index)
 {
+    const auto id = region->notes[(size_t) index].id;
+
     if (isSelected (index))
-        selected.erase (std::find (selected.begin(), selected.end(), index));
+        selected.erase (std::find (selected.begin(), selected.end(), id));
     else
-        selected.insert (std::upper_bound (selected.begin(), selected.end(), index), index);
+        selected.insert (std::upper_bound (selected.begin(), selected.end(), id), id);   // keeps it sorted
 
     repaint();
 }
 
-void PianoRoll::applyChanges (const std::vector<NoteChange>& changes, const juce::String& undoName)
+void PianoRoll::selectAll()
+{
+    selected.clear();
+
+    for (auto& n : region->notes)
+        selected.push_back (n.id);
+
+    std::sort (selected.begin(), selected.end());
+    repaint();
+}
+
+std::vector<int> PianoRoll::selectedIndices() const
+{
+    std::vector<int> indices;
+
+    if (region.has_value())
+        for (int i = 0; i < (int) region->notes.size(); ++i)
+            if (isSelected (i))
+                indices.push_back (i);
+
+    return indices;
+}
+
+void PianoRoll::applyChanges (const std::vector<NoteInfo>& changes, const juce::String& undoName)
 {
     if (changes.empty() || ! region.has_value())
         return;
 
-    // Changing notes can renumber them (they're kept in time order); the map
-    // says where each one went, so the same notes stay selected.
-    auto map = engine.getTracks().notes().changeNotes (region->id, changes, undoName);
-    std::vector<int> moved;
-
-    for (auto index : selected)
-        if (juce::isPositiveAndBelow (index, (int) map.size()) && map[(size_t) index] >= 0)
-            moved.push_back (map[(size_t) index]);
-
-    std::sort (moved.begin(), moved.end());
-    selected = moved;
+    // The selection is by ID, so it follows the notes wherever they move.
+    engine.getTracks().notes().changeNotes (region->id, changes, undoName);
     rereadRegion();
 }
 
@@ -490,36 +519,28 @@ void PianoRoll::quantize()
         return;
 
     // With the grid off, quantize to 1/16 notes.
-    auto map = engine.getTracks().notes().quantiseNotes (region->id, selected, gridBeats() > 0.0 ? gridBeats() : 0.25);
-    std::vector<int> moved;
-
-    for (auto index : selected)
-        if (juce::isPositiveAndBelow (index, (int) map.size()))
-            moved.push_back (map[(size_t) index]);
-
-    std::sort (moved.begin(), moved.end());
-    selected = moved;
+    engine.getTracks().notes().quantiseNotes (region->id, selected, gridBeats() > 0.0 ? gridBeats() : 0.25);
     rereadRegion();
 }
 
 void PianoRoll::nudgeSelected (double beats, int semitones)
 {
-    std::vector<NoteChange> changes;
+    std::vector<NoteInfo> changes;
 
-    for (auto index : selected)
+    for (auto index : selectedIndices())
     {
         auto note = region->notes[(size_t) index];
         note.startBeat = juce::jmax (0.0, note.startBeat + beats);
         note.pitch = juce::jlimit (0, 127, note.pitch + semitones);
-        changes.push_back ({ index, note });
+        changes.push_back (note);
     }
 
     applyChanges (changes, semitones != 0 ? "Transpose Notes" : "Move Notes");
 
-    if (semitones != 0 && selected.size() == 1)
+    if (auto moved = selectedIndices(); semitones != 0 && moved.size() == 1)
     {
         // Let the user hear the new pitch.
-        startPreview (region->notes[(size_t) selected.front()].pitch);
+        startPreview (region->notes[(size_t) moved.front()].pitch);
         juce::Timer::callAfterDelay (200, [safeThis = SafePointer<PianoRoll> (this)]
         {
             if (safeThis != nullptr && safeThis->gesture.mode == Gesture::Mode::none)
@@ -535,15 +556,7 @@ void PianoRoll::showNoteMenu()
     menu.addItem (juce::PopupMenu::Item (selected.empty() ? "Quantize All" : "Quantize")
                       .setAction ([this] { quantize(); }));
     menu.addSeparator();
-    menu.addItem (juce::PopupMenu::Item ("Select All").setAction ([this]
-    {
-        selected.clear();
-
-        for (int i = 0; i < (int) region->notes.size(); ++i)
-            selected.push_back (i);
-
-        repaint();
-    }));
+    menu.addItem (juce::PopupMenu::Item ("Select All").setAction ([this] { selectAll(); }));
 
     menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
 }
@@ -742,7 +755,7 @@ void PianoRoll::updateMove (juce::Point<int> pos)
     int semitones = yToPitch (pos.y) - yToPitch (gesture.start.y);
     double earliest = anchor.startBeat;
 
-    for (auto index : selected)
+    for (auto index : selectedIndices())
     {
         auto& n = original[(size_t) index];
         earliest = juce::jmin (earliest, n.startBeat);
@@ -754,7 +767,7 @@ void PianoRoll::updateMove (juce::Point<int> pos)
 
     gesture.notes = original;
 
-    for (auto index : selected)
+    for (auto index : selectedIndices())
     {
         gesture.notes[(size_t) index].startBeat += delta;
         gesture.notes[(size_t) index].pitch += semitones;
@@ -781,7 +794,7 @@ void PianoRoll::updateResize (juce::Point<int> pos)
 
     gesture.notes = original;
 
-    for (auto index : selected)
+    for (auto index : selectedIndices())
     {
         auto& n = gesture.notes[(size_t) index];
         n.lengthBeats = juce::jmax (juce::jmin (minLength, original[(size_t) index].lengthBeats), n.lengthBeats + delta);
@@ -800,7 +813,7 @@ void PianoRoll::updateVelocity (juce::Point<int> pos)
 
     gesture.notes = region->notes;
 
-    for (auto index : selected)
+    for (auto index : selectedIndices())
         gesture.notes[(size_t) index].velocity = juce::jlimit (1, 127, region->notes[(size_t) index].velocity + delta);
 
     repaint();
@@ -811,10 +824,11 @@ void PianoRoll::updateMarquee (juce::Point<int> pos)
     gesture.marquee = juce::Rectangle<int> (gesture.start, pos);
     selected.clear();
 
-    for (int i = 0; i < (int) region->notes.size(); ++i)
-        if (noteBounds (region->notes[(size_t) i]).intersects (gesture.marquee.toFloat()))
-            selected.push_back (i);
+    for (auto& n : region->notes)
+        if (noteBounds (n).intersects (gesture.marquee.toFloat()))
+            selected.push_back (n.id);
 
+    std::sort (selected.begin(), selected.end());
     repaint();
 }
 
@@ -828,10 +842,10 @@ void PianoRoll::mouseUp (const juce::MouseEvent&)
 
     auto changesFrom = [&] (const std::vector<NoteInfo>& notes)
     {
-        std::vector<NoteChange> changes;
+        std::vector<NoteInfo> changes;
 
-        for (auto index : selected)
-            changes.push_back ({ index, notes[(size_t) index] });
+        for (auto index : selectedIndices())
+            changes.push_back (notes[(size_t) index]);   // each keeps its ID: that says which note it is
 
         return changes;
     };
@@ -840,13 +854,14 @@ void PianoRoll::mouseUp (const juce::MouseEvent&)
     {
         case Gesture::Mode::draw:
         {
-            auto index = engine.getTracks().notes().addNote (region->id, finished.newNote);
+            const auto added = engine.getTracks().notes().addNote (region->id, finished.newNote);
             lastNoteLength = finished.newNote.lengthBeats;
             selected.clear();
-            rereadRegion();
 
-            if (index >= 0)
-                selectOnly (index);
+            if (added != 0)
+                selected.push_back (added);
+
+            rereadRegion();
             break;
         }
 
@@ -885,6 +900,25 @@ void PianoRoll::mouseUp (const juce::MouseEvent&)
 //==============================================================================
 bool PianoRoll::keyPressed (const juce::KeyPress& key)
 {
+    // Escape in the middle of a drag cancels it. Drags only change the
+    // roll's own copy of the notes until the mouse is released (see
+    // mouseUp), so forgetting the gesture puts everything back and nothing
+    // reaches the session.
+    if (key == juce::KeyPress::escapeKey)
+    {
+        using Mode = Gesture::Mode;
+        const auto mode = gesture.mode;
+
+        if (mode == Mode::draw || mode == Mode::pendingMove || mode == Mode::move
+             || mode == Mode::resize || mode == Mode::velocity)
+        {
+            gesture = {};
+            stopPreview();
+            repaint();
+            return true;
+        }
+    }
+
     if (! region.has_value() || ! region->isMidi)
         return false;
 
@@ -901,12 +935,7 @@ bool PianoRoll::keyPressed (const juce::KeyPress& key)
 
     if (key == juce::KeyPress ('a', juce::ModifierKeys::commandModifier, 0))
     {
-        selected.clear();
-
-        for (int i = 0; i < (int) region->notes.size(); ++i)
-            selected.push_back (i);
-
-        repaint();
+        selectAll();
         return true;
     }
 

@@ -21,20 +21,23 @@ namespace ikaros
 using TrackId  = std::uint64_t;
 using RegionId = std::uint64_t;
 using PluginId = std::uint64_t;
+using NoteId   = std::uint64_t;   // unique within its region; 0 means "none"
 
 // Instrument tracks play a synth from MIDI; audio tracks record a microphone,
 // guitar or other audio input.
 enum class TrackKind { instrument, audio };
 
-// Notes have no IDs of their own. A note is identified by its index in
-// RegionInfo::notes, which stays valid until the region is next edited, so
-// the piano roll re-reads the region after every change.
+// A note in a MIDI region. Its ID stays the same through moves, quantize,
+// undo/redo and saving, so the piano roll can keep track of which notes are
+// selected. (A copied or split region's notes keep their IDs, which is fine:
+// a note is always identified by region and ID together.)
 struct NoteInfo
 {
     int pitch = 60;            // MIDI note number
     double startBeat = 0.0;    // relative to the start of the region
     double lengthBeats = 1.0;
     int velocity = 100;        // 1..127
+    NoteId id = 0;             // 0 for a note that hasn't been added yet
 
     // C++20: "= default" makes == compare every member in turn.
     bool operator== (const NoteInfo&) const = default;
@@ -78,13 +81,6 @@ struct RegionPlacement
     RegionId id = 0;
     TrackId track = 0;
     double startBeat = 0.0;
-};
-
-// A changed note for TrackController::changeNotes.
-struct NoteChange
-{
-    int index = 0;             // which note (its index in RegionInfo::notes)
-    NoteInfo note;             // its new pitch, position, length and velocity
 };
 
 struct TrackInfo

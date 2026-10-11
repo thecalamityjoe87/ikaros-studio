@@ -72,6 +72,9 @@ public:
     /** The nearest grid line to a beat (or the beat itself with snap off). */
     double snapBeat (double beat) const;
 
+    /** The distance between grid lines in beats (0 with snap off). */
+    double getSnapBeats() const;
+
     void zoomIn();
     void zoomOut();
 

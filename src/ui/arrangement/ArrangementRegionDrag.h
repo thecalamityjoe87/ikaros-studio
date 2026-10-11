@@ -20,6 +20,11 @@ public:
     void regionMouseDrag (RegionComponent&, const juce::MouseEvent&);
     void regionMouseUp (RegionComponent&, const juce::MouseEvent&);
 
+    /** Escape: abandons a move, trim or loop drag in progress, putting every
+        region back as it was. Nothing reaches the session (drags only change
+        it on mouse-up). Returns false if there was nothing to cancel. */
+    bool cancel();
+
     /** True from a mouse-down on a region until the mouse-up (including a
         click that hasn't moved far enough to count as a drag yet). */
     bool isDragging() const noexcept    { return drag.mode != Drag::Mode::none; }

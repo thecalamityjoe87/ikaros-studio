@@ -407,6 +407,9 @@ bool RegionComponent::keyPressed (const juce::KeyPress& key)
 {
     // Delete, copy, paste etc. are app commands (see MainComponent), so they
     // also work from the menus. Return is the one key a region handles itself.
+    if (key == juce::KeyPress::escapeKey && onEscape && onEscape())
+        return true;
+
     if (key == juce::KeyPress::returnKey && onOpenEditor)
     {
         onOpenEditor();
