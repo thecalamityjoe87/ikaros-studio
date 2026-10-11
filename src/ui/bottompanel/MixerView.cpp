@@ -3,6 +3,7 @@
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
 #include <array>
+#include <tuple>
 
 namespace ikaros
 {
@@ -103,8 +104,13 @@ public:
 
     bool isMaster() const   { return trackId == 0; }
 
+    // What paint() draws as text and colour, to tell whether a repaint is due.
+    // (The fader and knobs redraw themselves when their values change.)
+    auto drawnState() const   { return std::make_tuple (name, colour, selected, dbText, panText, sendTexts); }
+
     void update (const TrackInfo& t, bool isSelected)
     {
+        const auto before = drawnState();
         name = t.name;
         colour = t.colour;
         selected = isSelected;
@@ -135,11 +141,13 @@ public:
         if (! pan.isMouseButtonDown())
             pan.setValue (t.pan, juce::dontSendNotification);
 
-        repaint();
+        if (drawnState() != before)
+            repaint();
     }
 
     void updateMaster (float volume, float volumeDb)
     {
+        const auto before = drawnState();
         name = "Master";
         colour = colour::accent;
         dbText = describeDb (volumeDb);
@@ -147,7 +155,8 @@ public:
         if (! fader.isMouseButtonDown())
             fader.setValue (volume, juce::dontSendNotification);
 
-        repaint();
+        if (drawnState() != before)
+            repaint();
     }
 
     void setLevel (StereoLevel l)   { meter.setLevel (l); }

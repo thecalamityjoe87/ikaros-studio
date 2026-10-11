@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include <tuple>
 
 namespace ikaros
 {
@@ -101,6 +102,13 @@ void TrackHeader::updateAccessibleNames()
 
 void TrackHeader::update (const TrackInfo& t, bool isSelected)
 {
+    // Only redraw the header itself if something paint() draws changed. The
+    // buttons and knobs redraw themselves when their own values change.
+    // (std::tie bundles references to the members, so the two sets compare
+    // in one go.)
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.category, i.colour, i.muted, i.silencedBySolo); };
+    const bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
+
     info = t;
     selected = isSelected;
 
@@ -130,7 +138,9 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     if (wasAudio != monitorButton.isVisible())
         resized();
     updateAccessibleNames();
-    repaint();
+
+    if (needsRepaint)
+        repaint();
 }
 
 void TrackHeader::mouseDown (const juce::MouseEvent& e)

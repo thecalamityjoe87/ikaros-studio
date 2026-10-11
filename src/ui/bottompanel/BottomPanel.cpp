@@ -392,8 +392,23 @@ void BottomPanel::updateTabButtons()
 
 void BottomPanel::refresh()
 {
-    auto& tc = engine.getTracks();
-    track = tc.getTrack (selection.getTrack());
+    refreshTrack();
+    refreshEditor();
+}
+
+void BottomPanel::refresh (const ModelChanges& changes)
+{
+    if (changes.session || changes.tracks || changes.mixer || changes.transport)
+        refreshTrack();
+
+    // A pure knob turn can't change which region the Editor shows or what's in it.
+    if (changes.session || changes.tracks || changes.regions || changes.transport || ! changes.changedRegions.empty())
+        refreshEditor();
+}
+
+void BottomPanel::refreshTrack()
+{
+    track = engine.getTracks().getTrack (selection.getTrack());
 
     // Switching tracks leaves the previous track's effect settings.
     if (isShowingEffect() && effectEditor->getTrackId() != selection.getTrack())
@@ -401,6 +416,16 @@ void BottomPanel::refresh()
 
     inspector.refresh();
     soundPage->refresh (track, detailsVisible);
+
+    if (mixer.isVisible())
+        mixer.refresh();
+
+    repaint (headerArea);
+}
+
+void BottomPanel::refreshEditor()
+{
+    auto& tc = engine.getTracks();
 
     // Editor: the selected region, or else the selected track's first MIDI region.
     std::optional<RegionInfo> region;
@@ -413,11 +438,6 @@ void BottomPanel::refresh()
             if (r.isMidi) { region = r; break; }
 
     pianoRoll.setRegion (region, track.has_value() ? track->colour : colour::accent, engine.beatsPerBar());
-
-    if (mixer.isVisible())
-        mixer.refresh();
-
-    repaint (headerArea);
 }
 
 void BottomPanel::update()

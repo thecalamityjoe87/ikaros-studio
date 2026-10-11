@@ -52,6 +52,47 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
     lanes = std::move (nextLanes);
 }
 
+bool ArrangementView::Content::syncTracks (const std::vector<TrackInfo>& tracks)
+{
+    if (tracks.size() != order.size())
+        return false;
+
+    for (size_t i = 0; i < tracks.size(); ++i)
+        if (tracks[i].id != order[i])
+            return false;
+
+    auto selectedTrack = owner.selection.getTrack();
+
+    for (auto& t : tracks)
+    {
+        headers[t.id]->update (t, t.id == selectedTrack);
+        lanes[t.id]->updateTrack (t, t.id == selectedTrack);
+    }
+
+    return true;
+}
+
+bool ArrangementView::Content::syncRegion (const RegionInfo& info)
+{
+    auto it = lanes.find (info.trackId);
+
+    if (it == lanes.end() || it->second->findRegion (info.id) == nullptr)
+        return false;
+
+    it->second->updateRegion (info);
+    return true;
+}
+
+double ArrangementView::Content::getEndBeat() const
+{
+    double end = 0.0;
+
+    for (auto& [id, lane] : lanes)
+        end = juce::jmax (end, lane->getEndBeat());
+
+    return end;
+}
+
 TrackHeader* ArrangementView::Content::findHeader (TrackId id) const
 {
     auto it = headers.find (id);

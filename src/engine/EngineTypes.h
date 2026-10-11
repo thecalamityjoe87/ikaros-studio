@@ -10,6 +10,7 @@
 #include <juce_graphics/juce_graphics.h>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <vector>
 
 namespace ikaros
@@ -34,6 +35,9 @@ struct NoteInfo
     double startBeat = 0.0;    // relative to the start of the region
     double lengthBeats = 1.0;
     int velocity = 100;        // 1..127
+
+    // C++20: "= default" makes == compare every member in turn.
+    bool operator== (const NoteInfo&) const = default;
 };
 
 struct RegionInfo
@@ -53,6 +57,8 @@ struct RegionInfo
     double maxEndBeat = std::numeric_limits<double>::max();
 
     double getEndBeat() const noexcept    { return startBeat + lengthBeats; }
+
+    bool operator== (const RegionInfo&) const = default;   // compares every member, notes and peaks included
 };
 
 // Where a region should end up after a move: a track and a start beat.
@@ -91,6 +97,51 @@ struct TrackInfo
     float pan = 0.0f;              // -1 (left) .. 0 (centre) .. 1 (right)
     float reverbSend = 0.0f;       // sends to the shared buses, 0..1 (see SendBuses)
     float delaySend = 0.0f;
+};
+
+// What changed in the session since the UI last heard, so it only re-reads
+// what it needs: turning a knob shouldn't rebuild every region's waveform.
+// Several changes can arrive together (the engine collects them for a moment
+// before telling the UI), so these are flags rather than a single kind.
+struct ModelChanges
+{
+    bool tracks = false;       // tracks added, removed, reordered, renamed, armed; a new sound or effect
+    bool regions = false;      // regions added to or removed from tracks: re-read every region
+    bool notes = false;        // notes inside MIDI regions (see changedRegions for which)
+    bool mixer = false;        // volume, pan, sends and plug-in settings (knobs)
+    bool transport = false;    // tempo, time signature or key, which move regions on the beat grid
+    bool session = false;      // the session was replaced or saved, or something unknown: re-read everything
+
+    // Regions whose own settings (position, length, name) or notes changed.
+    // Only these need re-reading, unless `regions` is set too.
+    std::set<RegionId> changedRegions;
+
+    /** A change set that makes the UI re-read everything. */
+    static ModelChanges everything()   { ModelChanges c; c.session = true; return c; }
+
+    /** True if anything at all changed. */
+    bool any() const
+    {
+        return tracks || regions || notes || mixer || transport || session || ! changedRegions.empty();
+    }
+
+    /** True if anything about this region (or the whole region list) changed. */
+    bool affectsRegion (RegionId id) const
+    {
+        return session || regions || transport || changedRegions.count (id) > 0;
+    }
+
+    /** Adds another change set's flags and regions to this one. */
+    void merge (const ModelChanges& other)
+    {
+        tracks |= other.tracks;
+        regions |= other.regions;
+        notes |= other.notes;
+        mixer |= other.mixer;
+        transport |= other.transport;
+        session |= other.session;
+        changedRegions.insert (other.changedRegions.begin(), other.changedRegions.end());
+    }
 };
 
 // Stereo peak level in decibels.

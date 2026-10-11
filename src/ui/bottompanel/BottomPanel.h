@@ -47,6 +47,11 @@ public:
     /** Re-reads the selected track/region from the engine (model or selection changed). */
     void refresh();
 
+    /** Re-reads only what these session changes affect: a knob turned on
+        the Mixer doesn't need the piano roll re-read, and a note dragged
+        doesn't need the track's effects re-read. */
+    void refresh (const ModelChanges&);
+
     /** Meters and the piano-roll playhead. Called by the owner's ~30 Hz timer. */
     void update();
 
@@ -98,6 +103,8 @@ private:
     std::optional<TrackInfo> track;
     juce::Rectangle<int> headerArea, tabsArea, contentArea;
 
+    void refreshTrack();     // the inspector, Sound tab and Mixer
+    void refreshEditor();    // the piano roll
     void updateTabButtons();
     void showTabPage();
     void layoutEffectEditor();

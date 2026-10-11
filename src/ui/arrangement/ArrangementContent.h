@@ -18,8 +18,20 @@ public:
     void sync (const std::vector<TrackInfo>& tracks,
                const std::map<TrackId, std::vector<RegionInfo>>& regions);
 
+    /** Updates the headers and lanes of the tracks already shown, without
+        re-reading their regions. Returns false (and does nothing) if the
+        tracks themselves changed: added, removed or reordered. */
+    bool syncTracks (const std::vector<TrackInfo>& tracks);
+
+    /** Updates one region already shown on its track's lane. Returns false
+        if it isn't there (it's new, or moved to another track). */
+    bool syncRegion (const RegionInfo&);
+
     TrackHeader* findHeader (TrackId) const;
     RegionComponent* findRegion (RegionId) const;
+
+    /** Where the last region on any track ends. */
+    double getEndBeat() const;
 
     /** Re-positions regions and redraws the grid after a zoom or scroll. */
     void timelineChanged();

@@ -128,6 +128,66 @@ int main (int argc, char* argv[])
         check (std::abs (tracks.getTrack (t1)->volume - 0.5f) < 0.01f, "redo re-applies it");
 
         pumpMessages();
+        std::cout << "Change notifications\n";
+        {
+            // Collects what the engine reports, like MainComponent does.
+            struct Recorder  : public AudioEngine::Listener
+            {
+                ModelChanges heard;
+                int calls = 0;
+                void sessionChanged (const ModelChanges& c) override   { heard.merge (c); ++calls; }
+            };
+
+            Recorder recorder;
+            engine.addListener (&recorder);
+
+            auto hear = [&] (auto&& doEdit)
+            {
+                recorder.heard = {};
+                recorder.calls = 0;
+                doEdit();
+                pumpMessages();
+                return recorder.heard;
+            };
+
+            auto knob = hear ([&] { engine.beginUndoStep ("Pan"); tracks.setPan (t2, 0.3f); });
+            check (knob.mixer && ! knob.regions && ! knob.notes && knob.changedRegions.empty() && ! knob.session,
+                   "a pan change is reported as a mixer change only");
+
+            auto note = hear ([&] { engine.beginUndoStep ("Add Note"); tracks.notes().addNote (r1, { 72, 0.0, 1.0, 100 }); });
+            check (note.notes && note.changedRegions == std::set<RegionId> { r1 } && ! note.regions && ! note.mixer,
+                   "adding a note reports that region's notes only");
+
+            auto rename = hear ([&] { tracks.regions().renameRegion (r1, "Verse"); });
+            check (rename.changedRegions.count (r1) == 1 && ! rename.regions && ! rename.notes,
+                   "renaming a region reports just that region");
+
+            RegionId added = 0;
+            auto newRegion = hear ([&] { added = tracks.regions().createChordRegion (t2, 40.0); });
+            check (added != 0 && newRegion.regions, "a new region is reported as a region-list change");
+
+            auto newTrack = hear ([&] { tracks.addInstrumentTrack(); });
+            check (newTrack.tracks, "a new track is reported as a track change");
+
+            auto playhead = hear ([&] { engine.setPositionBeats (8.0); });
+            check (recorder.calls == 0, "moving the playhead isn't reported (the UI polls it)");
+
+            auto undone = hear ([&] { engine.undo(); });   // the new track
+            check (undone.tracks, "undo reports what it changed");
+
+            engine.undo();   // the new region
+            engine.undo();   // the rename
+            engine.undo();   // the note
+            engine.undo();   // the pan
+            pumpMessages();
+            check (tracks.getTrack (t2)->pan == 0.0f && tracks.regions().getRegion (r1)->notes.size() == 4 * 7,
+                   "undoing the test edits restores the session");
+
+            juce::ignoreUnused (playhead);
+            engine.removeListener (&recorder);
+        }
+
+        pumpMessages();
         std::cout << "Transport\n";
         engine.setBpm (96.0);
         engine.setLooping (true);

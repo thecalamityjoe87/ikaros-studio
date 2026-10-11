@@ -42,19 +42,29 @@ using PluginWindowFactory = std::function<std::unique_ptr<juce::Component> (Plug
     Responsibilities: session lifecycle (new/open/save), the transport, tempo,
     undo/redo, and global meters/stats. Track-level work lives in TrackController.
 
-    Change notification: AudioEngine is a juce::ChangeBroadcaster. It sends a
-    change message (always on the message thread, coalesced) whenever the
-    session is replaced or the session model changes (tracks, regions, mute,
-    undo, ...). Fast-moving state (playhead, meters) is *not* broadcast; the UI
-    polls it on a Timer instead.
+    Change notification: listeners hear (always on the message thread, a
+    moment after the edit, with bursts of changes collected into one call)
+    whenever the session is replaced or its model changes, along with what
+    kind of thing changed (see ModelChanges). Fast-moving state (playhead,
+    meters) is *not* broadcast; the UI polls it on a Timer instead.
 */
-class AudioEngine  : public juce::ChangeBroadcaster
+class AudioEngine
 {
 public:
+    /** Implement this to hear about session changes. */
+    struct Listener
+    {
+        virtual ~Listener() = default;
+        virtual void sessionChanged (const ModelChanges&) = 0;
+    };
+
+    void addListener (Listener* l)        { listeners.add (l); }
+    void removeListener (Listener* l)     { listeners.remove (l); }
+
     /** settingsName picks where Tracktion keeps its settings (devices, the
         plug-in list...). Tests use their own, so they don't touch the app's. */
     explicit AudioEngine (const juce::String& settingsName = "IkarosStudio");
-    ~AudioEngine() override;
+    ~AudioEngine();
 
     //==============================================================================
     // Sessions ("Sessions" in the UI). Like a GarageBand project, a saved
@@ -189,7 +199,14 @@ private:
     tracktion::Edit* getEdit() const noexcept;
 
     void loadEdit (const juce::ValueTree& editState, const juce::File&, bool untitled);
-    void notifyModelChanged();
+
+    /** Tells listeners (soon, on the message thread) that this changed. Most
+        changes are spotted automatically by watching the session's ValueTree;
+        call this for changes that don't live there (arming, plug-in scans). */
+    void notifyModelChanged (const ModelChanges& = ModelChanges::everything());
+
+    // ListenerList is safe even if a listener removes itself while being called.
+    juce::ListenerList<Listener> listeners;
 
     struct Impl;                                // Tracktion-typed members live in the .cpp
     std::unique_ptr<Impl> impl;

@@ -35,6 +35,12 @@ RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
 
 void RegionComponent::update (const RegionInfo& r, juce::Colour c, bool isSelected)
 {
+    // Drawing thousands of notes is far slower than comparing them, so skip
+    // the repaint when nothing this region shows has changed (e.g. another
+    // track's knob was turned).
+    if (r == info && c == colour && isSelected == selected)
+        return;
+
     info = r;
     colour = c;
     selected = isSelected;

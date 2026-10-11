@@ -20,14 +20,16 @@ namespace ikaros
     and bottom panel, and handles every application command (menus + shortcuts).
 
     It also drives the UI's two refresh paths:
-      - model changes (tracks, regions, undo...) arrive as change messages from
-        AudioEngine and trigger a full refresh();
+      - model changes (tracks, regions, undo...) arrive from AudioEngine with
+        what kind of thing changed (ModelChanges), and only the parts of the
+        window that show it re-read the engine;
       - fast-moving state (playhead, meters, CPU) is polled by a 30 Hz Timer.
 */
 class MainComponent  : public juce::Component,
                        public juce::ApplicationCommandTarget,
                        public juce::DragAndDropContainer,   // library files dragged onto the timeline
-                       private juce::ChangeListener,
+                       private AudioEngine::Listener,        // session changes
+                       private juce::ChangeListener,         // selection changes
                        private juce::Timer
 {
 public:
@@ -75,6 +77,17 @@ private:
     int resizeStartSize = 0;   // the panel's size when a resize drag started
 
     void refreshAll();
+
+    // What the menu bar shows about the session, so it's only told when that changes.
+    struct SessionStatus
+    {
+        juce::String name;
+        bool untitled = true, unsaved = false;
+        bool operator== (const SessionStatus&) const = default;   // C++20: compares every member
+    };
+
+    std::optional<SessionStatus> shownSessionStatus;
+    void updateSessionStatus();
     void setLibraryVisible (bool);
     void setBottomPanelVisible (bool);
     void setUpResizers();
@@ -84,6 +97,7 @@ private:
         selected track's regions. */
     std::vector<RegionId> getRegionsToSplit() const;
     bool canSplitAtPlayhead() const;
+    void sessionChanged (const ModelChanges&) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 

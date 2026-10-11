@@ -359,36 +359,177 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     }
 
 private:
-    juce::ValueTree observedState;
-
-    // The transport writes its position into the Edit's ValueTree many times a
-    // second while playing. Those changes aren't "model" changes, so skip them.
-    static bool isTransportState (juce::ValueTree v)
-    {
-        for (; v.isValid(); v = v.getParent())
-            if (v.hasType (te::IDs::TRANSPORT))
-                return true;
-
-        return false;
-    }
-
     // ValueTree::Listener callbacks can fire many times for a single user action
-    // (and occasionally off the message thread). AsyncUpdater coalesces them
-    // into one callback on the message thread.
+    // (and occasionally off the message thread). Each one adds what it touched
+    // to `pending`, and AsyncUpdater coalesces them into one callback on the
+    // message thread, which hands the whole lot to the listeners.
     void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier&) override
     {
-        if (! isTransportState (v))
-            triggerAsyncUpdate();
+        addTreeChange (classifyChange (v, {}));
     }
 
-    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override          { triggerAsyncUpdate(); }
-    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override   { triggerAsyncUpdate(); }
-    void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override           { triggerAsyncUpdate(); }
+    void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override
+    {
+        addTreeChange (classifyChange (parent, child));
+    }
+
+    void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override
+    {
+        addTreeChange (classifyChange (parent, child));
+    }
+
+    void valueTreeChildOrderChanged (juce::ValueTree& parent, int, int) override
+    {
+        addTreeChange (classifyChange (parent, {}));
+    }
+
+    /** Works out what kind of thing a change touched from where it happened
+        in the session's ValueTree. `tree` is the tree whose property changed,
+        or the parent a child was added to or removed from (`child`).
+
+        The Edit's tree looks roughly like this:
+
+            EDIT
+              TEMPOSEQUENCE, PITCHSEQUENCE   tempo, time signature, key
+              TRANSPORT                      playhead, loop range
+              MASTERVOLUME, MASTERPLUGINS    the master channel
+              INPUTDEVICES                   which inputs record onto which track
+              TRACK                          one per track (also folder/marker tracks)
+                MIDICLIP / AUDIOCLIP         a region
+                  SEQUENCE / NOTE            a MIDI region's notes
+                PLUGIN                       instrument, effects, volume/pan, sends
+                  (parameters, automation)
+    */
+    static ModelChanges classifyChange (const juce::ValueTree& tree, const juce::ValueTree& child)
+    {
+        ModelChanges c;
+
+        // Walk up from the changed tree, remembering the interesting
+        // ancestors on the way. (A clip's notes sit inside its SEQUENCE, so
+        // e.g. a NOTE property change passes SEQUENCE, then the clip.)
+        juce::ValueTree clip, plugin;
+        bool inSequence = false;
+
+        for (auto t = tree; t.isValid(); t = t.getParent())
+        {
+            // The transport writes its position here many times a second
+            // while playing. Nothing to re-read: the UI polls it.
+            if (t.hasType (te::IDs::TRANSPORT))
+                return c;
+
+            if (t.hasType (te::IDs::TEMPOSEQUENCE) || t.hasType (te::IDs::PITCHSEQUENCE))
+            {
+                c.transport = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::MASTERVOLUME) || t.hasType (te::IDs::MASTERPLUGINS))
+            {
+                c.mixer = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::INPUTDEVICES))
+            {
+                c.tracks = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::SEQUENCE))
+                inSequence = true;
+
+            if (! clip.isValid() && te::Clip::isClipState (t))
+                clip = t;
+
+            if (! plugin.isValid() && t.hasType (te::IDs::PLUGIN))
+                plugin = t;
+
+            if (te::TrackList::isTrack (t))
+                break;
+
+            // Tracktion stamps the time of the last change on the Edit itself
+            // after every edit; there's nothing to re-read for that.
+            if (t.hasType (te::IDs::EDIT))
+            {
+                if (te::TrackList::isTrack (child))
+                    c.tracks = c.regions = true;   // a track added or removed (with its regions)
+                else if (child.isValid())
+                    c.session = true;              // something we don't know: play safe
+
+                return c;
+            }
+        }
+
+        if (clip.isValid())
+        {
+            // Something inside one region: its notes, or its own settings.
+            const auto id = te::EditItemID::fromID (clip).getRawID();
+            c.changedRegions.insert (id);
+            c.notes = inSequence;
+            return c;
+        }
+
+        if (plugin.isValid())
+        {
+            // Inside a plug-in: a knob turned (volume, pan, a send, an
+            // effect's setting) or its automation. (Adding or removing a
+            // plug-in happens on the track, below.)
+            c.mixer = true;
+            return c;
+        }
+
+        // On a track itself: a region or a plug-in added/removed, or one of
+        // the track's own settings (name, colour, sound, mute...).
+        if (te::Clip::isClipState (child))
+            c.regions = true;
+        else
+            c.tracks = true;
+
+        return c;
+    }
+
+    // Changes that touch nothing the UI shows (the playhead, Tracktion's own
+    // "last changed" time stamp) aren't worth waking the listeners for.
+    void addTreeChange (const ModelChanges& c)
+    {
+        if (c.any())
+            addPending (c);
+    }
+
+    // `pending` can be written off the message thread (see above), so a lock
+    // guards it. ScopedLock holds the lock until the end of the block.
+    juce::CriticalSection pendingLock;
+    ModelChanges pending;
+
+public:
+    /** Adds to the changes the listeners will hear about, and schedules the call. */
+    void addPending (const ModelChanges& c)
+    {
+        {
+            const juce::ScopedLock sl (pendingLock);
+            pending.merge (c);
+        }
+
+        triggerAsyncUpdate();
+    }
+
+private:
+    juce::ValueTree observedState;
 
     void handleAsyncUpdate() override
     {
+        ModelChanges changes;
+
+        {
+            const juce::ScopedLock sl (pendingLock);
+            std::swap (changes, pending);
+        }
+
         lastModelChange = juce::Time::getMillisecondCounter();
-        owner.sendChangeMessage();
+
+        // Spelled out in full: inside Impl, plain "Listener" would mean the
+        // juce::ValueTree::Listener we inherit from.
+        owner.listeners.call ([&changes] (AudioEngine::Listener& l) { l.sessionChanged (changes); });
     }
 
     void timerCallback() override
@@ -406,7 +547,7 @@ private:
         {
             edit->getUndoManager().clearUndoHistory();
             edit->resetChangedStatus();
-            owner.sendChangeMessage();
+            addPending ({});   // nothing to re-read, but Undo is no longer available
         }
     }
 
@@ -749,9 +890,9 @@ bool AudioEngine::hasUnsavedChanges() const
     return impl->edit != nullptr && impl->edit->hasChangedSinceSaved();
 }
 
-void AudioEngine::notifyModelChanged()
+void AudioEngine::notifyModelChanged (const ModelChanges& changes)
 {
-    sendChangeMessage();
+    impl->addPending (changes);
 }
 
 //==============================================================================

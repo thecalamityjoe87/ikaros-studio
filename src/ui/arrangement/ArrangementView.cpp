@@ -96,20 +96,47 @@ void ArrangementView::refresh()
     tracks = tc.getTracks();
 
     std::map<TrackId, std::vector<RegionInfo>> regions;
-    contentEndBeat = 0.0;
 
     for (auto& t : tracks)
-    {
-        auto& list = regions[t.id] = tc.regions().getRegions (t.id);
-
-        for (auto& r : list)
-            contentEndBeat = juce::jmax (contentEndBeat, r.getEndBeat());
-    }
+        regions[t.id] = tc.regions().getRegions (t.id);
 
     geometry.beatsPerBar = engine.beatsPerBar();
     content->sync (tracks, regions);
+    contentEndBeat = content->getEndBeat();
     layoutContent();
     timelineChanged();
+}
+
+void ArrangementView::refreshTracks()
+{
+    tracks = engine.getTracks().getTracks();
+
+    if (! content->syncTracks (tracks))
+        refresh();
+}
+
+void ArrangementView::refreshRegions (const std::set<RegionId>& ids)
+{
+    for (auto id : ids)
+    {
+        auto info = engine.getTracks().regions().getRegion (id);
+
+        if (! info.has_value() || ! content->syncRegion (*info))
+        {
+            refresh();
+            return;
+        }
+    }
+
+    // A region may now end later (or earlier), which changes how far the
+    // timeline scrolls.
+    const auto end = content->getEndBeat();
+
+    if (end != contentEndBeat)
+    {
+        contentEndBeat = end;
+        timelineChanged();
+    }
 }
 
 void ArrangementView::layoutContent()

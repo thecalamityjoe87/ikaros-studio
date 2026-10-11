@@ -18,8 +18,19 @@ public:
     void focusGained (FocusChangeType) override;
     void focusLost (FocusChangeType) override    { showFocusRing = false; repaint(); }
 
+    /** Re-reads everything: the track's settings and all its regions. */
     void update (const TrackInfo&, const std::vector<RegionInfo>& regionInfos, bool isSelected);
+
+    /** Just the track's settings (colour, mute, selection), keeping the regions. */
+    void updateTrack (const TrackInfo&, bool isSelected);
+
+    /** Just one region, which must already be on this lane. */
+    void updateRegion (const RegionInfo&);
+
     RegionComponent* findRegion (RegionId) const;
+
+    /** Where the last region on this lane ends (0 if it has none). */
+    double getEndBeat() const;
 
     /** The take being recorded on this lane, from startBeat to the playhead
         (nothing when endBeat <= startBeat). */
@@ -38,6 +49,8 @@ private:
     bool selected = false, isAudio = false, showFocusRing = false;
     double recordStart = 0.0, recordEnd = 0.0;
     std::map<RegionId, std::unique_ptr<RegionComponent>> regions;
+
+    void setTrackInfo (const TrackInfo&, bool isSelected);
 };
 
 } // namespace ikaros

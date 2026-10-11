@@ -51,7 +51,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     juce::MenuBarModel::setMacMainMenu (&menuModel);
    #endif
 
-    engine.addChangeListener (this);
+    engine.addListener (this);
     selection.addChangeListener (this);
 
     // Third-party plug-in windows: the engine supplies the plug-in's editor,
@@ -84,7 +84,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 MainComponent::~MainComponent()
 {
     stopTimer();
-    engine.removeChangeListener (this);
+    engine.removeListener (this);
     selection.removeChangeListener (this);
     engine.setPluginWindowFactory (nullptr);
     engine.getPlugins().cancelScan();
@@ -213,18 +213,68 @@ void MainComponent::refreshAll()
     arrangement.refresh();
     bottomPanel.refresh();
     library.refresh();
-    menuBar.setSessionStatus (engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges());
+    updateSessionStatus();
 
     // Tells menus and shortcuts to re-query getCommandInfo (e.g. Undo enabled).
     commands.commandStatusChanged();
 }
 
-void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
-{
-    if (source == &engine)
-        selection.validate();   // the selected track/region may have been undone or the session replaced
 
-    refreshAll();
+void MainComponent::sessionChanged (const ModelChanges& changes)
+{
+    // The selected track or region may have been deleted, undone, or gone
+    // with the old session. (Notes and knobs can't remove either.)
+    if (changes.session || changes.tracks || changes.regions)
+        selection.validate();
+
+    if (changes.session)
+    {
+        refreshAll();
+        return;
+    }
+
+    // Tempo, time signature and key move every region on the beat grid.
+    if (changes.regions || changes.transport)
+    {
+        arrangement.refresh();
+    }
+    else
+    {
+        if (changes.tracks || changes.mixer)
+            arrangement.refreshTracks();
+
+        if (! changes.changedRegions.empty())
+            arrangement.refreshRegions (changes.changedRegions);
+    }
+
+    bottomPanel.refresh (changes);
+
+    if (changes.tracks)
+        library.refresh();   // the selected track's sound is highlighted there
+
+    updateSessionStatus();
+    commands.commandStatusChanged();
+}
+
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // The selection changed: the regions themselves didn't, so only the
+    // highlights, the bottom panel and the library's highlighted sound move.
+    arrangement.refreshTracks();
+    bottomPanel.refresh();
+    library.refresh();
+    commands.commandStatusChanged();
+}
+
+void MainComponent::updateSessionStatus()
+{
+    const SessionStatus status { engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges() };
+
+    if (status != shownSessionStatus)
+    {
+        shownSessionStatus = status;
+        menuBar.setSessionStatus (status.name, status.untitled, status.unsaved);
+    }
 }
 
 juce::Component::WindowControlKind MainComponent::getWindowControlAt (juce::Point<float> p) const
@@ -243,7 +293,7 @@ void MainComponent::timerCallback()
     arrangement.updateTransport();
     bottomPanel.update();
     library.update();
-    menuBar.setSessionStatus (engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges());
+    updateSessionStatus();   // "unsaved" isn't broadcast, so check it here (cheap: it only tells the menu bar on a change)
 }
 
 //==============================================================================

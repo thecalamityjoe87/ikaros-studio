@@ -243,7 +243,10 @@ void InputRouter::setArmed (TrackId id, bool shouldArm)
         allNotesOff();
         armedTrack = newArmed;
         routeMidiInputs();
-        owner.notifyModelChanged();
+
+        ModelChanges changes;
+        changes.tracks = true;   // the Record buttons
+        owner.notifyModelChanged (changes);
     }
 }
 

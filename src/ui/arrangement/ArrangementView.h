@@ -51,6 +51,15 @@ public:
     /** Re-reads tracks and regions from the engine. Call after model changes. */
     void refresh();
 
+    /** Re-reads only the tracks' own settings (names, mute, volume, the
+        selection), not their regions. Falls back to refresh() if tracks were
+        added, removed or reordered. */
+    void refreshTracks();
+
+    /** Re-reads only these regions. Falls back to refresh() if one of them
+        is new, gone, or on another track. */
+    void refreshRegions (const std::set<RegionId>&);
+
     /** Updates the playhead and loop bar. Called by the owner's ~30 Hz timer. */
     void updateTransport();
 
