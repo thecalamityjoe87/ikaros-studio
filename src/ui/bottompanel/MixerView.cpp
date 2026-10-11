@@ -17,12 +17,12 @@ namespace
     // the strips (and their knobs) are bigger.
     constexpr int minStripWidth = 196;
     constexpr int maxStripWidth = 360;
-    constexpr int masterStripWidth = 110;
     constexpr int faderAreaWidth = 84;       // meter and fader
     constexpr int maxKnobSize = 72;
     constexpr int captionWidth = 56;         // a caption beside a knob
     constexpr int captionHeight = 30;        // a caption under a knob
     constexpr int stripGap = 10;
+    constexpr int masterStripWidth = 110;
 }
 
 //==============================================================================
@@ -37,14 +37,6 @@ public:
         // One undo step per drag: start a transaction when the mouse goes down.
         fader.setRange (0.0, 1.0);
         addAndMakeVisible (fader);
-
-        if (isMaster())
-        {
-            fader.setTitle ("Master volume");
-            fader.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
-            fader.onValueChange = [this] { engine.getTracks().setMasterVolume ((float) fader.getValue()); };
-            return;
-        }
 
         fader.onDragStart = [this] { engine.beginUndoStep ("Volume"); selection.selectTrack (trackId); };
         fader.onValueChange = [this] { engine.getTracks().setVolume (trackId, (float) fader.getValue()); };
@@ -102,8 +94,6 @@ public:
                             : juce::String (db, 1) + " dB";
     }
 
-    bool isMaster() const   { return trackId == 0; }
-
     // What paint() draws as text and colour, to tell whether a repaint is due.
     // (The fader and knobs redraw themselves when their values change.)
     auto drawnState() const   { return std::make_tuple (name, colour, selected, dbText, panText, sendTexts); }
@@ -145,26 +135,11 @@ public:
             repaint();
     }
 
-    void updateMaster (float volume, float volumeDb)
-    {
-        const auto before = drawnState();
-        name = "Master";
-        colour = colour::accent;
-        dbText = describeDb (volumeDb);
-
-        if (! fader.isMouseButtonDown())
-            fader.setValue (volume, juce::dontSendNotification);
-
-        if (drawnState() != before)
-            repaint();
-    }
-
     void setLevel (StereoLevel l)   { meter.setLevel (l); }
 
     void mouseDown (const juce::MouseEvent&) override
     {
-        if (! isMaster())
-            selection.selectTrack (trackId);
+        selection.selectTrack (trackId);
     }
 
     void paint (juce::Graphics& g) override
@@ -190,25 +165,23 @@ public:
         g.setFont (fonts::mono (12.0f));
         g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
 
-        if (! isMaster())
+        // Each knob's caption: its name, and its setting underneath.
+        const juce::String names[] { "Pan", SendBuses::getBusName (SendBuses::reverb), SendBuses::getBusName (SendBuses::delay) };
+        const juce::String values[] { panText, sendTexts[0], sendTexts[1] };
+
+        const auto justification = captionsBelow ? juce::Justification::centred : juce::Justification::centredLeft;
+
+        for (int i = 0; i < 3; ++i)
         {
-            // Each knob's caption: its name, and its setting underneath.
-            const juce::String names[] { "Pan", SendBuses::getBusName (SendBuses::reverb), SendBuses::getBusName (SendBuses::delay) };
-            const juce::String values[] { panText, sendTexts[0], sendTexts[1] };
-
-            const auto justification = captionsBelow ? juce::Justification::centred : juce::Justification::centredLeft;
-
-            for (int i = 0; i < 3; ++i)
-            {
-                auto caption = captionAreas[(size_t) i];
-                g.setColour (colour::textSecondary);
-                g.setFont (fonts::ui (11.0f));
-                g.drawText (names[i], caption.removeFromTop (14), justification);
-                g.setColour (colour::text);
-                g.setFont (fonts::mono (12.0f));
-                g.drawText (values[i], caption, justification);
-            }
+            auto caption = captionAreas[(size_t) i];
+            g.setColour (colour::textSecondary);
+            g.setFont (fonts::ui (11.0f));
+            g.drawText (names[i], caption.removeFromTop (14), justification);
+            g.setColour (colour::text);
+            g.setFont (fonts::mono (12.0f));
+            g.drawText (values[i], caption, justification);
         }
+
     }
 
     void resized() override
@@ -217,43 +190,40 @@ public:
         area.removeFromTop (22);
         area.removeFromBottom (24);
 
-        if (! isMaster())
+        // Pan, Reverb and Delay go right of the fader, either stacked in a
+        // column with captions beside them, or side by side with captions
+        // underneath: whichever lets the knobs be bigger. A tall panel
+        // favors the column, a wide strip the row.
+        auto column = area.removeFromRight (area.getWidth() - faderAreaWidth);
+        juce::Slider* knobs[] { &pan, &sendKnobs[0], &sendKnobs[1] };
+
+        const int stackedSize = juce::jmin (column.getHeight() / 3 - 4, column.getWidth() - captionWidth - 4);
+        const int acrossSize  = juce::jmin (column.getWidth() / 3 - 8, column.getHeight() - captionHeight);
+        captionsBelow = acrossSize > stackedSize;
+        const int size = juce::jlimit (16, maxKnobSize, juce::jmax (stackedSize, acrossSize));
+
+        if (captionsBelow)
         {
-            // Pan, Reverb and Delay go right of the fader, either stacked in a
-            // column with captions beside them, or side by side with captions
-            // underneath: whichever lets the knobs be bigger. A tall panel
-            // favors the column, a wide strip the row.
-            auto column = area.removeFromRight (area.getWidth() - faderAreaWidth);
-            juce::Slider* knobs[] { &pan, &sendKnobs[0], &sendKnobs[1] };
+            auto row = column.withSizeKeepingCentre (column.getWidth(), size + captionHeight);
+            const int cellWidth = row.getWidth() / 3;
 
-            const int stackedSize = juce::jmin (column.getHeight() / 3 - 4, column.getWidth() - captionWidth - 4);
-            const int acrossSize  = juce::jmin (column.getWidth() / 3 - 8, column.getHeight() - captionHeight);
-            captionsBelow = acrossSize > stackedSize;
-            const int size = juce::jlimit (16, maxKnobSize, juce::jmax (stackedSize, acrossSize));
-
-            if (captionsBelow)
+            for (int i = 0; i < 3; ++i)
             {
-                auto row = column.withSizeKeepingCentre (column.getWidth(), size + captionHeight);
-                const int cellWidth = row.getWidth() / 3;
-
-                for (int i = 0; i < 3; ++i)
-                {
-                    auto cell = row.removeFromLeft (cellWidth);
-                    knobs[i]->setBounds (cell.removeFromTop (size).withSizeKeepingCentre (size, size));
-                    captionAreas[(size_t) i] = cell;
-                }
+                auto cell = row.removeFromLeft (cellWidth);
+                knobs[i]->setBounds (cell.removeFromTop (size).withSizeKeepingCentre (size, size));
+                captionAreas[(size_t) i] = cell;
             }
-            else
-            {
-                const int slot = column.getHeight() / 3;
+        }
+        else
+        {
+            const int slot = column.getHeight() / 3;
 
-                for (int i = 0; i < 3; ++i)
-                {
-                    auto cell = column.withY (column.getY() + i * slot).withHeight (slot);
-                    knobs[i]->setBounds (cell.removeFromLeft (size).withSizeKeepingCentre (size, size));
-                    cell.removeFromLeft (4);
-                    captionAreas[(size_t) i] = cell.withSizeKeepingCentre (cell.getWidth(), 28);
-                }
+            for (int i = 0; i < 3; ++i)
+            {
+                auto cell = column.withY (column.getY() + i * slot).withHeight (slot);
+                knobs[i]->setBounds (cell.removeFromLeft (size).withSizeKeepingCentre (size, size));
+                cell.removeFromLeft (4);
+                captionAreas[(size_t) i] = cell.withSizeKeepingCentre (cell.getWidth(), 28);
             }
         }
 
@@ -283,11 +253,92 @@ private:
 };
 
 //==============================================================================
+// The master channel's strip: everything mixed together. Just its meter,
+// fader and level; it has no pan or sends.
+class MixerView::MasterStrip  : public juce::Component
+{
+public:
+    explicit MasterStrip (AudioEngine& e) : engine (e), meter (LevelMeter::Orientation::vertical)
+    {
+        addAndMakeVisible (meter);
+
+        fader.setTitle ("Master volume");
+        fader.setRange (0.0, 1.0);
+        fader.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };   // one undo step per drag
+        fader.onValueChange = [this] { engine.getTracks().setMasterVolume ((float) fader.getValue()); };
+        addAndMakeVisible (fader);
+    }
+
+    void refresh()
+    {
+        auto& tc = engine.getTracks();
+        const auto db = tc.getMasterVolumeDb();
+        const auto text = db <= -99.0f ? juce::String::fromUTF8 ("\xe2\x88\x92\xe2\x88\x9e dB")   // minus infinity
+                                       : juce::String (db, 1) + " dB";
+
+        // Don't fight the user: only move the fader if they aren't dragging it.
+        if (! fader.isMouseButtonDown())
+            fader.setValue (tc.getMasterVolume(), juce::dontSendNotification);
+
+        if (text != dbText)
+        {
+            dbText = text;
+            repaint();
+        }
+    }
+
+    void updateMeter()      { meter.setLevel (engine.getMasterLevel()); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (colour::cardBg);
+        g.fillRoundedRectangle (r, 12.0f);
+
+        // An accent top edge, like the track strips' coloured one.
+        juce::Graphics::ScopedSaveState save (g);
+        juce::Path shape;
+        shape.addRoundedRectangle (r, 12.0f);
+        g.reduceClipRegion (shape);
+        g.setColour (colour::accent);
+        g.fillRect (r.removeFromTop (3.0f));
+
+        auto area = getLocalBounds().reduced (10);
+        g.setColour (colour::text);
+        g.setFont (fonts::uiBold (13.0f));
+        g.drawText ("Master", area.removeFromTop (18), juce::Justification::centred, true);
+
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::mono (12.0f));
+        g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (10);
+        area.removeFromTop (22);
+        area.removeFromBottom (24);
+
+        auto meterArea = area.withSizeKeepingCentre (64, area.getHeight());
+        meter.setBounds (meterArea.removeFromLeft (24));
+        meterArea.removeFromLeft (6);
+        fader.setBounds (meterArea.withTrimmedTop (-7).withTrimmedBottom (-7));
+    }
+
+private:
+    AudioEngine& engine;
+    LevelMeter meter;
+    juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
+    juce::String dbText;
+};
+
+//==============================================================================
 MixerView::MixerView (AudioEngine& e, Selection& s) : engine (e), selection (s)
 {
     setTitle ("Mixer");
-    masterStrip = std::make_unique<Strip> (engine, selection, 0);
-    stripHolder.addAndMakeVisible (*masterStrip);
+
+    masterStrip = std::make_unique<MasterStrip> (engine);
+    addAndMakeVisible (*masterStrip);
 
     viewport.setViewedComponent (&stripHolder, false);
     viewport.setScrollBarsShown (false, true);
@@ -318,7 +369,7 @@ void MixerView::refresh()
     }
 
     strips = std::move (next);
-    masterStrip->updateMaster (engine.getTracks().getMasterVolume(), engine.getTracks().getMasterVolumeDb());
+    masterStrip->refresh();
     layoutStrips();
 }
 
@@ -330,14 +381,14 @@ void MixerView::updateMeters()
     for (auto& [id, strip] : strips)
         strip->setLevel (engine.getTracks().getTrackLevel (id));
 
-    masterStrip->setLevel (engine.getMasterLevel());
+    masterStrip->updateMeter();
 }
 
 void MixerView::layoutStrips()
 {
     auto h = juce::jmax (120, viewport.getMaximumVisibleHeight());
     const int numStrips = juce::jmax (1, (int) order.size());
-    const int spare = viewport.getMaximumVisibleWidth() - masterStripWidth - stripGap * (numStrips + 1);
+    const int spare = viewport.getMaximumVisibleWidth() - stripGap * (numStrips - 1);
     const int stripWidth = juce::jlimit (minStripWidth, maxStripWidth, spare / numStrips);
     int x = 0;
 
@@ -347,16 +398,16 @@ void MixerView::layoutStrips()
         x += stripWidth + stripGap;
     }
 
-    x += stripGap;
-    masterStrip->setBounds (x, 0, masterStripWidth, h);
-    x += masterStripWidth;
-
-    stripHolder.setSize (juce::jmax (x, viewport.getMaximumVisibleWidth()), h);
+    stripHolder.setSize (juce::jmax (x - stripGap, viewport.getMaximumVisibleWidth()), h);
 }
 
 void MixerView::resized()
 {
-    viewport.setBounds (getLocalBounds().reduced (18, 14));
+    // The master strip stays put at the right; the tracks scroll beside it.
+    auto r = getLocalBounds().reduced (18, 14);
+    masterStrip->setBounds (r.removeFromRight (masterStripWidth));
+    r.removeFromRight (stripGap * 2);
+    viewport.setBounds (r);
     layoutStrips();
 }
 

@@ -1,6 +1,7 @@
 #include "ui/bottompanel/PluginEditor.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include <algorithm>
 
 namespace ikaros
 {
@@ -73,7 +74,10 @@ void PluginEditor::refreshValues()
 void PluginEditor::timerCallback()
 {
     // If the effect was removed (e.g. by Undo) while we're showing it, close.
-    if (engine.getTracks().effects().getEffectParameters (trackId, pluginId).empty())
+    // (Look for it in the chain: an effect with no settings is still there.)
+    auto chain = engine.getTracks().effects().getEffectChain (trackId);
+
+    if (std::none_of (chain.begin(), chain.end(), [this] (const PluginSlot& s) { return s.id == pluginId; }))
     {
         stopTimer();
 

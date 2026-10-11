@@ -8,6 +8,7 @@
 // headers and makes it obvious where engine work happens.
 
 #include <juce_graphics/juce_graphics.h>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -22,6 +23,10 @@ using TrackId  = std::uint64_t;
 using RegionId = std::uint64_t;
 using PluginId = std::uint64_t;
 using NoteId   = std::uint64_t;   // unique within its region; 0 means "none"
+
+// Stands for the master channel (everything mixed together) where an API
+// takes a TrackId and works on the master too: its effects and its EQ.
+inline constexpr TrackId masterTrackId = std::numeric_limits<TrackId>::max();
 
 // Instrument tracks play a synth from MIDI; audio tracks record a microphone,
 // guitar or other audio input.
@@ -149,6 +154,22 @@ struct ModelChanges
         session |= other.session;
         changedRegions.insert (other.changedRegions.begin(), other.changedRegions.end());
     }
+};
+
+// One band of the 4-band EQ (the "EQ" tab).
+struct EqBand
+{
+    juce::String name;         // "Low", "Low Mid", "High Mid", "High"
+    float frequencyHz = 1000.0f;
+    float gainDb = 0.0f;       // -20..+20
+    float q = 0.7f;            // how wide a band is (higher = narrower)
+};
+
+struct EqSettings
+{
+    static constexpr int numBands = 4;
+    std::array<EqBand, numBands> bands;
+    bool enabled = true;       // false = bypassed
 };
 
 // Stereo peak level in decibels.

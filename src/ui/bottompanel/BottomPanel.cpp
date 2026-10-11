@@ -1,6 +1,7 @@
 #include "ui/bottompanel/BottomPanel.h"
 #include "ui/widgets/Knob.h"
 #include "ui/bottompanel/PianoKeyboard.h"
+#include "ui/widgets/LevelMeter.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -13,6 +14,8 @@ namespace
 {
     constexpr int headerHeight = 49;
     constexpr int tabWidth = 76;
+    constexpr int modeWidth = 70;      // the Track | Master switch
+    constexpr int nameHeight = 34;     // the selected track's name, under the switch
 }
 
 //==============================================================================
@@ -217,6 +220,75 @@ private:
 };
 
 //==============================================================================
+// The "Sound" tab in Master mode: the whole mix's volume and level.
+class BottomPanel::MasterPage  : public juce::Component
+{
+public:
+    explicit MasterPage (AudioEngine& e) : engine (e)
+    {
+        volume.setName ("Volume");
+        volume.setArcColour (colour::accent);
+        volume.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
+        volume.onValueChange = [this] (float v)
+        {
+            engine.getTracks().setMasterVolume (v);
+            refresh();
+        };
+        addAndMakeVisible (volume);
+        addAndMakeVisible (meter);
+    }
+
+    void refresh()
+    {
+        auto& tc = engine.getTracks();
+        const auto db = tc.getMasterVolumeDb();
+        volume.setValue (tc.getMasterVolume(), db <= -99.0f ? juce::String ("Off") : juce::String (db, 1) + " dB");
+    }
+
+    void updateMeter()      { meter.setLevel (engine.getMasterLevel()); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (colour::cardBg);
+        g.fillRoundedRectangle (cardArea.toFloat(), 12.0f);
+
+        auto text = cardArea.reduced (20, 16);
+        g.setColour (colour::text);
+        g.setFont (fonts::uiBold (15.0f));
+        g.drawText ("Master", text.removeFromTop (24), juce::Justification::centredLeft);
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (13.0f));
+        g.drawFittedText ("Everything you hear, mixed together. Effects under Plug-ins on the left work on the "
+                          "whole mix, and the EQ tab shapes its tone.",
+                          text.withTrimmedBottom (32), juce::Justification::topLeft, 3, 1.0f);
+
+        g.setFont (fonts::ui (12.0f));
+        g.drawText ("Level", meterLabelArea, juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (18, 14);
+        auto top = r.withHeight (juce::jlimit (Knob::preferredHeight, 160, r.getHeight()));
+
+        volume.setBounds (top.removeFromLeft (juce::jlimit (Knob::preferredWidth, 200, top.getWidth() / 5)));
+        top.removeFromLeft (14);
+        cardArea = top.withWidth (juce::jmin (top.getWidth(), 520));
+
+        // The level meter along the bottom of the card.
+        auto meterRow = cardArea.reduced (20, 16).removeFromBottom (16);
+        meterLabelArea = meterRow.removeFromLeft (40);
+        meter.setBounds (meterRow);
+    }
+
+private:
+    AudioEngine& engine;
+    Knob volume;
+    LevelMeter meter;
+    juce::Rectangle<int> cardArea, meterLabelArea;
+};
+
+//==============================================================================
 BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     : engine (e), selection (s), inspector (e, s), mixer (e, s)
 {
@@ -229,6 +301,9 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
 
     soundPage = std::make_unique<SoundPage> (engine, selection);
     addAndMakeVisible (*soundPage);
+    masterPage = std::make_unique<MasterPage> (engine);
+    addChildComponent (*masterPage);
+    addChildComponent (eqView);
     addChildComponent (pianoRoll);
     addChildComponent (mixer);
 
@@ -236,7 +311,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
 
     int index = 0;
 
-    for (auto* b : { &soundTab, &editorTab, &mixerTab })
+    for (auto* b : { &soundTab, &editorTab, &eqTab })
     {
         b->setColours (tabColours);
         b->setCornerRadius (0.0f);
@@ -246,6 +321,29 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
         addAndMakeVisible (b);
         ++index;
     }
+
+    // Track | Master: the same look, a radio group of its own.
+    for (auto* b : { &trackModeButton, &masterModeButton })
+    {
+        b->setColours (tabColours);
+        b->setCornerRadius (0.0f);
+        b->setFont (fonts::uiBold (13.0f));
+        b->setRadioGroupId (2);
+        addAndMakeVisible (b);
+    }
+
+    trackModeButton.setTooltip ("Controls for the selected track");
+    masterModeButton.setTooltip ("Controls for the master channel: the whole mix");
+    trackModeButton.onClick = [this] { setMasterMode (false); if (onViewStateChanged) onViewStateChanged(); };
+    masterModeButton.onClick = [this] { setMasterMode (true); if (onViewStateChanged) onViewStateChanged(); };
+
+    auto mixerColours = IconButton::raisedColours();
+    mixerColours.border = colour::border;
+    mixerButton.setColours (mixerColours);
+    mixerButton.setFont (fonts::ui (13.0f));
+    mixerButton.setTooltip ("Every track's fader at once");
+    mixerButton.onClick = [this] { setMixerShown (! mixerShown); if (onViewStateChanged) onViewStateChanged(); };
+    addAndMakeVisible (mixerButton);
 
     auto detailsColours = IconButton::raisedColours();
     detailsColours.border = colour::border;
@@ -274,22 +372,63 @@ BottomPanel::~BottomPanel() = default;
 void BottomPanel::setTab (Tab t)
 {
     tab = t;
+    mixerShown = false;   // picking a tab leaves the full mixer...
 
     if (isShowingEffect())
-        closeEffect();   // picking a tab leaves the effect settings
+        closeEffect();    // ...and the effect settings
 
     showTabPage();
     refresh();
 }
 
+void BottomPanel::setMasterMode (bool shouldShowMaster)
+{
+    masterMode = shouldShowMaster;
+    mixerShown = false;   // Track and Master are about one channel: leave the full mixer
+
+    if (isShowingEffect())
+        closeEffect();   // it was the other channel's effect
+
+    inspector.setMasterMode (masterMode);
+    showTabPage();
+    refresh();
+}
+
+void BottomPanel::setMixerShown (bool shouldShow)
+{
+    mixerShown = shouldShow;
+    showTabPage();
+    refresh();
+}
+
+TrackId BottomPanel::getTarget() const
+{
+    return masterMode ? masterTrackId : selection.getTrack();
+}
+
 void BottomPanel::showTabPage()
 {
+    const bool open = ! collapsed;
     const bool effect = isShowingEffect();
-    soundPage->setVisible (! collapsed && ! effect && tab == Tab::sound);
-    pianoRoll.setVisible (! collapsed && ! effect && tab == Tab::editor);
-    mixer.setVisible (! collapsed && ! effect && tab == Tab::mixer);
-    effectViewport.setVisible (! collapsed && effect);
+    const bool tabPage = open && ! mixerShown && ! effect;   // one of the tabs is showing
+
+    soundPage->setVisible (tabPage && tab == Tab::sound && ! masterMode);
+    masterPage->setVisible (tabPage && tab == Tab::sound && masterMode);
+    eqView.setVisible (tabPage && tab == Tab::eq);
+    pianoRoll.setVisible (tabPage && tab == Tab::editor && ! masterMode);   // the Editor is about a track's regions
+    effectViewport.setVisible (open && ! mixerShown && effect);
+    mixer.setVisible (open && mixerShown);
+
+    // The header stays the same in the full mixer (picking a tab, or Track
+    // or Master, leaves it); only the inspector column makes way for it.
+    inspector.setVisible (open && ! mixerShown);
+
+    for (auto* c : std::initializer_list<juce::Component*> { &detailsButton, &soundTab, &eqTab, &editorTab, &mixerButton,
+                                                             &trackModeButton, &masterModeButton })
+        c->setVisible (open);
     updateTabButtons();
+    resized();
+    repaint();
 }
 
 void BottomPanel::setCollapsed (bool shouldCollapse)
@@ -303,9 +442,6 @@ void BottomPanel::setCollapsed (bool shouldCollapse)
     collapseButton.setTitle (label);
     collapseButton.setTooltip (label);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &inspector, &detailsButton, &soundTab, &editorTab, &mixerTab })
-        c->setVisible (! collapsed);
-
     // Collapsed, the whole strip is a button that opens the panel.
     setMouseCursor (collapsed ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     showTabPage();
@@ -317,16 +453,17 @@ void BottomPanel::setCollapsed (bool shouldCollapse)
 //==============================================================================
 void BottomPanel::openEffect (PluginId id)
 {
+    // A track's effect, or in Master mode one of the master's.
     auto t = engine.getTracks().getTrack (selection.getTrack());
 
-    if (! t.has_value())
+    if (! masterMode && ! t.has_value())
         return;
 
     if (isShowingEffect() && effectEditor->getPluginId() == id)
         return;
 
     effectViewport.setViewedComponent (nullptr, false);
-    effectEditor = std::make_unique<PluginEditor> (engine, t->id, id, t->colour);
+    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, masterMode ? colour::accent : t->colour);
 
     // onClose runs from inside the editor (its Done button or its timer), so
     // the editor can't be deleted right there; close on the next message-loop
@@ -385,9 +522,14 @@ void BottomPanel::updateTabButtons()
 {
     // While an effect's settings are showing, no tab is highlighted.
     const bool effect = isShowingEffect();
-    soundTab.setToggleState (! effect && tab == Tab::sound, juce::dontSendNotification);
-    editorTab.setToggleState (! effect && tab == Tab::editor, juce::dontSendNotification);
-    mixerTab.setToggleState (! effect && tab == Tab::mixer, juce::dontSendNotification);
+    // ...and none while the full mixer is.
+    const bool tabShowing = ! effect && ! mixerShown;
+    soundTab.setToggleState (tabShowing && tab == Tab::sound, juce::dontSendNotification);
+    eqTab.setToggleState (tabShowing && tab == Tab::eq, juce::dontSendNotification);
+    editorTab.setToggleState (tabShowing && tab == Tab::editor, juce::dontSendNotification);
+    trackModeButton.setToggleState (! masterMode, juce::dontSendNotification);
+    masterModeButton.setToggleState (masterMode, juce::dontSendNotification);
+    mixerButton.setToggleState (mixerShown, juce::dontSendNotification);
 }
 
 void BottomPanel::refresh()
@@ -411,11 +553,13 @@ void BottomPanel::refreshTrack()
     track = engine.getTracks().getTrack (selection.getTrack());
 
     // Switching tracks leaves the previous track's effect settings.
-    if (isShowingEffect() && effectEditor->getTrackId() != selection.getTrack())
+    if (isShowingEffect() && effectEditor->getTrackId() != getTarget())
         closeEffect();
 
     inspector.refresh();
     soundPage->refresh (track, detailsVisible);
+    masterPage->refresh();
+    eqView.setTarget (getTarget(), masterMode ? colour::accent : track.has_value() ? track->colour : colour::accent);
 
     if (mixer.isVisible())
         mixer.refresh();
@@ -447,8 +591,10 @@ void BottomPanel::update()
 
     inspector.update();
 
-    if (tab == Tab::mixer)
+    if (mixerShown)
         mixer.updateMeters();
+    else if (masterPage->isVisible())
+        masterPage->updateMeter();
     else if (tab == Tab::editor)
         pianoRoll.setPlayheadBeat (engine.getTransportState().positionBeats);
 }
@@ -462,12 +608,42 @@ void BottomPanel::paint (juce::Graphics& g)
     if (! collapsed)
     {
         g.setColour (colour::wellBg);
-        g.fillRect (inspector.getRight(), headerHeight, getWidth() - inspector.getRight(), 1);
+        g.fillRect (0, headerHeight, getWidth(), 1);
+
+        // Under the Track | Master switch: what the panel is working on.
+        if (! mixerShown)
+        {
+            g.setColour (colour::sidebarBg);
+            g.fillRect (nameStrip);
+            g.setColour (colour::divider);
+            g.fillRect (nameStrip.getRight() - 1, nameStrip.getY(), 1, nameStrip.getHeight());
+        }
     }
 
     auto r = headerArea;
 
-    if (track.has_value())
+    // A title and a note: the master, or the selected track.
+    auto drawTitle = [&] (const juce::String& title, const juce::String& note)
+    {
+        g.setColour (colour::text);
+        g.setFont (fonts::uiBold (14.0f));
+        auto titleWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), title));
+        g.drawText (title, r.removeFromLeft (titleWidth + 2), juce::Justification::centredLeft);
+        r.removeFromLeft (8);
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (14.0f));
+        g.drawText (note, r, juce::Justification::centredLeft, true);
+    };
+
+    if (! collapsed && mixerShown)
+    {
+        // The full mixer has the whole panel: no name to show.
+    }
+    else if (masterMode)
+    {
+        drawTitle ("Master", "The whole mix");
+    }
+    else if (track.has_value())
     {
         g.setColour (track->colour);
         g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), 3.0f);
@@ -490,11 +666,21 @@ void BottomPanel::paint (juce::Graphics& g)
         g.drawText ("No track selected", r, juce::Justification::centredLeft);
     }
 
-    // Outline around the segmented control.
+    // Outlines around the segmented controls.
     if (! collapsed)
     {
         g.setColour (colour::border);
         g.drawRoundedRectangle (tabsArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
+        g.drawRoundedRectangle (modeArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
+    }
+
+    // The Editor works on a track's regions, so in Master mode it explains.
+    if (! collapsed && ! mixerShown && masterMode && tab == Tab::editor && ! isShowingEffect())
+    {
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (14.0f));
+        g.drawText ("The Editor works on a track's regions. Click Track to edit them.",
+                    contentArea, juce::Justification::centred);
     }
 }
 
@@ -517,27 +703,47 @@ void BottomPanel::resized()
         return;
     }
 
-    // Track inspector: full-height column on the left, visible on every tab.
-    inspector.setBounds (r.removeFromLeft (TrackInspector::preferredWidth).withTrimmedTop (1));
+    // The header row: Track | Master over the left column, the tabs with the
+    // Mixer button beside them in the middle, Show details and hide on the right.
+    auto header = r.removeFromTop (headerHeight).withTrimmedTop (1);
+    auto leftColumn = header.removeFromLeft (TrackInspector::preferredWidth);
 
-    auto header = r.removeFromTop (headerHeight).withTrimmedTop (1).reduced (14, 8);
+    modeArea = leftColumn.reduced (14, 0).removeFromLeft (modeWidth * 2).withSizeKeepingCentre (modeWidth * 2, 32);
+    auto m = modeArea;
+    trackModeButton.setBounds (m.removeFromLeft (modeWidth));
+    masterModeButton.setBounds (m);
 
-    tabsArea = header.withSizeKeepingCentre (tabWidth * 3, 32);
-    auto t = tabsArea;
-    soundTab.setBounds (t.removeFromLeft (tabWidth));
-    editorTab.setBounds (t.removeFromLeft (tabWidth));
-    mixerTab.setBounds (t);
-
+    header = header.reduced (14, 8);
     collapseButton.setBounds (header.removeFromRight (32).withSizeKeepingCentre (32, 32));
     header.removeFromRight (8);
     detailsButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 32));
-    headerArea = header.withRight (tabsArea.getX() - 12);
+    header.removeFromRight (8);
+
+    constexpr int mixerButtonWidth = 80, mixerGap = 12;
+    auto group = header.withSizeKeepingCentre (tabWidth * 3 + mixerGap + mixerButtonWidth, 32);
+    tabsArea = group.removeFromLeft (tabWidth * 3);
+    auto t = tabsArea;
+    soundTab.setBounds (t.removeFromLeft (tabWidth));
+    editorTab.setBounds (t.removeFromLeft (tabWidth));
+    eqTab.setBounds (t);
+    mixerButton.setBounds (group.removeFromRight (mixerButtonWidth));
+
+    // The left column: what the panel works on, then the inspector. (The
+    // full mixer has the whole width.)
+    if (! mixerShown)
+    {
+        auto column = r.removeFromLeft (TrackInspector::preferredWidth);
+        nameStrip = column.removeFromTop (nameHeight).withTrimmedTop (1);
+        headerArea = nameStrip.reduced (14, 0);
+        inspector.setBounds (column);
+    }
 
     r.removeFromTop (1);
     contentArea = r;
-    soundPage->setBounds (r);
-    pianoRoll.setBounds (r);
-    mixer.setBounds (r);
+
+    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pianoRoll, &mixer })
+        page->setBounds (r);
+
     layoutEffectEditor();
 }
 

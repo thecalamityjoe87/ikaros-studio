@@ -165,6 +165,7 @@ private:
     double getVisibleBeats() const;
     double getTotalBeats() const;
     void setZoom (double pixelsPerBeat, float anchorX);
+    float getZoomAnchorX (float fallbackX) const;   // where a zoom should stay put, in lane x
     void scrollToBeat (double beat);
     void timelineChanged();
     void updateScrollBar();

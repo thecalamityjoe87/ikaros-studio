@@ -45,7 +45,8 @@ TrackController::TrackController (AudioEngine& o)
       regionEditor (std::make_unique<RegionEditor> (o, [this] (const juce::String& name) { return createAudioTrack (name); })),
       noteEditor (std::make_unique<NoteEditor> (o)),
       effectsController (std::make_unique<EffectsController> (o)),
-      sendBuses (std::make_unique<SendBuses> (o))
+      sendBuses (std::make_unique<SendBuses> (o)),
+      eqController (std::make_unique<EqController> (o))
 {
 }
 

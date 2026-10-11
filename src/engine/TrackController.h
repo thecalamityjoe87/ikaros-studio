@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EffectsController.h"
+#include "engine/EqController.h"
 #include "engine/InputRouter.h"
 #include "engine/NoteEditor.h"
 #include "engine/RegionEditor.h"
@@ -24,6 +25,7 @@ class AudioEngine;
         notes()    - notes in a MIDI region (the piano roll)
         effects()  - the Sound tab's knobs, the instrument and the effect chain
         sends()    - each track's sends to the shared Reverb and Delay buses
+        eq()       - the EQ tab's 4-band EQ, on a track or the master
 
     Every method runs on the message thread. Mutating methods record into the
     session's UndoManager.
@@ -43,6 +45,8 @@ public:
     const EffectsController& effects() const noexcept       { return *effectsController; }
     SendBuses& sends() noexcept                             { return *sendBuses; }
     const SendBuses& sends() const noexcept                 { return *sendBuses; }
+    EqController& eq() noexcept                             { return *eqController; }
+    const EqController& eq() const noexcept                 { return *eqController; }
 
     //==============================================================================
     // Tracks
@@ -114,6 +118,7 @@ private:
     std::unique_ptr<NoteEditor> noteEditor;
     std::unique_ptr<EffectsController> effectsController;
     std::unique_ptr<SendBuses> sendBuses;
+    std::unique_ptr<EqController> eqController;
 
     TrackId createAudioTrack (const juce::String& name);
 };

@@ -234,12 +234,18 @@ juce::String PluginChainView::describeMissing (const PluginSlot& slot)
 
 PluginChainView::~PluginChainView() = default;
 
+void PluginChainView::setMasterMode (bool shouldShowMaster)
+{
+    masterMode = shouldShowMaster;
+    refresh();
+}
+
 void PluginChainView::refresh()
 {
     auto& tracks = engine.getTracks();
     const auto oldHeight = getIdealHeight();
 
-    trackId = selection.getTrack();
+    trackId = masterMode ? masterTrackId : selection.getTrack();
     auto track = tracks.getTrack (trackId);
     trackColour = track.has_value() ? track->colour : colour::accent;
     instrument = tracks.effects().getInstrument (trackId);
@@ -309,7 +315,8 @@ void PluginChainView::paint (juce::Graphics& g)
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (12.0f));
-    g.drawFittedText ("Change how this track sounds. Effects run from top to bottom.",
+    g.drawFittedText (masterMode ? "Effects on the whole mix. They run from top to bottom."
+                                 : "Change how this track sounds. Effects run from top to bottom.",
                       hintArea, juce::Justification::topLeft, 2, 1.0f);   // 1.0 = wrap, never squash
 
     auto drawLabel = [&] (juce::Rectangle<int> area, const juce::String& text)

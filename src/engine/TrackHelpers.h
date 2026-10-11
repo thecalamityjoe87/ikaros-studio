@@ -42,6 +42,11 @@ inline bool isBusTrack (const te::Track& t)          { return t.state.hasPropert
 
 inline bool isInstrumentPlugin (te::Plugin& p)       { return p.isSynth() || (bool) p.state.getProperty (instrumentProp, false); }
 
+// The EQ tab's equaliser (see EqController). It's a plugin like any other,
+// but not one of the user's effects, so the effects list leaves it out.
+inline const juce::Identifier eqProp ("ikarosEq");
+inline bool isEqPlugin (const te::Plugin& p)         { return (bool) p.state.getProperty (eqProp, false); }
+
 // "plugin:<id>" names a third-party plugin (PluginInfo::id) wherever a
 // plugin type is expected; anything else is one of Tracktion's built-in types.
 inline const juce::String thirdPartyPrefix ("plugin:");
@@ -76,6 +81,19 @@ inline te::AudioTrack* findTrack (te::Edit* edit, TrackId id)
 
     auto* track = asAudioTrack (te::findTrackForID (*edit, te::EditItemID::fromRawID (id)));
     return track != nullptr && ! isBusTrack (*track) ? track : nullptr;
+}
+
+// The plugins a track runs, or for masterTrackId the master channel's
+// (processed before the master volume).
+inline te::PluginList* findPluginList (te::Edit* edit, TrackId id)
+{
+    if (edit != nullptr && id == masterTrackId)
+        return &edit->getMasterPluginList();
+
+    if (auto* t = findTrack (edit, id))
+        return &t->pluginList;
+
+    return nullptr;
 }
 
 // Creates (but doesn't insert) a plugin: a built-in type such as "reverb",

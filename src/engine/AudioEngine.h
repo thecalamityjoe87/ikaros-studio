@@ -192,6 +192,7 @@ private:
     friend class RegionEditor;
     friend class NoteEditor;
     friend class EffectsController;
+    friend class EqController;
     friend class SendBuses;
     friend class PluginLibrary;
 

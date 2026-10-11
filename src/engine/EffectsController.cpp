@@ -47,22 +47,25 @@ namespace
     }
 
     // Effects are every plugin on the track except the instrument, the
-    // track's own volume/meter plugins (which Tracktion keeps at the end)
-    // and the sends to the shared buses (see SendBuses).
+    // track's own volume/meter plugins (which Tracktion keeps at the end),
+    // the sends to the shared buses (see SendBuses) and the EQ tab's
+    // equaliser (see EqController).
     bool isEffect (te::Plugin& p)
     {
         return ! isInstrumentPlugin (p)
+            && ! isEqPlugin (p)
             && dynamic_cast<te::VolumeAndPanPlugin*> (&p) == nullptr
             && dynamic_cast<te::LevelMeterPlugin*> (&p) == nullptr
             && dynamic_cast<te::AuxSendPlugin*> (&p) == nullptr
             && dynamic_cast<te::AuxReturnPlugin*> (&p) == nullptr;
     }
 
-    std::vector<te::Plugin*> effectsOn (te::AudioTrack& t)
+    // A track's effects, or the master's (see findPluginList).
+    std::vector<te::Plugin*> effectsOn (te::PluginList& list)
     {
         std::vector<te::Plugin*> result;
 
-        for (auto* p : t.pluginList)
+        for (auto* p : list)
             if (isEffect (*p))
                 result.push_back (p);
 
@@ -80,9 +83,9 @@ namespace
         return result;
     }
 
-    te::Plugin* findEffect (te::AudioTrack& t, PluginId id)
+    te::Plugin* findEffect (te::PluginList& list, PluginId id)
     {
-        for (auto* p : effectsOn (t))
+        for (auto* p : effectsOn (list))
             if (p->itemID.getRawID() == id)
                 return p;
 
@@ -154,26 +157,73 @@ namespace
         return plugin;
     }
 
-    // Where in the track's plugin list effect number `position` should go:
-    // before the existing effect at that position, or (for "the end") just
-    // before the volume plugin.
-    int pluginListIndexForPosition (te::AudioTrack& t, int position)
+    // Where in the plugin list effect number `position` should go: before
+    // the existing effect at that position, or (for "the end") just after
+    // the last effect, or else before the EQ and the volume plugin.
+    int pluginListIndexForPosition (te::PluginList& list, int position)
     {
-        auto effects = effectsOn (t);
+        auto effects = effectsOn (list);
 
         if (juce::isPositiveAndBelow (position, (int) effects.size()))
-            return t.pluginList.indexOf (effects[(size_t) position]);
+            return list.indexOf (effects[(size_t) position]);
 
         if (! effects.empty())
-            return t.pluginList.indexOf (effects.back()) + 1;
+            return list.indexOf (effects.back()) + 1;
 
-        if (auto* vol = t.getVolumePlugin())
-            return t.pluginList.indexOf (vol);
+        for (int i = 0; i < list.size(); ++i)
+            if (isEqPlugin (*list[i]) || dynamic_cast<te::VolumeAndPanPlugin*> (list[i]) != nullptr)
+                return i;
 
-        return t.pluginList.size();
+        return list.size();
     }
 
     juce::String percent (float v)    { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; }
+
+    // A few of Tracktion's built-in effects (Chorus, Phaser) keep their
+    // settings as plain properties on their state rather than as
+    // parameters, so they'd show no knobs. These are their settings, with
+    // the ranges the knobs cover and the defaults Tracktion uses.
+    struct StoredSetting
+    {
+        const char* pluginType;
+        juce::Identifier property;
+        const char* name;
+        float minimum, maximum, defaultValue;
+        const char* unit;   // "%" shows 0..1 as a percentage
+    };
+
+    const std::vector<StoredSetting>& storedSettings()
+    {
+        static const std::vector<StoredSetting> settings {
+            { te::ChorusPlugin::xmlTypeName, te::IDs::depthMs,       "Depth",    0.5f, 10.0f, 3.0f, "ms" },
+            { te::ChorusPlugin::xmlTypeName, te::IDs::speedHz,       "Speed",    0.1f,  5.0f, 1.0f, "Hz" },
+            { te::ChorusPlugin::xmlTypeName, te::IDs::width,         "Width",    0.0f,  1.0f, 0.5f, "%" },
+            { te::ChorusPlugin::xmlTypeName, te::IDs::mixProportion, "Mix",      0.0f,  1.0f, 0.5f, "%" },
+            { te::PhaserPlugin::xmlTypeName, te::IDs::depth,         "Depth",    0.0f, 10.0f, 5.0f, "" },
+            { te::PhaserPlugin::xmlTypeName, te::IDs::rate,          "Rate",     0.05f, 4.0f, 0.4f, "Hz" },
+            { te::PhaserPlugin::xmlTypeName, te::IDs::feedback,      "Feedback", 0.0f,  0.95f, 0.7f, "%" },
+        };
+        return settings;
+    }
+
+    std::vector<const StoredSetting*> storedSettingsFor (te::Plugin& p)
+    {
+        std::vector<const StoredSetting*> result;
+
+        for (auto& setting : storedSettings())
+            if (p.getPluginType() == setting.pluginType)
+                result.push_back (&setting);
+
+        return result;
+    }
+
+    juce::String describeStored (const StoredSetting& s, float value)
+    {
+        if (juce::String (s.unit) == "%")
+            return percent (value);
+
+        return juce::String (value, 1) + (juce::String (s.unit).isEmpty() ? "" : " " + juce::String (s.unit));
+    }
 
     juce::String seconds (float s)
     {
@@ -360,8 +410,8 @@ std::vector<PluginSlot> EffectsController::getEffectChain (TrackId id) const
 {
     std::vector<PluginSlot> result;
 
-    if (auto* t = findTrack (owner.getEdit(), id))
-        for (auto* p : effectsOn (*t))
+    if (auto* list = findPluginList (owner.getEdit(), id))
+        for (auto* p : effectsOn (*list))
             result.push_back (makeSlot (*p));
 
     return result;
@@ -387,8 +437,8 @@ std::vector<EffectType> EffectsController::getAvailableEffects() const
 
 void EffectsController::showPluginWindow (TrackId id, PluginId pluginId)
 {
-    if (auto* t = findTrack (owner.getEdit(), id))
-        for (auto* p : t->pluginList)
+    if (auto* list = findPluginList (owner.getEdit(), id))
+        for (auto* p : *list)
             if (p->itemID.getRawID() == pluginId)
                 if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
                     if (! external->isMissing())
@@ -398,9 +448,9 @@ void EffectsController::showPluginWindow (TrackId id, PluginId pluginId)
 PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int position)
 {
     auto* edit = owner.getEdit();
-    auto* t = findTrack (edit, id);
+    auto* list = findPluginList (edit, id);
 
-    if (t == nullptr || (int) effectsOn (*t).size() >= maxEffectsPerTrack)
+    if (list == nullptr || (int) effectsOn (*list).size() >= maxEffectsPerTrack)
         return 0;
 
     // A third-party plug-in can take a moment to load, so do it before the
@@ -412,15 +462,15 @@ PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int
 
     owner.beginUndoStep ("Add Effect");
 
-    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (*t, position), nullptr);
+    list->insertPlugin (plugin, pluginListIndexForPosition (*list, position), nullptr);
     return plugin->itemID.getRawID();
 }
 
 PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const juce::String& newType)
 {
     auto* edit = owner.getEdit();
-    auto* t = findTrack (edit, id);
-    auto* old = t != nullptr ? findEffect (*t, pluginId) : nullptr;
+    auto* list = findPluginList (edit, id);
+    auto* old = list != nullptr ? findEffect (*list, pluginId) : nullptr;
 
     if (old == nullptr)
         return 0;
@@ -432,17 +482,17 @@ PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const 
 
     // Remove + insert in one undo step, at the same position.
     owner.beginUndoStep ("Replace Effect");
-    const auto index = t->pluginList.indexOf (old);
+    const auto index = list->indexOf (old);
     old->removeFromParent();
-    t->pluginList.insertPlugin (plugin, index, nullptr);
+    list->insertPlugin (plugin, index, nullptr);
     return plugin->itemID.getRawID();
 }
 
 void EffectsController::removeEffect (TrackId id, PluginId pluginId)
 {
-    if (auto* t = findTrack (owner.getEdit(), id))
+    if (auto* list = findPluginList (owner.getEdit(), id))
     {
-        if (auto* p = findEffect (*t, pluginId))
+        if (auto* p = findEffect (*list, pluginId))
         {
             owner.beginUndoStep ("Remove Effect");
             p->removeFromParent();
@@ -452,19 +502,19 @@ void EffectsController::removeEffect (TrackId id, PluginId pluginId)
 
 void EffectsController::moveEffect (TrackId id, PluginId pluginId, int newPosition)
 {
-    auto* t = findTrack (owner.getEdit(), id);
+    auto* list = findPluginList (owner.getEdit(), id);
 
-    if (t == nullptr)
+    if (list == nullptr)
         return;
 
     // Keep a reference while it's briefly out of the list. (Plugin::Ptr is
     // ref-counted, so the plugin isn't deleted when it's removed.)
-    te::Plugin::Ptr plugin = findEffect (*t, pluginId);
+    te::Plugin::Ptr plugin = findEffect (*list, pluginId);
 
     if (plugin == nullptr)
         return;
 
-    auto effects = effectsOn (*t);
+    auto effects = effectsOn (*list);
     const auto oldPosition = (int) std::distance (effects.begin(), std::find (effects.begin(), effects.end(), plugin.get()));
 
     if (oldPosition == newPosition)
@@ -472,14 +522,14 @@ void EffectsController::moveEffect (TrackId id, PluginId pluginId, int newPositi
 
     owner.beginUndoStep ("Move Effect");
     plugin->removeFromParent();
-    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (*t, newPosition), nullptr);
+    list->insertPlugin (plugin, pluginListIndexForPosition (*list, newPosition), nullptr);
 }
 
 void EffectsController::setEffectEnabled (TrackId id, PluginId pluginId, bool enabled)
 {
-    if (auto* t = findTrack (owner.getEdit(), id))
+    if (auto* list = findPluginList (owner.getEdit(), id))
     {
-        if (auto* p = findEffect (*t, pluginId))
+        if (auto* p = findEffect (*list, pluginId))
         {
             owner.beginUndoStep (enabled ? "Turn Effect On" : "Turn Effect Off");
             p->setEnabled (enabled);
@@ -491,13 +541,26 @@ std::vector<ParameterInfo> EffectsController::getEffectParameters (TrackId id, P
 {
     std::vector<ParameterInfo> result;
 
-    if (auto* t = findTrack (owner.getEdit(), id))
-        if (auto* p = findEffect (*t, pluginId))
+    if (auto* list = findPluginList (owner.getEdit(), id))
+    {
+        if (auto* p = findEffect (*list, pluginId))
+        {
             if (dynamic_cast<te::ExternalPlugin*> (p) == nullptr)
                 for (auto* param : p->getAutomatableParameters())
                     result.push_back ({ param->getParameterName(),
                                         param->getCurrentNormalisedValue(),
                                         param->getCurrentValueAsStringWithLabel() });
+
+            // Settings kept as properties come after the real parameters.
+            for (auto* setting : storedSettingsFor (*p))
+            {
+                const auto value = (float) p->state.getProperty (setting->property, setting->defaultValue);
+                result.push_back ({ setting->name,
+                                    juce::jmap (value, setting->minimum, setting->maximum, 0.0f, 1.0f),
+                                    describeStored (*setting, value) });
+            }
+        }
+    }
 
     return result;
 }
@@ -505,15 +568,32 @@ std::vector<ParameterInfo> EffectsController::getEffectParameters (TrackId id, P
 void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int index, float value)
 {
     // No beginUndoStep() here: the UI starts one on knob drag start.
-    if (auto* t = findTrack (owner.getEdit(), id))
+    if (auto* list = findPluginList (owner.getEdit(), id))
     {
-        if (auto* p = findEffect (*t, pluginId))
+        if (auto* p = findEffect (*list, pluginId))
         {
             auto params = p->getAutomatableParameters();
+            value = juce::jlimit (0.0f, 1.0f, value);
 
             if (auto* param = params[index])
-                setParameterUndoably (*p, *param, param->paramID,
-                                      param->valueRange.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, value)));
+            {
+                setParameterUndoably (*p, *param, param->paramID, param->valueRange.convertFrom0to1 (value));
+            }
+            else
+            {
+                // A setting kept as a property (see storedSettings). Setting
+                // it through the undo manager is all it takes: the effect
+                // listens to its own state.
+                auto stored = storedSettingsFor (*p);
+                const auto storedIndex = index - params.size();
+
+                if (juce::isPositiveAndBelow (storedIndex, (int) stored.size()))
+                {
+                    auto* setting = stored[(size_t) storedIndex];
+                    p->state.setProperty (setting->property, juce::jmap (value, setting->minimum, setting->maximum),
+                                          &owner.getEdit()->getUndoManager());
+                }
+            }
         }
     }
 }

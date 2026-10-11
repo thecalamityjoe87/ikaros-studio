@@ -73,7 +73,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     zoomSlider.setTitle ("Zoom");
     zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
     zoomSlider.setRange (0.0, 1.0);
-    zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), (float) getLaneWidth() * 0.5f); };
+    zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), getZoomAnchorX ((float) getLaneWidth() * 0.5f)); };
     addAndMakeVisible (zoomSlider);
 
     addAndMakeVisible (*overlay);
@@ -195,17 +195,24 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     timelineChanged();
 }
 
+float ArrangementView::getZoomAnchorX (float fallbackX) const
+{
+    // Like GarageBand, every zoom (slider, keys, Ctrl + wheel) keeps the
+    // playhead where it is, so you stay looking at the part of the song
+    // you're working on. Only if it's off screen does the fallback (the
+    // middle, or the mouse) stay put instead.
+    const auto x = geometry.beatToX (engine.getTransportState().positionBeats);
+    return juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : fallbackX;
+}
+
 void ArrangementView::zoomIn()
 {
-    // Zoom around the playhead if it's on screen, or else the middle.
-    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
-    setZoom (geometry.pixelsPerBeat * 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+    setZoom (geometry.pixelsPerBeat * 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::zoomOut()
 {
-    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
-    setZoom (geometry.pixelsPerBeat / 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+    setZoom (geometry.pixelsPerBeat / 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::scrollToBeat (double beat)
@@ -246,8 +253,9 @@ bool ArrangementView::handleWheel (const juce::MouseEvent& event, const juce::Mo
 
     if (e.mods.isCommandDown())
     {
-        // Ctrl/Cmd + wheel: zoom around the mouse. One wheel notch zooms ~1.4×.
-        const float anchorX = (float) (e.x - headerWidth);
+        // Ctrl/Cmd + wheel: zoom around the playhead (or the mouse, if the
+        // playhead is off screen). One wheel notch zooms ~1.4x.
+        const float anchorX = getZoomAnchorX ((float) (e.x - headerWidth));
         setZoom (geometry.pixelsPerBeat * std::pow (2.0, (double) wheel.deltaY * 2.5), anchorX);
         return true;
     }

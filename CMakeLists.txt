@@ -99,6 +99,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
+    src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
@@ -152,6 +153,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
+    src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp

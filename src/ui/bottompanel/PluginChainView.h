@@ -29,6 +29,9 @@ public:
     /** Re-reads the selected track's plug-ins (model or selection changed). */
     void refresh();
 
+    /** Shows the master channel's effects instead of the selected track's. */
+    void setMasterMode (bool);
+
     /** The height this view needs to show everything at its current width. */
     int getIdealHeight() const;
 
@@ -53,6 +56,7 @@ private:
     Selection& selection;
 
     TrackId trackId = 0;
+    bool masterMode = false;
     std::optional<PluginSlot> instrument;
     std::vector<PluginSlot> chain;
     juce::Colour trackColour;

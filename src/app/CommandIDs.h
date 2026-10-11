@@ -60,6 +60,7 @@ namespace CommandIDs
         snapOff,
         showSoundTab,
         showEditorTab,
+        showEqTab,
         showMixerTab,
         toggleDetails,
 

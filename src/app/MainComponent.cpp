@@ -33,6 +33,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     arrangement.onOpenRegionInEditor = [this] (RegionId)
     {
         setBottomPanelVisible (true);
+        bottomPanel.setMasterMode (false);   // the Editor works on a track
         bottomPanel.setTab (BottomPanel::Tab::editor);
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
@@ -313,7 +314,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::toggleMetronome, CommandIDs::toggleCountIn,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
-                                   CommandIDs::showSoundTab, CommandIDs::showEditorTab,
+                                   CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
@@ -533,18 +534,23 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::showSoundTab:
             info.setInfo ("Sound", "Show the Sound controls", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::sound);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::sound);
             info.addDefaultKeypress ('1', cmd);
+            break;
+        case CommandIDs::showEqTab:
+            info.setInfo ("EQ", "Show the EQ", "View", 0);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::eq);
+            info.addDefaultKeypress ('3', cmd);
             break;
         case CommandIDs::showEditorTab:
             info.setInfo ("Editor", "Show the piano roll", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::editor);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
         case CommandIDs::showMixerTab:
-            info.setInfo ("Mixer", "Show the mixer", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::mixer);
-            info.addDefaultKeypress ('3', cmd);
+            info.setInfo ("Mixer", "Show every track's fader at once", "View", 0);
+            info.setTicked (bottomPanel.isMixerShown());
+            info.addDefaultKeypress ('4', cmd);
             break;
         case CommandIDs::toggleDetails:
             info.setInfo ("Show Details", "Show advanced track details", "View", 0);
@@ -695,8 +701,9 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         // Picking a tab (or details) also opens the bottom panel if it's hidden.
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
+        case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
-        case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::mixer); break;
+        case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
         case CommandIDs::toggleDetails:
             setBottomPanelVisible (true);

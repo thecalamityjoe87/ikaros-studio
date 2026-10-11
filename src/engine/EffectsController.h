@@ -43,7 +43,8 @@ public:
     //==============================================================================
     // Plug-ins: the track's instrument and its chain of effects (the
     // "Plug-ins" inspector). Effects are processed top to bottom. They can be
-    // built in, or third-party (VST3/AU/LV2) plug-ins.
+    // built in, or third-party (VST3/AU/LV2) plug-ins. The effect functions
+    // also take masterTrackId, for the master channel's effects.
     std::optional<PluginSlot> getInstrument (TrackId) const;
     std::vector<PluginSlot> getEffectChain (TrackId) const;
 

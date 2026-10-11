@@ -721,6 +721,81 @@ int main (int argc, char* argv[])
                    "each bus has its own send");
         }
 
+        std::cout << "EQ and master effects\n";
+        {
+            auto& eq = tracks.eq();
+            const auto flat = eq.getEq (t1);
+            check (flat.enabled && flat.bands[1].name == "Low Mid" && flat.bands[1].gainDb == 0.0f
+                     && flat.bands[1].frequencyHz == EqController::getDefaults().bands[1].frequencyHz,
+                   "a track's EQ starts flat");
+            check (eq.getResponse (t1, { 100.0f, 1000.0f })[1] == 0.0f, "a flat EQ draws a flat line");
+
+            const auto effectCount = tracks.effects().getEffectChain (t1).size();
+            engine.beginUndoStep ("EQ");
+            eq.setBand (t1, 1, 400.0f, 6.0f, 0.7f);
+            pumpMessages();
+            auto changed = eq.getEq (t1);
+            check (std::abs (changed.bands[1].gainDb - 6.0f) < 0.01f && std::abs (changed.bands[1].frequencyHz - 400.0f) < 0.5f,
+                   "a band can be boosted");
+            check (tracks.effects().getEffectChain (t1).size() == effectCount, "the EQ isn't listed as an effect");
+            auto response = eq.getResponse (t1, { 30.0f, 400.0f, 15000.0f });
+            check (std::abs (response[1] - 6.0f) < 0.1f && std::abs (response[0]) < 0.5f && std::abs (response[2]) < 0.5f,
+                   "its curve peaks at the band");
+            check (engine.getUndoDescription() == "EQ", "the change is one undo step");
+
+            engine.undo();
+            pumpMessages();
+            check (eq.getEq (t1).bands[1].gainDb == 0.0f, "undo flattens it again");
+            engine.redo();
+            pumpMessages();
+            check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f, "redo boosts it again");
+
+            eq.setEnabled (t1, false);
+            pumpMessages();
+            check (! eq.getEq (t1).enabled && eq.getResponse (t1, { 400.0f })[0] == 0.0f, "the EQ can be turned off");
+            eq.setEnabled (t1, true);
+            pumpMessages();
+
+            // The master channel has an EQ and effects of its own.
+            engine.beginUndoStep ("EQ");
+            eq.setBand (masterTrackId, 3, 8000.0f, -4.0f, 0.7f);
+            pumpMessages();
+            check (std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f, "the master has its own EQ");
+            check (eq.getEq (t1).bands[3].gainDb == 0.0f, "separate from the tracks'");
+            auto masterReverb = tracks.effects().addEffect (masterTrackId, "reverb");
+            pumpMessages();
+            check (masterReverb != 0 && tracks.effects().getEffectChain (masterTrackId).size() == 1,
+                   "the master can have effects");
+            check (tracks.effects().getEffectChain (0).empty() && eq.getEq (0).bands[3].gainDb == 0.0f,
+                   "\"no track\" (0) never touches the master");
+
+            // Chorus and Phaser keep their settings as properties, not
+            // parameters; they still get knobs.
+            auto chorus = tracks.effects().addEffect (t1, "chorus");
+            pumpMessages();
+            auto chorusParams = tracks.effects().getEffectParameters (t1, chorus);
+            check (chorusParams.size() == 4 && chorusParams[1].name == "Speed", "Chorus has Depth, Speed, Width and Mix knobs");
+            engine.beginUndoStep ("Speed");
+            tracks.effects().setEffectParameter (t1, chorus, 1, 1.0f);
+            pumpMessages();
+            check (tracks.effects().getEffectParameters (t1, chorus)[1].valueText == "5.0 Hz", "a Chorus knob changes the effect");
+            engine.undo();
+            pumpMessages();
+            check (tracks.effects().getEffectParameters (t1, chorus)[1].valueText == "1.0 Hz", "and undo puts it back");
+            check (tracks.effects().getEffectParameters (t1, tracks.effects().addEffect (t1, "phaser")).size() == 3,
+                   "Phaser has Depth, Rate and Feedback knobs");
+            pumpMessages();
+
+            auto eqSession = dir.getChildFile ("EQ");
+            check (engine.saveSessionAs (eqSession), "(save)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (eqSession)), "(reopen)");
+            pumpMessages();
+            check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f
+                     && std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f,
+                   "track and master EQ survive save and reopen");
+            check (tracks.effects().getEffectChain (masterTrackId).size() == 1, "and so do master effects");
+        }
+
         std::cout << "Audio inputs\n";
         {
             auto inputs = tracks.inputs().getAudioInputs();
