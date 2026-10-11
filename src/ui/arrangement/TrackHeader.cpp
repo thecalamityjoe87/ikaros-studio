@@ -10,7 +10,7 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int panSize = 40;
+    constexpr int panSize = 46;
 }
 
 TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
@@ -248,38 +248,37 @@ void TrackHeader::paint (juce::Graphics& g)
 
 void TrackHeader::resized()
 {
-    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (10, 8);
+    // Laid out from the top: when zooming makes the row taller, the
+    // controls stay together and the lane gets the extra room.
+    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (12, 10);
 
-    iconArea = r.removeFromLeft (40).removeFromTop (40);
-    r.removeFromLeft (10);
+    iconArea = r.removeFromLeft (44).removeFromTop (44);
+    r.removeFromLeft (12);
 
-    auto top = r.removeFromTop (22);
-    armButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
+    auto top = r.removeFromTop (26);
 
-    if (monitorButton.isVisible())
+    for (auto* b : { &armButton, &monitorButton, &soloButton, &muteButton })
     {
-        monitorButton.setBounds (top.removeFromRight (24));
-        top.removeFromRight (4);
+        if (b->isVisible())
+        {
+            b->setBounds (top.removeFromRight (26));
+            top.removeFromRight (5);
+        }
     }
 
-    soloButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
-    muteButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
     nameArea = top;
     nameEditor.setBounds (nameArea.expanded (2, 0));
 
-    r.removeFromTop (2);
-    soundArea = r.removeFromTop (16).withTrimmedRight (panSize);
-    r.removeFromTop (2);
+    r.removeFromTop (4);
+    soundArea = r.removeFromTop (18).withTrimmedRight (panSize);
+    r.removeFromTop (8);
 
     // Pan knob at the end of the volume slider's row, centred on it. Its
-    // bounds are taller than the row: the knob is drawn inset (about 26px
-    // across), and the extra space is empty.
-    auto volumeRow = r.removeFromTop (16);
+    // bounds are taller than the row: the knob is drawn inset, and the extra
+    // space is empty.
+    auto volumeRow = r.removeFromTop (22);
     pan.setBounds (volumeRow.removeFromRight (panSize).withSizeKeepingCentre (panSize, panSize));
-    volumeRow.removeFromRight (4);
+    volumeRow.removeFromRight (6);
     volume.setBounds (volumeRow);
 }
 

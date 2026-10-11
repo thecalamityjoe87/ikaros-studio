@@ -35,7 +35,6 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
         setBottomPanelVisible (true);
         bottomPanel.setTab (BottomPanel::Tab::editor);
     };
-    arrangement.onAddTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };

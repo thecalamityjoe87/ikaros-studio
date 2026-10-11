@@ -11,7 +11,7 @@ namespace ikaros::arrangement
 
 inline constexpr int headerWidth = tokens::size::trackHeaderWidth;
 // Track rows are geometry.rowHeight tall: it changes with the zoom.
-inline constexpr int maxRowHeight = tokens::size::trackRowHeight * 7 / 3;
+inline constexpr int maxRowHeight = tokens::size::trackRowHeight * 2;
 inline constexpr int dropZoneHeight = 84;
 inline constexpr int dropZoneMargin = 12;
 inline constexpr int regionTop = 5;           // a region's gap from the top of its lane...

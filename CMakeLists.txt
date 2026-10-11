@@ -106,7 +106,8 @@ set(IKAROS_ENGINE_SOURCES
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
-    src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp)
+    src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
+    src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -206,8 +207,8 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(IkarosStudio PRIVATE atomic)
 
-    # Xlib for src/platform/WindowManagerHints.cpp (window-manager hints JUCE
-    # doesn't expose). JUCE itself loads X11 at runtime, so it's already required.
+    # Xlib for src/platform (window-manager hints and drag-and-drop fixes JUCE
+    # doesn't do itself). JUCE itself loads X11 at runtime, so it's already required.
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
 endif()

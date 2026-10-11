@@ -9,7 +9,6 @@ using namespace arrangement;
 
 ArrangementView::Content::Content (ArrangementView& o) : owner (o)
 {
-    dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested (&dropZone); };
     addAndMakeVisible (dropZone);
 }
 

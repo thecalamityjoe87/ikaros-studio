@@ -11,7 +11,16 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int stripWidth = 110;
+    // Track strips: fader on the left, Pan/Reverb/Delay on the right. They
+    // share the mixer's width between these sizes, so with only a few tracks
+    // the strips (and their knobs) are bigger.
+    constexpr int minStripWidth = 196;
+    constexpr int maxStripWidth = 360;
+    constexpr int masterStripWidth = 110;
+    constexpr int faderAreaWidth = 84;       // meter and fader
+    constexpr int maxKnobSize = 72;
+    constexpr int captionWidth = 56;         // a caption beside a knob
+    constexpr int captionHeight = 30;        // a caption under a knob
     constexpr int stripGap = 10;
 }
 
@@ -65,7 +74,10 @@ public:
             knob.onDragStart = [this, busName] { engine.beginUndoStep (busName + " Send"); selection.selectTrack (trackId); };
             knob.onValueChange = [this, bus]
             {
-                engine.getTracks().sends().setSendLevel (trackId, bus, (float) sendKnobs[(size_t) bus].getValue());
+                const auto level = (float) sendKnobs[(size_t) bus].getValue();
+                engine.getTracks().sends().setSendLevel (trackId, bus, level);
+                sendTexts[(size_t) bus] = describeSend (level);
+                repaint();
             };
             addAndMakeVisible (knob);
         }
@@ -76,6 +88,11 @@ public:
     {
         const int amount = juce::roundToInt (std::abs (value) * 100.0f);
         return amount == 0 ? juce::String ("C") : (value < 0.0f ? "L " : "R ") + juce::String (amount);
+    }
+
+    static juce::String describeSend (float level)
+    {
+        return juce::String (juce::roundToInt (level * 100.0f)) + "%";
     }
 
     static juce::String describeDb (float db)
@@ -107,6 +124,8 @@ public:
 
             if (! knob.isMouseButtonDown())
                 knob.setValue (sends[bus], juce::dontSendNotification);
+
+            sendTexts[(size_t) bus] = describeSend ((float) knob.getValue());
         }
 
         // Don't fight the user: only move the controls if they aren't dragging them.
@@ -164,13 +183,22 @@ public:
 
         if (! isMaster())
         {
-            g.setFont (fonts::mono (10.0f));
-            g.drawText (panText, panTextArea, juce::Justification::centred);
+            // Each knob's caption: its name, and its setting underneath.
+            const juce::String names[] { "Pan", SendBuses::getBusName (SendBuses::reverb), SendBuses::getBusName (SendBuses::delay) };
+            const juce::String values[] { panText, sendTexts[0], sendTexts[1] };
 
-            g.setFont (fonts::ui (9.5f));
+            const auto justification = captionsBelow ? juce::Justification::centred : juce::Justification::centredLeft;
 
-            for (int bus = 0; bus < SendBuses::numBuses; ++bus)
-                g.drawText (SendBuses::getBusName (bus), sendLabelAreas[(size_t) bus], juce::Justification::centred);
+            for (int i = 0; i < 3; ++i)
+            {
+                auto caption = captionAreas[(size_t) i];
+                g.setColour (colour::textSecondary);
+                g.setFont (fonts::ui (11.0f));
+                g.drawText (names[i], caption.removeFromTop (14), justification);
+                g.setColour (colour::text);
+                g.setFont (fonts::mono (12.0f));
+                g.drawText (values[i], caption, justification);
+            }
         }
     }
 
@@ -182,29 +210,45 @@ public:
 
         if (! isMaster())
         {
-            // One row of small knobs under the name: pan, then the Reverb and
-            // Delay sends, each with a caption (the pan's is its position).
-            auto knobRow = area.removeFromTop (46);
-            auto captions = knobRow.removeFromBottom (12);
-            const int column = knobRow.getWidth() / 3;
-            auto knobArea = [&] (int i) { return knobRow.withX (knobRow.getX() + i * column).withWidth (column).withSizeKeepingCentre (30, 30); };
-            auto captionArea = [&] (int i) { return captions.withX (captions.getX() + i * column).withWidth (column); };
+            // Pan, Reverb and Delay go right of the fader, either stacked in a
+            // column with captions beside them, or side by side with captions
+            // underneath: whichever lets the knobs be bigger. A tall panel
+            // favors the column, a wide strip the row.
+            auto column = area.removeFromRight (area.getWidth() - faderAreaWidth);
+            juce::Slider* knobs[] { &pan, &sendKnobs[0], &sendKnobs[1] };
 
-            pan.setBounds (knobArea (0));
-            panTextArea = captionArea (0);
+            const int stackedSize = juce::jmin (column.getHeight() / 3 - 4, column.getWidth() - captionWidth - 4);
+            const int acrossSize  = juce::jmin (column.getWidth() / 3 - 8, column.getHeight() - captionHeight);
+            captionsBelow = acrossSize > stackedSize;
+            const int size = juce::jlimit (16, maxKnobSize, juce::jmax (stackedSize, acrossSize));
 
-            for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+            if (captionsBelow)
             {
-                sendKnobs[(size_t) bus].setBounds (knobArea (bus + 1));
-                sendLabelAreas[(size_t) bus] = captionArea (bus + 1);
-            }
+                auto row = column.withSizeKeepingCentre (column.getWidth(), size + captionHeight);
+                const int cellWidth = row.getWidth() / 3;
 
-            area.removeFromTop (4);
+                for (int i = 0; i < 3; ++i)
+                {
+                    auto cell = row.removeFromLeft (cellWidth);
+                    knobs[i]->setBounds (cell.removeFromTop (size).withSizeKeepingCentre (size, size));
+                    captionAreas[(size_t) i] = cell;
+                }
+            }
+            else
+            {
+                const int slot = column.getHeight() / 3;
+
+                for (int i = 0; i < 3; ++i)
+                {
+                    auto cell = column.withY (column.getY() + i * slot).withHeight (slot);
+                    knobs[i]->setBounds (cell.removeFromLeft (size).withSizeKeepingCentre (size, size));
+                    cell.removeFromLeft (4);
+                    captionAreas[(size_t) i] = cell.withSizeKeepingCentre (cell.getWidth(), 28);
+                }
+            }
         }
-        else
-        {
-            area.removeFromTop (4);
-        }
+
+        area.removeFromTop (4);
 
         auto meterArea = area.withSizeKeepingCentre (64, area.getHeight());
         meter.setBounds (meterArea.removeFromLeft (24));
@@ -222,8 +266,9 @@ private:
     std::array<juce::Slider, SendBuses::numBuses> sendKnobs { juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox },
                                                               juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox } };
     juce::String name, dbText, panText { "C" };
-    juce::Rectangle<int> panTextArea;
-    std::array<juce::Rectangle<int>, SendBuses::numBuses> sendLabelAreas;
+    std::array<juce::Rectangle<int>, 3> captionAreas;   // pan, reverb, delay
+    bool captionsBelow = false;                         // knobs side by side, captions under them
+    std::array<juce::String, SendBuses::numBuses> sendTexts { "0%", "0%" };
     juce::Colour colour;
     bool selected = false;
 };
@@ -282,6 +327,9 @@ void MixerView::updateMeters()
 void MixerView::layoutStrips()
 {
     auto h = juce::jmax (120, viewport.getMaximumVisibleHeight());
+    const int numStrips = juce::jmax (1, (int) order.size());
+    const int spare = viewport.getMaximumVisibleWidth() - masterStripWidth - stripGap * (numStrips + 1);
+    const int stripWidth = juce::jlimit (minStripWidth, maxStripWidth, spare / numStrips);
     int x = 0;
 
     for (auto id : order)
@@ -291,8 +339,8 @@ void MixerView::layoutStrips()
     }
 
     x += stripGap;
-    masterStrip->setBounds (x, 0, stripWidth, h);
-    x += stripWidth;
+    masterStrip->setBounds (x, 0, masterStripWidth, h);
+    x += masterStripWidth;
 
     stripHolder.setSize (juce::jmax (x, viewport.getMaximumVisibleWidth()), h);
 }

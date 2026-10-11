@@ -40,6 +40,7 @@ namespace ikaros
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
+                         public juce::TextDragAndDropTarget,
                          public juce::DragAndDropTarget,
                          private juce::ScrollBar::Listener
 {
@@ -72,7 +73,6 @@ public:
     void startRenamingTrack (TrackId);
 
     std::function<void (RegionId)> onOpenRegionInEditor;
-    std::function<void (juce::Component*)> onAddTrackRequested;   // shows the track-type menu at this component
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
 
     //==============================================================================
@@ -87,7 +87,15 @@ public:
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    // DragAndDropTarget: loops and audio files dragged from the library.
+    // TextDragAndDropTarget: some file managers' drags arrive as text, a list
+    // of file:// links, one per line. Treated the same as a file drag.
+    bool isInterestedInTextDrag (const juce::String& text) override;
+    void textDragEnter (const juce::String& text, int x, int y) override;
+    void textDragMove (const juce::String& text, int x, int y) override;
+    void textDragExit (const juce::String& text) override;
+    void textDropped (const juce::String& text, int x, int y) override;
+
+    // DragAndDropTarget: sounds, loops and audio files dragged from the library.
     bool isInterestedInDragSource (const SourceDetails&) override;
     void itemDragEnter (const SourceDetails&) override;
     void itemDragMove (const SourceDetails&) override;
@@ -188,6 +196,7 @@ private:
     // Audio file drops
     struct DropTarget { TrackId track = 0; int row = -1; double beat = 0.0; };
     DropTarget findDropTarget (int x, int y) const;
+    int findSoundDropRow (int y) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ArrangementView)
 };

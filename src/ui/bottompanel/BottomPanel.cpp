@@ -124,11 +124,10 @@ public:
 
         if (isAudioTrack)
         {
-            auto r = getLocalBounds().reduced (18, 14).withWidth (5 * (Knob::preferredWidth + 14));
             g.setColour (colour::cardBg);
-            g.fillRoundedRectangle (r.withHeight (Knob::preferredHeight).toFloat(), 12.0f);
+            g.fillRoundedRectangle (cardArea.toFloat(), 12.0f);
 
-            auto text = r.withHeight (Knob::preferredHeight).reduced (20, 16);
+            auto text = cardArea.reduced (20, 16);
             g.setColour (colour::text);
             g.setFont (fonts::uiBold (15.0f));
             g.drawText ("Audio track", text.removeFromTop (24), juce::Justification::centredLeft);
@@ -164,22 +163,31 @@ public:
     {
         auto r = getLocalBounds().reduced (18, 14);
 
-        // A taller panel gives the keyboard longer keys, up to a point.
-        keyboard.setBounds (r.removeFromBottom (juce::jlimit (92, 150, r.getHeight() - Knob::preferredHeight - 14)));
-        r.removeFromBottom (14);
+        // A taller panel gives the keyboard longer keys, up to a point; the
+        // knobs get the rest of the height (up to 160px).
+        keyboard.setBounds (r.removeFromBottom (juce::jlimit (92, 150, r.getHeight() - Knob::preferredHeight - gap)));
+        r.removeFromBottom (gap);
 
-        auto top = r;
-        cardArea = top.withWidth (juce::jmin (top.getWidth(), 5 * (Knob::preferredWidth + 14))).withHeight (Knob::preferredHeight);
+        // The knobs share the width (leaving room for Details when shown), so
+        // on a wide window each tile is wide and its dial big. Past 260px a
+        // tile stops growing.
+        auto top = r.withHeight (juce::jlimit (Knob::preferredHeight, 160, r.getHeight()));
+        const int rowWidth = top.getWidth() - (detailsVisible ? detailsWidth + 20 : 0);
+        const int tileWidth = juce::jlimit (Knob::preferredWidth, 260, (rowWidth - gap * (knobs.size() - 1)) / knobs.size());
+
+        // The instrument and audio-track cards take the knobs' place (but
+        // don't stretch a few lines of text across the whole window).
+        cardArea = top.withWidth (juce::jmin (top.getWidth(), 640, tileWidth * knobs.size() + gap * (knobs.size() - 1)));
         openWindowButton.setBounds (cardArea.reduced (20, 14).removeFromBottom (32).removeFromLeft (190));
 
         for (auto* k : knobs)
         {
-            k->setBounds (top.removeFromLeft (Knob::preferredWidth).withHeight (Knob::preferredHeight));
-            top.removeFromLeft (14);
+            k->setBounds (top.removeFromLeft (tileWidth));
+            top.removeFromLeft (gap);
         }
 
-        top.removeFromLeft (20);
-        detailsArea = top.withHeight (112);
+        top.removeFromLeft (20 - gap);
+        detailsArea = top.withHeight (juce::jmin (top.getHeight(), 112));
     }
 
 private:
@@ -187,6 +195,8 @@ private:
     Selection& selection;
     juce::OwnedArray<Knob> knobs;
     PianoKeyboard keyboard;
+    static constexpr int gap = 14;            // between knob tiles
+    static constexpr int detailsWidth = 300;  // room kept for the Details card
 
     TrackDetails details;
     bool detailsVisible = false;

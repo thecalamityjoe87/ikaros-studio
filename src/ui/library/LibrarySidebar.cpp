@@ -99,7 +99,7 @@ public:
         switch (item.kind)
         {
             case Item::Kind::sound:
-            case Item::Kind::pluginInstrument: setTooltip ("Use " + i.name + " on the selected track"); break;
+            case Item::Kind::pluginInstrument: setTooltip ("Click to use " + i.name + " on the selected track, or drag it onto a track"); break;
             case Item::Kind::pluginEffect:     setTooltip ("Add " + i.name + " to the selected track"); break;
             case Item::Kind::file:             setTooltip ("Click to listen. Drag onto the timeline to use it."); break;
             case Item::Kind::folder:           setTooltip ("Open " + i.name); break;
@@ -180,19 +180,30 @@ public:
         juce::Button::mouseDown (e);
     }
 
-    // Files can be dragged onto the timeline. DragAndDropContainer (the main
-    // window) shows a picture of the row under the mouse while dragging.
+    // Files and sounds can be dragged onto the timeline. DragAndDropContainer
+    // (the main window) shows a picture of the row under the mouse while dragging.
     void mouseDrag (const juce::MouseEvent& e) override
     {
         juce::Button::mouseDrag (e);
 
-        if (item.kind == Item::Kind::file && ! dragged && e.getDistanceFromDragStart() > 6)
+        if (dragged || e.getDistanceFromDragStart() <= 6)
+            return;
+
+        juce::var description;
+
+        if (item.kind == Item::Kind::file)
+            description = dragtypes::describeLibraryFile (item.file);
+        else if (item.kind == Item::Kind::sound)
+            description = dragtypes::describeLibrarySound (item.id);
+        else if (item.kind == Item::Kind::pluginInstrument)
+            description = dragtypes::describeLibrarySound ("plugin:" + item.id);
+        else
+            return;
+
+        if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
         {
-            if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
-            {
-                dragged = true;
-                container->startDragging (dragtypes::describeLibraryFile (item.file), this);
-            }
+            dragged = true;
+            container->startDragging (description, this);
         }
     }
 

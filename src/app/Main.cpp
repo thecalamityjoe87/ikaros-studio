@@ -1,6 +1,7 @@
 // Ikaros Studio — application entry point.
 
 #include "app/MainWindow.h"
+#include "platform/ExternalDrops.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 
 namespace ikaros
@@ -15,7 +16,12 @@ public:
     const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
     // One window at a time, except for the plug-in scan's worker processes:
     // they're copies of this app started with a special command line.
-    bool moreThanOneInstanceAllowed() override             { return isScanWorker(); }
+    // IKAROS_SECOND_INSTANCE=1 also allows one, for testing a build while
+    // another copy is open.
+    bool moreThanOneInstanceAllowed() override
+    {
+        return isScanWorker() || juce::SystemStats::getEnvironmentVariable ("IKAROS_SECOND_INSTANCE", {}).isNotEmpty();
+    }
 
     void initialise (const juce::String& commandLine) override
     {
@@ -29,6 +35,7 @@ public:
 
         engine = std::make_unique<AudioEngine>();
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
+        platform::enableDropsFromWaylandApps();
     }
 
     void shutdown() override

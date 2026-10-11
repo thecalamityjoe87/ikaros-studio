@@ -6,6 +6,8 @@
 #include "ui/arrangement/ArrangementRuler.h"
 #include "app/CommandIDs.h"
 #include "engine/AudioPreview.h"
+#include "engine/PluginLibrary.h"
+#include "engine/SoundLibrary.h"
 #include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -657,11 +659,45 @@ void ArrangementView::fileDragExit (const juce::StringArray&)
 }
 
 //==============================================================================
+namespace
+{
+    // The files in a text drag: lines that are file:// links or full paths.
+    juce::StringArray filesFromText (const juce::String& text)
+    {
+        juce::StringArray files;
+
+        for (auto line : juce::StringArray::fromLines (text))
+        {
+            line = line.trim();
+
+            if (line.startsWithIgnoreCase ("file://"))
+                line = juce::URL (line).getLocalFile().getFullPathName();
+
+            if (juce::File::isAbsolutePath (line) && juce::File (line).existsAsFile())
+                files.add (line);
+        }
+
+        return files;
+    }
+}
+
+bool ArrangementView::isInterestedInTextDrag (const juce::String& text)
+{
+    return isInterestedInFileDrag (filesFromText (text));
+}
+
+void ArrangementView::textDragEnter (const juce::String& text, int x, int y)  { fileDragEnter (filesFromText (text), x, y); }
+void ArrangementView::textDragMove (const juce::String& text, int x, int y)   { fileDragMove (filesFromText (text), x, y); }
+void ArrangementView::textDragExit (const juce::String& text)                 { fileDragExit (filesFromText (text)); }
+void ArrangementView::textDropped (const juce::String& text, int x, int y)    { filesDropped (filesFromText (text), x, y); }
+
+//==============================================================================
 // Loops and audio files dragged from the library: the same as dropping a
 // file from the file manager.
 bool ArrangementView::isInterestedInDragSource (const SourceDetails& details)
 {
-    return dragtypes::getLibraryFile (details.description).existsAsFile();
+    return dragtypes::getLibraryFile (details.description).existsAsFile()
+        || dragtypes::getLibrarySound (details.description).isNotEmpty();
 }
 
 void ArrangementView::itemDragEnter (const SourceDetails& details)
@@ -669,9 +705,48 @@ void ArrangementView::itemDragEnter (const SourceDetails& details)
     itemDragMove (details);
 }
 
+// A sound goes on the instrument track it's dropped on; anywhere else, it
+// makes a new instrument track. Returns that track's row, or -1 for a new one.
+int ArrangementView::findSoundDropRow (int y) const
+{
+    const int contentY = y - viewport.getY() + viewport.getViewPositionY();
+
+    if (y < viewport.getY() || contentY >= (int) tracks.size() * geometry.rowHeight)
+        return -1;
+
+    const int row = rowAt (y);
+    return tracks[(size_t) row].kind == TrackKind::instrument ? row : -1;
+}
+
 void ArrangementView::itemDragMove (const SourceDetails& details)
 {
-    fileDragMove ({}, details.localPosition.x, details.localPosition.y);
+    const auto soundId = dragtypes::getLibrarySound (details.description);
+
+    if (soundId.isEmpty())
+    {
+        fileDragMove ({}, details.localPosition.x, details.localPosition.y);
+        return;
+    }
+
+    const int row = findSoundDropRow (details.localPosition.y);
+    juce::String name ("this sound");
+
+    if (auto sound = engine.getSounds().findSound (soundId))
+        name = sound->name;
+    else if (auto plugin = engine.getPlugins().findPlugin (soundId.fromFirstOccurrenceOf ("plugin:", false, false)))
+        name = plugin->name;
+
+    if (row >= 0)
+    {
+        overlay->setDropTarget (rowAreaInOverlay (row).reduced (2.0f), -1.0f, "Use " + name + " on " + tracks[(size_t) row].name);
+    }
+    else
+    {
+        // The drop zone below the tracks.
+        juce::Rectangle<float> area { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+                                      (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
+        overlay->setDropTarget (area, -1.0f, "New instrument track with " + name);
+    }
 }
 
 void ArrangementView::itemDragExit (const SourceDetails&)
@@ -681,6 +756,28 @@ void ArrangementView::itemDragExit (const SourceDetails&)
 
 void ArrangementView::itemDropped (const SourceDetails& details)
 {
+    overlay->clear();
+    const auto soundId = dragtypes::getLibrarySound (details.description);
+
+    if (soundId.isNotEmpty())
+    {
+        auto& tc = engine.getTracks();
+        const int row = findSoundDropRow (details.localPosition.y);
+
+        if (row >= 0)
+        {
+            tc.effects().setSound (tracks[(size_t) row].id, soundId);
+            selection.selectTrack (tracks[(size_t) row].id);
+        }
+        else if (auto id = tc.addInstrumentTrack())
+        {
+            tc.effects().setSound (id, soundId, false);   // part of the "Add Track" undo step
+            selection.selectTrack (id);
+        }
+
+        return;
+    }
+
     engine.getPreview().stop();
     filesDropped ({ dragtypes::getLibraryFile (details.description).getFullPathName() },
                   details.localPosition.x, details.localPosition.y);
