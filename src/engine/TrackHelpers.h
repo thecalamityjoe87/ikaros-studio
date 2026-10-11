@@ -26,6 +26,7 @@ inline const juce::Identifier inputProp     ("ikarosInput");     // audio input 
 inline const juce::Identifier monitorProp   ("ikarosMonitor");   // hear the input live
 inline const juce::Identifier iconProp      ("ikarosIcon");      // the track icon the user chose (empty = automatic)
 inline const juce::Identifier soundIdProp   ("ikarosSoundId");   // the library sound (SoundInfo::id)
+inline const juce::Identifier soundIconProp ("ikarosSoundIcon"); // the icon that sound suggests (SoundInfo::icon), or empty
 inline const juce::Identifier autoNameProp  ("ikarosAutoName");  // the name the app gave the track (so we know if the user renamed it)
 inline const juce::Identifier busProp       ("ikarosBus");       // on the hidden tracks that hold the shared effect buses: the bus number
 

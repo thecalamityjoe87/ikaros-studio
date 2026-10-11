@@ -39,6 +39,10 @@ public:
     /** Asks to save unsaved changes, then quits. Called for the close button and Quit. */
     void requestQuit();
 
+    /** Opens a session the system handed us: double-clicked in the file
+        manager, or named on the command line. */
+    void openFileFromSystem (const juce::File&);
+
     /** For the custom title bar: what's at a point in this component's coordinates. */
     WindowControlKind getWindowControlAt (juce::Point<float>) const;
 
@@ -111,6 +115,8 @@ private:
     void writeSessionPreview();
     void saveSession (std::function<void (bool saved)> afterSave = nullptr);
     void saveSessionAs (std::function<void (bool saved)> afterSave = nullptr);
+    void save (const juce::File& bundle, std::function<void (bool saved)> afterSave);
+    bool saving = false;        // a save is being written (see SavingOverlay)
     void confirmDiscardChanges (std::function<void()> thenDo);
     void showAudioSettings();
     void showNewTrackDialog();

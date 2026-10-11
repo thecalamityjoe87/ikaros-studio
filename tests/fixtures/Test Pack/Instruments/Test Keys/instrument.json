@@ -1,5 +1,35 @@
 {
     "name": "Test Keys",
     "category": "Keyboards",
-    "sfz": "Test Keys.sfz"
+    "icon": "piano",
+    "sfz": "Test Keys.sfz",
+    "knobs": [
+        {
+            "name": "Tone",
+            "control": "tone",
+            "default": 0.5
+        },
+        {
+            "name": "Attack",
+            "control": "cc",
+            "cc": 73,
+            "default": 0.0
+        },
+        {
+            "name": "Release",
+            "control": "cc",
+            "cc": 72,
+            "default": 0.3
+        },
+        {
+            "name": "Width",
+            "control": "width",
+            "default": 0.5
+        },
+        {
+            "name": "Room",
+            "control": "room",
+            "default": 0.2
+        }
+    ]
 }

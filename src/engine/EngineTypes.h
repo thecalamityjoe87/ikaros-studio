@@ -97,7 +97,8 @@ struct TrackInfo
     juce::String soundName;        // e.g. "Soft Piano" (the sound shown in the library)
     juce::String soundId;          // the library sound (SoundInfo::id), empty for audio tracks
     juce::String category;         // library category, used to pick the icon
-    juce::String icon;             // the icon the user chose ("guitar", "drums"...), or empty to follow the category
+    juce::String icon;             // the icon the user chose ("guitar", "drums"...), or empty for automatic
+    juce::String soundIcon;        // the icon the track's sound suggests (used when icon is empty), or empty
     juce::Colour colour;
     bool muted = false;
     bool solo = false;
@@ -208,6 +209,31 @@ struct EffectType
     bool isThirdParty = false;
 };
 
+// One credit line of a sound pack (who made what, under which license).
+struct PackCredit
+{
+    juce::String what;             // e.g. "Grand piano samples"
+    juce::String who;              // e.g. the sample library's author
+    juce::String license;          // SPDX identifier, e.g. "CC-BY-4.0"
+    juce::String url;
+    bool attributionRequired = false;   // the license says the credit must be shown
+};
+
+// A sound pack: a folder of instruments and loops, described by its pack.json.
+struct SoundPackInfo
+{
+    juce::String id;               // stable, never shown; sessions and downloads refer to the pack by it
+    juce::String name, description, author;
+    juce::String version;          // "major.minor.patch"
+    juce::String license;          // SPDX identifier
+    juce::File licenseFile;        // the full license text, if the pack has one
+    juce::int64 installedSize = 0; // bytes
+    std::vector<PackCredit> credits;
+    juce::File folder;
+    int format = 1;                // pack.json's layout: 1 = before ids and versions, 2 = now
+    bool bundled = false;          // installed with the app: always there, can't be removed
+};
+
 // A sound in the library: something an instrument track can play.
 struct SoundInfo
 {
@@ -215,6 +241,8 @@ struct SoundInfo
     juce::String name;             // what the user sees, e.g. "Warm Pad"
     juce::String category;         // library category, e.g. "Keyboards"
     juce::String detail;           // small text on the right of the row, e.g. "Sampled"
+    juce::String packId;           // the sound pack it comes from (empty for built-in synths)
+    juce::String icon;             // a track icon key the sound suggests (empty = the category's)
 };
 
 // A loop or audio file in the library, or a folder while browsing audio files.

@@ -37,6 +37,10 @@ public:
     /** Opens the chooser over `parent` on the given page. It owns itself. */
     static void show (juce::Component& parent, AudioEngine&, Page, Callbacks);
 
+    /** Closes the chooser if it's showing over `parent` (e.g. when a session
+        is opened from the file manager instead). */
+    static void dismiss (juce::Component& parent);
+
     ~SessionChooser() override;
 
     void paint (juce::Graphics&) override;

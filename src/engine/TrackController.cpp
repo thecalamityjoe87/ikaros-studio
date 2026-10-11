@@ -87,6 +87,7 @@ std::vector<TrackInfo> TrackController::getTracks() const
         info.soundName = t->state.getProperty (soundNameProp, "Basic Synth").toString();
         info.category = t->state.getProperty (categoryProp, "Synths").toString();
         info.icon = t->state.getProperty (iconProp).toString();
+        info.soundIcon = t->state.getProperty (soundIconProp).toString();
         info.soundId = effectsController->getSoundId (info.id);
         info.reverbSend = sendBuses->getSendLevel (info.id, SendBuses::reverb);
         info.delaySend = sendBuses->getSendLevel (info.id, SendBuses::delay);

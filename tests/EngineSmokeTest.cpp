@@ -6,7 +6,10 @@
 #include "engine/PluginLibrary.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
+#include "engine/SessionBundle.h"
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
+#include <juce_graphics/juce_graphics.h>             // a test preview picture
+#include <miniz.h>                                   // a deliberately broken bundle
 #include <iostream>
 
 using namespace ikaros;
@@ -73,7 +76,7 @@ int main (int argc, char* argv[])
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("IkarosSmokeTest");
     dir.deleteRecursively();
     dir.createDirectory();
-    auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke/Smoke.tracktionedit
+    auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke.iksession
 
     {
         AudioEngine engine { testSettings };
@@ -197,7 +200,7 @@ int main (int argc, char* argv[])
 
         pumpMessages();
         std::cout << "Sound\n";
-        check (tracks.effects().setSound (t2, "sampler:Ikaros Basics/Soft Piano"), "a sampled sound loads");
+        check (tracks.effects().setSound (t2, "sampler:ikaros-studio.basics/Soft Piano"), "a sampled sound loads");
         check (tracks.getTrack (t2)->soundName == "Soft Piano", "the sound is assigned to the track");
 
         std::cout << "Plug-ins\n";
@@ -394,8 +397,32 @@ int main (int argc, char* argv[])
             auto recent = engine.getRecentSessions();
             check (! recent.empty() && recent.front().file == file && recent.front().name == "Smoke",
                    "a saved session goes to the top of the recent list");
-            check (! recent.empty() && recent.front().preview == file.getSiblingFile ("Preview.png"),
-                   "its preview lives in the session's folder");
+            check (file == dir.getChildFile ("Smoke.iksession") && engine.getSessionFile() == file,
+                   "a session is saved as one .iksession file");
+
+            const auto mime = SessionBundle::readEntry (file, "mimetype").toString();
+            const auto info = juce::JSON::parse (SessionBundle::readEntry (file, SessionBundle::infoEntry).toString());
+            check (mime == SessionBundle::mimeType && info["appVersion"].toString() == IKAROS_VERSION
+                     && SessionBundle::readEntry (file, SessionBundle::sessionEntry).getSize() > 0,
+                   "the bundle holds its mimetype, bundle.json and the session");
+
+            // File managers recognise the type from the first bytes, as with
+            // ODF files: a ZIP header (30 bytes), then "mimetype" and its
+            // uncompressed content. (See packaging/linux/*.xml.)
+            juce::MemoryBlock head;
+            juce::FileInputStream (file).readIntoMemoryBlock (head, 80);
+            check (head.toString().substring (0, 2) == "PK"
+                     && juce::String::fromUTF8 ((const char*) head.getData() + 30, 36) == "mimetypeapplication/x-ikaros-session",
+                   "and its type can be recognised from its first bytes");
+
+            // The preview the UI writes before saving goes into the bundle too.
+            juce::Image picture (juce::Image::RGB, 16, 10, true);
+            juce::FileOutputStream pictureOut (engine.getPreviewFile());
+            juce::PNGImageFormat().writeImageToStream (picture, pictureOut);
+            pictureOut.flush();
+            check (engine.saveSession() && SessionBundle::readEntry (file, SessionBundle::previewEntry).getSize() > 0
+                     && engine.getRecentSessions().front().preview.existsAsFile(),
+                   "its preview is saved inside it, and the recent list can show it");
         }
 
         pumpMessages();
@@ -667,7 +694,7 @@ int main (int argc, char* argv[])
             };
 
             check (has (SoundLibrary::defaultSoundId) && has ("synth:Warm Pad"), "the built-in synth patches are there");
-            check (has ("sampler:Ikaros Basics/Soft Piano") && has ("sampler:Ikaros Basics/Electronic Kit"),
+            check (has ("sampler:ikaros-studio.basics/Soft Piano") && has ("sampler:ikaros-studio.basics/Electronic Kit"),
                    "the bundled sampled instruments are there");
             check (engine.getSounds().getLoops().size() >= 4, "and the loops");
             check (tracks.getTrack (t1)->soundId == SoundLibrary::defaultSoundId, "new tracks use the default sound");
@@ -675,7 +702,7 @@ int main (int argc, char* argv[])
             auto& effects = tracks.effects();
             const auto oldName = tracks.getTrack (t2)->name;
             check (oldName.startsWith ("Instrument"), "(new tracks are named Instrument N)");
-            check (effects.setSound (t2, "sampler:Ikaros Basics/Electronic Kit"), "picking a sound swaps the instrument");
+            check (effects.setSound (t2, "sampler:ikaros-studio.basics/Electronic Kit"), "picking a sound swaps the instrument");
             pumpMessages();
             check (tracks.getTrack (t2)->name == "Electronic Kit" && tracks.getTrack (t2)->category == "Drums",
                    "a track with the app's name takes the sound's name");
@@ -868,18 +895,31 @@ int main (int argc, char* argv[])
         tracks.regions().moveRegions ({ { r2, audioTrackId, 0.0 } });
         check (tracks.regions().getRegion (r2)->trackId == t1, "MIDI regions can't move to audio tracks");
 
-        // Pretend a take was recorded: a file in the recordings folder.
-        auto take = AudioEngine::getRecordingsFolder().getNonexistentChildFile ("IkarosSmokeTest_Take", ".wav", false);
-        AudioEngine::getRecordingsFolder().createDirectory();
+        // A take from somewhere outside the session, with a name Windows
+        // wouldn't accept (a track called "Verse: 1", say).
+        auto takes = dir.getChildFile ("Takes");
+        takes.createDirectory();
+        auto take = takes.getChildFile ("Verse: 1 Take?.wav");
         check (writeWav (take, 1.0), "(wrote a test take)");
         tracks.regions().importAudioFiles (audioTrackId, { take.getFullPathName() }, 20.0);
 
+        // What's inside a bundle: unpack it and look.
+        auto contents = [&dir] (const juce::File& bundle)
+        {
+            auto folder = dir.getChildFile ("Unpacked");
+            folder.deleteRecursively();
+            SessionBundle::unpack (bundle, folder);
+            return folder.getChildFile (SessionBundle::audioFolder);
+        };
+
         auto songFile = AudioEngine::getSessionFileFor (dir.getChildFile ("Song"));
-        check (songFile == dir.getChildFile ("Song").getChildFile ("Song.tracktionedit"), "a session gets a folder of its own");
+        check (songFile == dir.getChildFile ("Song.iksession") && AudioEngine::getSessionFileFor (songFile) == songFile,
+               "Save As adds the .iksession extension (once)");
         check (engine.saveSessionAs (dir.getChildFile ("Song")), "Save As");
-        check (songFile.existsAsFile() && engine.getSessionFile() == songFile, "saved in that folder");
-        auto songAudio = AudioEngine::getAudioFolderFor (songFile);
-        check (songAudio.getChildFile (take.getFileName()).existsAsFile(), "copies recordings into the session");
+        check (songFile.existsAsFile() && engine.getSessionFile() == songFile, "saved as that file");
+        auto songAudio = contents (songFile);
+        check (songAudio.getChildFile ("Verse_ 1 Take_.wav").existsAsFile(),
+               "takes go into the bundle, with names every system accepts");
         check (songAudio.getChildFile (imported.getFileName()).existsAsFile(), "and imported files");
         check (songAudio.findChildFiles (juce::File::findFiles, false, "Loop*").size() == 1,
                "a file used by two regions is copied once");
@@ -893,17 +933,122 @@ int main (int argc, char* argv[])
         check (engine.saveSessionAs (otherFile), "Save As somewhere else");
         check (engine.saveSession(), "and save again");
 
-        // A file added to a session that's already saved (Tracktion stores
-        // its path differently once the session file exists).
         auto late = dir.getChildFile ("Late.wav");
         check (writeWav (late, 1.0), "(wrote another test WAV)");
         tracks.regions().importAudioFiles (audioTrackId, { late.getFullPathName() }, 40.0);
         check (engine.saveSession() && engine.saveSession(), "save twice after adding a file");
         late.deleteFile();
-        check (AudioEngine::getAudioFolderFor (otherFile).getChildFile (take.getFileName()).existsAsFile(),
-               "takes the session's audio along");
-        check (AudioEngine::getSessionFileFor (otherFile) == otherFile, "a session already in its own folder stays there");
-        dir.getChildFile ("Song").deleteRecursively();   // the new session must stand on its own
+        check (contents (otherFile).getChildFile ("Verse_ 1 Take_.wav").existsAsFile(), "Save As takes the session's audio along");
+        songFile.deleteFile();   // the new bundle must stand on its own
+
+        std::cout << "Session bundles\n";
+        {
+            check (SessionBundle::makePortableFileName ("Verse: 1?.wav") == "Verse_ 1_.wav"
+                     && SessionBundle::makePortableFileName ("CON.wav") == "_CON.wav"
+                     && SessionBundle::makePortableFileName ("Take. ") == "Take"
+                     && SessionBundle::makePortableFileName (juce::String::fromUTF8 ("Caf\xc3\xa9 \xe2\x99\xab.flac"))
+                          == juce::String::fromUTF8 ("Caf\xc3\xa9 \xe2\x99\xab.flac"),
+                   "file names are made valid on every system (and other languages are kept)");
+
+            // A bundle that tries to write outside its folder ("zip slip").
+            auto evil = dir.getChildFile ("Evil.iksession");
+            {
+                mz_zip_archive zip;
+                mz_zip_zero_struct (&zip);
+                mz_zip_writer_init_file (&zip, evil.getFullPathName().toRawUTF8(), 0);
+                mz_zip_writer_add_mem (&zip, "../Escaped.txt", "x", 1, MZ_NO_COMPRESSION);
+                mz_zip_writer_finalize_archive (&zip);
+                mz_zip_writer_end (&zip);
+            }
+
+            auto into = dir.getChildFile ("EvilUnpacked");
+            check (SessionBundle::unpack (evil, into).failed() && ! dir.getChildFile ("Escaped.txt").exists(),
+                   "a bundle can't write outside its folder");
+            check (! engine.openSession (evil) && engine.getSessionFile() == otherFile, "and such a bundle doesn't open");
+
+            // The working copy goes when the session is replaced.
+            auto workFolder = engine.getPreviewFile().getParentDirectory();
+            check (workFolder.isDirectory(), "(the session has a working copy)");
+            check (engine.openSession (otherFile) && ! workFolder.exists(), "a replaced session's working copy is deleted");
+        }
+
+        std::cout << "Sessions from earlier versions\n";
+        {
+            // A session with a sampled piano playing, and audio regions.
+            auto piano = tracks.addInstrumentTrack();
+            check (tracks.effects().setSound (piano, "sampler:ikaros-studio.basics/Soft Piano"), "(a sampled piano)");
+            tracks.regions().createChordRegion (piano, 0.0);
+            pumpMessages();
+            auto portable = dir.getChildFile ("Portable.iksession");
+            check (engine.saveSessionAs (portable), "(saved)");
+
+            // Turn it into a session folder the way earlier versions saved
+            // them, as if made on another computer: old-style sound ids, and
+            // the sampler's files at a Windows path that doesn't exist here.
+            auto legacyDir = dir.getChildFile ("Legacy");
+            legacyDir.deleteRecursively();
+            SessionBundle::unpack (portable, legacyDir);
+            auto legacyFile = legacyDir.getChildFile ("Legacy.tracktionedit");
+            const auto basicsFolder = engine.getSounds().findPack ("ikaros-studio.basics")->folder.getFullPathName();
+            legacyFile.replaceWithText (legacyDir.getChildFile (SessionBundle::sessionEntry).loadFileAsString()
+                                          .replace ("sampler:ikaros-studio.basics/", "sampler:Ikaros Basics/")
+                                          .replace (basicsFolder, "C:\\Users\\someone\\Ikaros Basics")
+                                          .replace (basicsFolder.replaceCharacter ('/', '\\'), "C:\\Users\\someone\\Ikaros Basics"));
+            legacyDir.getChildFile (SessionBundle::sessionEntry).deleteFile();
+            check (legacyFile.loadFileAsString().contains ("C:\\Users\\someone") && ! legacyFile.loadFileAsString().contains (basicsFolder),
+                   "(the old session points at another computer's files)");
+
+            auto listFolder = [] (const juce::File& folder)
+            {
+                juce::StringArray files;
+
+                for (auto& f : folder.findChildFiles (juce::File::findFiles, true))
+                    files.add (f.getRelativePathFrom (folder) + " " + juce::String (f.getSize()));
+
+                files.sort (false);
+                return files;
+            };
+
+            const auto before = listFolder (legacyDir);
+
+            check (engine.openSession (legacyFile), "a session folder from an earlier version opens");
+            pumpMessages();
+            check (engine.getSessionName() == "Legacy" && engine.getSessionFile() == dir.getChildFile ("Legacy.iksession"),
+                   "it will be saved as a bundle next to its folder");
+
+            TrackId legacyPiano = 0;
+            int audioWithWaveforms = 0;
+
+            for (auto& t : tracks.getTracks())
+            {
+                if (t.soundName == "Soft Piano")
+                    legacyPiano = t.id;
+
+                for (auto& r : tracks.regions().getRegions (t.id))
+                    if (! r.isMidi && ! r.peaks.empty())
+                        ++audioWithWaveforms;
+            }
+
+            check (legacyPiano != 0 && tracks.effects().getSoundId (legacyPiano) == "sampler:ikaros-studio.basics/Soft Piano",
+                   "old sound ids are read, and kept the new way");
+            check (engine.renderPeak (0.0, 4.0) > 0.01f, "the piano finds this computer's samples, and plays");
+            check (audioWithWaveforms >= 4, "its audio loads from the old folder");
+
+            check (engine.saveSession() && dir.getChildFile ("Legacy.iksession").existsAsFile(), "saving writes the bundle");
+            check (listFolder (legacyDir) == before, "and leaves the old folder exactly as it was");
+
+            legacyDir.deleteRecursively();
+            check (engine.openSession (dir.getChildFile ("Legacy.iksession")), "the new bundle opens on its own");
+            pumpMessages();
+            int stillThere = 0;
+
+            for (auto& t : tracks.getTracks())
+                for (auto& r : tracks.regions().getRegions (t.id))
+                    if (! r.isMidi && ! r.peaks.empty())
+                        ++stillThere;
+
+            check (stillThere == audioWithWaveforms, "with all its audio");
+        }
 
         std::cout << "Region looping\n";
         {
@@ -984,12 +1129,46 @@ int main (int argc, char* argv[])
             audioFile.deleteFile();
         }
 
+        std::cout << "Sound pack manifests\n";
+        {
+            auto& sounds = engine.getSounds();
+            sounds.addPackFolder (juce::File (IKAROS_TEST_FIXTURES));
+
+            auto basics = sounds.findPack ("ikaros-studio.basics");
+            check (basics && basics->bundled && basics->format == 2 && basics->name == "Ikaros Basics"
+                     && basics->license == "CC0-1.0" && basics->credits.size() == 1,
+                   "Ikaros Basics has a format 2 pack.json, comes with the app, and is CC0");
+
+            auto test = sounds.findPack ("ikaros-studio.test");
+            check (test && ! test->bundled && test->version == "1.2.3" && test->installedSize == 66282
+                     && test->credits.size() == 1 && test->credits.front().attributionRequired,
+                   "a format 2 pack: id, version, size and credits");
+
+            auto old = sounds.findPack ("local.old-pack");
+            check (old && old->format == 1 && old->version == "0.0.0" && old->name == "Old Pack"
+                     && old->credits.size() == 1 && old->credits.front().who == "Made for the engine smoke test.",
+                   "an old pack still loads, with an id made from its folder name");
+
+            auto* testKeys = sounds.findSampledInstrument ("sampler:ikaros-studio.test/Test Keys");
+            check (testKeys && testKeys->info.packId == "ikaros-studio.test" && testKeys->info.icon == "piano"
+                     && testKeys->knobs.size() == 5 && testKeys->knobs[1].control == "cc" && testKeys->knobs[1].cc == 73,
+                   "an SFZ instrument's icon and five knobs are read");
+
+            auto* oldKeys = sounds.findSampledInstrument ("sampler:local.old-pack/Old Keys");
+            check (oldKeys && oldKeys->info.packId == "local.old-pack" && oldKeys->zones.size() == 1 && oldKeys->knobs.empty(),
+                   "an instrument without five valid knobs falls back to the defaults");
+
+            check (SoundLibrary::compareVersions ("1.2.3", "1.10.0") < 0 && SoundLibrary::compareVersions ("2.0", "2.0.0") == 0
+                     && SoundLibrary::compareVersions ("1.0.1", "1.0.0") > 0, "versions compare number by number");
+            check (SoundLibrary::isValidPackId ("ikaros-studio.basics") && ! SoundLibrary::isValidPackId ("ikarosStudio.basics")
+                     && ! SoundLibrary::isValidPackId ("my pack"), "pack ids are lowercase letters, digits, dots and dashes");
+        }
+
         std::cout << "SFZ instruments (sfizz)\n";
         {
             engine.newSession();
             pumpMessages();
-            engine.getSounds().addPackFolder (juce::File (IKAROS_TEST_FIXTURES));
-            const juce::String sfzSound ("sampler:Test Pack/Test Keys");
+            const juce::String sfzSound ("sampler:ikaros-studio.test/Test Keys");
             check (engine.getSounds().findSound (sfzSound).has_value(), "an instrument.json can name an SFZ file");
 
             auto st = tracks.getTracks().front().id;
@@ -1047,7 +1226,7 @@ int main (int argc, char* argv[])
     {
         // A fresh engine: Tracktion expects only one at a time.
         AudioEngine reopened { testSettings };
-        check (reopened.openSession (dir.getChildFile ("Elsewhere").getChildFile ("Other").getChildFile ("Other.tracktionedit")), "reopen");
+        check (reopened.openSession (dir.getChildFile ("Elsewhere").getChildFile ("Other.iksession")), "reopen");
         pumpMessages();
         int withWaveforms = 0;
 
@@ -1149,8 +1328,13 @@ int main (int argc, char* argv[])
             check (instrument && instrument->isThirdParty && ! instrument->missing, "and the plug-in instrument");
         }
 
-        // Pretend the gain plug-in was uninstalled: rename it in the saved session.
-        if (auto xml = juce::parseXML (pluginSession))
+        // Pretend the gain plug-in was uninstalled: rename it in the saved
+        // session (unpacked from its bundle, then packed again).
+        auto unpacked = dir.getChildFile ("PluginsUnpacked");
+        SessionBundle::unpack (pluginSession, unpacked);
+        auto unpackedSession = unpacked.getChildFile (SessionBundle::sessionEntry);
+
+        if (auto xml = juce::parseXML (unpackedSession))
         {
             for (auto* plugin : xml->getChildByName ("TRACK")->getChildIterator())
             {
@@ -1163,7 +1347,8 @@ int main (int argc, char* argv[])
                 }
             }
 
-            xml->writeTo (pluginSession);
+            xml->writeTo (unpackedSession);
+            SessionBundle::pack (pluginSession, { { SessionBundle::sessionEntry, unpackedSession, true } }, {});
         }
 
         {
@@ -1176,7 +1361,8 @@ int main (int argc, char* argv[])
                    "the missing plug-in shows as a placeholder with its name");
             check (engine.getTracks().effects().getInstrument (t1).has_value(), "the rest of the track is fine");
             check (engine.saveSession(), "it can be saved");
-            check (pluginSession.loadFileAsString().contains ("Ikaros Gone Gain"), "and keeps the missing plug-in's settings");
+            check (SessionBundle::readEntry (pluginSession, SessionBundle::sessionEntry).toString().contains ("Ikaros Gone Gain"),
+                   "and keeps the missing plug-in's settings");
         }
     }
     else

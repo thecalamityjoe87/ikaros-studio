@@ -106,7 +106,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     // buttons and knobs redraw themselves when their own values change.
     // (std::tie bundles references to the members, so the two sets compare
     // in one go.)
-    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.category, i.colour, i.muted, i.silencedBySolo); };
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.colour, i.muted, i.silencedBySolo); };
     const bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
 
     info = t;
@@ -245,7 +245,9 @@ void TrackHeader::paint (juce::Graphics& g)
     // Icon tile
     g.setColour (selected ? colour::controlFill : juce::Colour (0xff1f232a));
     g.fillRoundedRectangle (iconArea.toFloat(), size::radiusLarge);
-    icons::draw (g, icons::forTrack (info.icon, info.category), iconArea.toFloat(), info.colour, 22.0f);
+    // The icon the user picked, or else the one the sound suggests, or else the category's.
+    icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
+                 iconArea.toFloat(), info.colour, 22.0f);
 
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
     g.setFont (fonts::uiBold (14.0f));

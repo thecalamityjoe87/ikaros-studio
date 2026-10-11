@@ -196,6 +196,19 @@ void SessionChooser::show (juce::Component& parent, AudioEngine& engine, Page pa
     chooser->grabKeyboardFocus();
 }
 
+void SessionChooser::dismiss (juce::Component& parent)
+{
+    // Collected first: deleting a child changes the parent's list of children.
+    juce::Array<SessionChooser*> choosers;
+
+    for (auto* child : parent.getChildren())
+        if (auto* chooser = dynamic_cast<SessionChooser*> (child))
+            choosers.add (chooser);
+
+    for (auto* chooser : choosers)
+        delete chooser;   // it's owned by nobody but itself (see show)
+}
+
 SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     : engine (e), callbacks (std::move (c))
 {

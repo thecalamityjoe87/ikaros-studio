@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
@@ -103,9 +104,10 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    // Dialogs drawn over the window (session chooser, new track) cover all of it.
+    // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
     for (auto* child : getChildren())
-        if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr)
+        if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
+             || dynamic_cast<SavingOverlay*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -581,6 +583,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
 
 bool MainComponent::perform (const InvocationInfo& info)
 {
+    // Nothing happens while a save is being written (see SavingOverlay); a
+    // change then wouldn't be in the file, yet would look saved.
+    if (saving)
+        return true;
+
     auto& tracks = engine.getTracks();
     const auto trackId = selection.getTrack();
 
@@ -846,8 +853,10 @@ void MainComponent::openOtherSession()
 {
     confirmDiscardChanges ([this]
     {
+        // Bundles, and session folders from earlier versions.
         fileChooser = std::make_unique<juce::FileChooser> ("Open Session", getDefaultSessionFolder(),
-                                                           juce::String ("*") + AudioEngine::sessionFileExtension);
+                                                           juce::String ("*") + AudioEngine::sessionFileExtension
+                                                             + ";*" + AudioEngine::legacySessionFileExtension);
 
         fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                   [this] (const juce::FileChooser& fc)
@@ -861,7 +870,50 @@ void MainComponent::openOtherSession()
 void MainComponent::openSessionFile (const juce::File& file)
 {
     if (! engine.openSession (file))
-        showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read.");
+        showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read, "
+                                            "or it's damaged.");
+}
+
+void MainComponent::openFileFromSystem (const juce::File& file)
+{
+    // Double-clicked in the file manager (or passed on the command line):
+    // it replaces the session chooser, after asking about unsaved changes.
+    if (saving || ! file.existsAsFile())
+        return;
+
+    SessionChooser::dismiss (*this);
+    confirmDiscardChanges ([this, file] { openSessionFile (file); });
+}
+
+void MainComponent::save (const juce::File& bundle, std::function<void (bool)> afterSave)
+{
+    // The picture for the session chooser goes into the session first.
+    writeSessionPreview();
+    auto job = engine.beginSave (bundle);
+
+    if (job == nullptr)
+    {
+        showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + bundle.getFullPathName()
+                                            + "\". Check that the folder exists and that you can write to it.");
+        if (afterSave)
+            afterSave (false);
+
+        return;
+    }
+
+    // Packing the audio into the file runs in the background (see SavingOverlay).
+    saving = true;
+
+    SavingOverlay::run (*this, engine, std::move (job), [this, bundle, afterSave] (bool ok)
+    {
+        saving = false;
+
+        if (! ok)
+            showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + bundle.getFullPathName()
+                                                + "\". Check that there's enough space on the disk.");
+        if (afterSave)
+            afterSave (ok);
+    });
 }
 
 void MainComponent::saveSession (std::function<void (bool)> afterSave)
@@ -872,31 +924,16 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
         return;
     }
 
-    const bool ok = engine.saveSession();
-
-    if (ok)
-        writeSessionPreview();
-
-    if (! ok)
-        showError ("Couldn't save session", "Check that the folder still exists and that you can write to it.");
-
-    if (afterSave)
-        afterSave (ok);
+    save (engine.getSessionFile(), std::move (afterSave));
 }
 
 void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
 {
-    // A saved session lives in a folder of its own ("My Song/My Song.tracktionedit"),
-    // so offer the folder that one is in, not the session's own folder.
-    auto initial = getDefaultSessionFolder().getChildFile ("My Session");
-
-    if (! engine.isUntitled())
-    {
-        auto current = engine.getSessionFile();
-        initial = AudioEngine::getSessionFileFor (current) == current
-                    ? current.getParentDirectory().getSiblingFile (current.getFileNameWithoutExtension())
-                    : current;
-    }
+    // A session is one file ("My Song.iksession").
+    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
+                                                                                    ? juce::String ("My Session")
+                                                                                    : engine.getSessionName())
+                                       : engine.getSessionFile();
 
     fileChooser = std::make_unique<juce::FileChooser> ("Save Session As", initial,
                                                        juce::String ("*") + AudioEngine::sessionFileExtension);
@@ -914,24 +951,13 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
             return;
         }
 
-        auto save = [this, chosen, afterSave]
-        {
-            const bool ok = engine.saveSessionAs (chosen);
-
-            if (ok)
-                writeSessionPreview();
-
-            if (! ok)
-                showError ("Couldn't save session", "Ikaros Studio couldn't write \""
-                             + AudioEngine::getSessionFileFor (chosen).getFullPathName() + "\".");
-
-            if (afterSave)
-                afterSave (ok);
-        };
-
-        // The session goes in a folder named after it, so check that folder
-        // (the file dialog only knows about the name that was typed).
+        // The dialog may hand back the name as typed, without the extension.
         const auto target = AudioEngine::getSessionFileFor (chosen);
+
+        auto save = [this, target, afterSave]
+        {
+            this->save (target, afterSave);
+        };
 
         if (! target.exists() || target == engine.getSessionFile())
         {
@@ -943,7 +969,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
                            .withIconType (juce::MessageBoxIconType::WarningIcon)
                            .withTitle ("Replace session?")
                            .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
-                                           + "\" already exists in " + target.getParentDirectory().getParentDirectory().getFullPathName()
+                                           + "\" already exists in " + target.getParentDirectory().getFullPathName()
                                            + ". Replace it?")
                            .withButton ("Replace")
                            .withButton ("Cancel")
@@ -959,9 +985,9 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
     });
 }
 
-// A picture of the tracks for the session chooser, saved in the session's
-// folder. It's taken from what's on screen, so it shows the session the way
-// the user left it.
+// A picture of the tracks for the session chooser, saved into the session.
+// It's taken from what's on screen, so it shows the session the way the user
+// left it.
 void MainComponent::writeSessionPreview()
 {
     if (arrangement.getWidth() <= 0 || arrangement.getHeight() <= 0)
@@ -976,7 +1002,7 @@ void MainComponent::writeSessionPreview()
     auto image = snapshot.rescaled (width, snapshot.getHeight() * width / snapshot.getWidth(),
                                     juce::Graphics::highResamplingQuality);
 
-    auto file = AudioEngine::getPreviewFileFor (engine.getSessionFile());
+    auto file = engine.getPreviewFile();
     file.deleteFile();   // FileOutputStream appends to an existing file
     juce::FileOutputStream out (file);
     juce::PNGImageFormat png;
@@ -990,6 +1016,9 @@ void MainComponent::writeSessionPreview()
 
 void MainComponent::requestQuit()
 {
+    if (saving)
+        return;   // the save finishes first (it only takes a moment)
+
     confirmDiscardChanges ([] { juce::JUCEApplication::getInstance()->quit(); });
 }
 

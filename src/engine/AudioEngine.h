@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/SessionBundle.h"
 #include <juce_events/juce_events.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
@@ -67,46 +68,75 @@ public:
     ~AudioEngine();
 
     //==============================================================================
-    // Sessions ("Sessions" in the UI). Like a GarageBand project, a saved
-    // session is self-contained: a folder named after it holding the session
-    // file and an Audio folder with every audio file its regions use
-    // (imported files, library loops and recordings):
+    // Sessions ("Sessions" in the UI). A saved session is one file, a
+    // .iksession bundle (see SessionBundle), holding the session and every
+    // audio file it uses (recordings, imported files, loops), so it can be
+    // moved, backed up, shared, and opened on Linux, Windows or macOS.
+    // Instruments' samples aren't in it: they belong to the sound packs, and
+    // a session finds them by pack id on whichever computer opens it.
     //
-    //     My Song/My Song.tracktionedit
-    //     My Song/Audio/...
-    //
-    // Instruments' samples aren't copied: they belong to the sound library.
-    static constexpr const char* sessionFileExtension = ".tracktionedit";
+    // While a session is open, the app works on an unpacked copy of it (a
+    // working folder in the computer's local app data, see
+    // platform::getLocalDataFolder). Recordings go straight into that copy;
+    // saving packs it back into the bundle.
+    static constexpr const char* sessionFileExtension = SessionBundle::extension;
+
+    /** Sessions saved by earlier versions: a folder with a .tracktionedit file
+        and an Audio folder. They still open; saving one writes a bundle next
+        to its folder and leaves the folder as it was. */
+    static constexpr const char* legacySessionFileExtension = ".tracktionedit";
 
     /** Replaces the session with a new, untitled one built from a template. */
     void newSession (const NewSessionSettings& = {});
+
+    /** Opens a .iksession bundle, or a session folder from an earlier version.
+        Returns false (and keeps the current session) if it can't be read. */
     bool openSession (const juce::File&);
+
+    /** Saving, in two steps, so the slow part (packing the audio into the
+        bundle) can run without blocking the UI:
+
+          1. beginSave (on the message thread) writes the session into its
+             working copy and returns a job, or nullptr if that failed;
+          2. the job's run() packs the bundle, on any thread, updating
+             `progress`;
+          3. finishSave (on the message thread) makes the bundle the session's
+             file. It returns false if packing failed (the old bundle, if
+             any, is untouched).
+
+        saveSession and saveSessionAs do all three in one go. */
+    struct SaveJob
+    {
+        juce::File bundle;
+        std::vector<SessionBundle::Entry> entries;
+        juce::var info;
+        std::atomic<float> progress { 0.0f };
+        juce::Result result = juce::Result::ok();
+
+        void run()      { result = SessionBundle::pack (bundle, entries, info, &progress); }
+    };
+
+    std::unique_ptr<SaveJob> beginSave (const juce::File& bundle);
+    bool finishSave (SaveJob&);
+
     bool saveSession();                         // returns false if the session is untitled
-    /** Saves to getSessionFileFor (file), copying the audio the session uses
-        into its Audio folder. */
     bool saveSessionAs (const juce::File&);
 
-    /** Where a session saved as "Dir/My Song" goes: "Dir/My Song/My
-        Song.tracktionedit" (or just the file, if it's already in a folder of
-        its own name). */
+    /** Where a session saved as "Dir/My Song" goes: "Dir/My Song.iksession". */
     static juce::File getSessionFileFor (const juce::File& chosenFile);
 
-    /** A saved session's own audio: the Audio folder beside its file. */
-    static juce::File getAudioFolderFor (const juce::File& sessionFile);
-
-    /** Where the session chooser's picture of a session is kept: Preview.png
-        beside its file. The UI writes it when saving (see MainComponent). */
-    static juce::File getPreviewFileFor (const juce::File& sessionFile);
+    /** Where the session chooser's picture of the session goes before saving
+        (in the working copy). The UI writes it, then saves. */
+    juce::File getPreviewFile() const;
 
     /** Sessions opened or saved lately, newest first (missing files left out). */
     std::vector<RecentSession> getRecentSessions() const;
 
-    /** Where an untitled session's recordings are written:
-        Documents/Ikaros Studio/Recordings. A saved session records straight
-        into its Audio folder; saving copies an untitled one's takes there. */
-    static juce::File getRecordingsFolder();
-
     bool isUntitled() const;
+
+    /** The session's file: its bundle, or for a session from an earlier
+        version that hasn't been saved yet, the bundle it will be saved as.
+        Empty while untitled. */
     juce::File getSessionFile() const;
     juce::String getSessionName() const;
     bool hasUnsavedChanges() const;
@@ -205,7 +235,11 @@ private:
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
 
-    void loadEdit (const juce::ValueTree& editState, const juce::File&, bool untitled);
+    /** Replaces the session. workFolder is its working copy; bundle the file
+        it's saved as (empty while untitled); legacySessionFile, for a session
+        from an earlier version, where its audio still is. */
+    void loadEdit (const juce::ValueTree& editState, const juce::File& workFolder,
+                   const juce::File& bundle, const juce::File& legacySessionFile);
 
     /** Tells listeners (soon, on the message thread) that this changed. Most
         changes are spotted automatically by watching the session's ValueTree;

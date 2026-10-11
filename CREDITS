@@ -60,6 +60,14 @@ sfizz, the SFZ sample player
     generated effects     Cimalando)
 
 
+miniz, which reads and writes .iksession files
+  https://github.com/richgel999/miniz
+  MIT License
+  Copyright 2013-2014 RAD Game Tools and Valve Software
+  Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
+  The full license text is in external/miniz/LICENSE.
+
+
 Fonts
   Figtree and JetBrains Mono, SIL Open Font License 1.1 (see resources/fonts).
 
@@ -71,4 +79,5 @@ Icons
 
 Sounds
   Ikaros Basics, the sound pack that comes with the app, is made from scratch
-  by tools/generate_sounds.py. It contains no third-party samples.
+  by tools/generate_sounds.py. It contains no third-party samples, and it's
+  released under CC0 1.0 (public domain): use the sounds however you like.

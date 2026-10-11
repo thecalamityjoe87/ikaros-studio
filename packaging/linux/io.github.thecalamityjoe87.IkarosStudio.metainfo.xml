@@ -27,6 +27,9 @@
   </description>
 
   <launchable type="desktop-id">io.github.thecalamityjoe87.IkarosStudio.desktop</launchable>
+  <provides>
+    <mediatype>application/x-ikaros-session</mediatype>
+  </provides>
   <icon type="stock">io.github.thecalamityjoe87.IkarosStudio</icon>
 
   <url type="homepage">https://github.com/thecalamityjoe87/ikaros-studio</url>

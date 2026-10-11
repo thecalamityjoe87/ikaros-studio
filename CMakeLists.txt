@@ -79,6 +79,16 @@ add_subdirectory("${SFIZZ_DIR}" "${CMAKE_BINARY_DIR}/sfizz" EXCLUDE_FROM_ALL)
 set(CMAKE_CXX_FLAGS "${IKAROS_SAVED_CXX_FLAGS}")
 set(CMAKE_CXX_STANDARD 20)
 
+# miniz writes and reads .iksession files (ZIP archives, ZIP64 when they're
+# over 4 GB); see src/engine/SessionBundle.h. Pinned to a release tag (3.1.2).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/miniz/miniz_zip.c")
+    message(FATAL_ERROR
+        "The miniz submodule is missing. Run:\n"
+        "  git submodule update --init external/miniz")
+endif()
+
+add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
+
 # Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
 # Units on macOS. JUCE ships everything needed to host them.
 if(APPLE)
@@ -98,6 +108,7 @@ juce_add_gui_app(IkarosStudio
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/io.github.thecalamityjoe87.IkarosStudio.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Ikaros Studio uses audio inputs for recording."
+    DOCUMENT_EXTENSIONS iksession   # macOS: Finder opens .iksession files with the app
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE)
 
@@ -139,6 +150,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
+    src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
@@ -147,7 +159,8 @@ set(IKAROS_ENGINE_SOURCES
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
     src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
-    src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp)
+    src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
+    src/platform/AppFolders.h          src/platform/AppFolders.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -170,6 +183,7 @@ set(IKAROS_UI_SOURCES
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
+    src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -226,9 +240,13 @@ target_compile_definitions(IkarosStudio PRIVATE
     ${IKAROS_PLUGIN_HOST_DEFINITIONS}
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
+# The version, as the engine records it in saved sessions.
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        miniz
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
@@ -294,6 +312,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES packaging/linux/${APP_ID}.metainfo.xml
             DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(FILES packaging/linux/${APP_ID}.xml   # the .iksession file type
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
     install(FILES resources/icons/${APP_ID}.svg
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
     install(FILES resources/icons/${APP_ID}.png
@@ -316,12 +336,14 @@ if(IKAROS_BUILD_TESTS)
 
     target_sources(IkarosEngineSmokeTest PRIVATE
         tests/EngineSmokeTest.cpp
+        src/platform/AppFolders.cpp      # the engine keeps open sessions there
         ${IKAROS_ENGINE_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
 
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
+        IKAROS_VERSION="${PROJECT_VERSION}"
         IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
@@ -333,6 +355,7 @@ if(IKAROS_BUILD_TESTS)
         TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        miniz
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine

@@ -157,6 +157,7 @@ void SoundLibrary::addPackFolder (const juce::File& folder)
 
 void SoundLibrary::rescan()
 {
+    packs.clear();
     sounds.clear();
     sampled.clear();
     loops.clear();
@@ -164,13 +165,24 @@ void SoundLibrary::rescan()
     for (auto& patch : synthPatches())
         sounds.push_back ({ synthPrefix + patch.name, patch.name, patch.category, "Synth" });
 
-    std::vector<juce::File> roots { getBundledSoundsFolder(), getUserSoundsFolder() };
+    // The packs that come with the app first, so if a user's pack has the
+    // same id as one of them, the app's own wins.
+    const auto bundledRoot = getBundledSoundsFolder();
+    std::vector<juce::File> roots { bundledRoot, getUserSoundsFolder() };
     roots.insert (roots.end(), extraPackFolders.begin(), extraPackFolders.end());
 
     for (auto& root : roots)
-        if (root.isDirectory())
-            for (auto& pack : root.findChildFiles (juce::File::findDirectories, false))
-                readPack (pack);
+    {
+        if (! root.isDirectory())
+            continue;
+
+        // Sorted, so the library comes out the same on every computer.
+        auto folders = root.findChildFiles (juce::File::findDirectories, false);
+        folders.sort();
+
+        for (auto& pack : folders)
+            readPack (pack, root == bundledRoot);
+    }
 
     // Library order: by category, then by name. stable_sort keeps the
     // original order for equal elements.
@@ -186,9 +198,111 @@ void SoundLibrary::rescan()
     });
 }
 
-void SoundLibrary::readPack (const juce::File& pack)
+bool SoundLibrary::isValidPackId (const juce::String& id)
 {
-    const auto packName = pack.getFileName();
+    return id.isNotEmpty() && id.containsOnly ("abcdefghijklmnopqrstuvwxyz0123456789.-");
+}
+
+int SoundLibrary::compareVersions (const juce::String& a, const juce::String& b)
+{
+    auto partsA = juce::StringArray::fromTokens (a, ".", {});
+    auto partsB = juce::StringArray::fromTokens (b, ".", {});
+
+    for (int i = 0; i < juce::jmax (partsA.size(), partsB.size()); ++i)
+    {
+        // A missing part (e.g. the patch number of "1.2") counts as 0.
+        const int x = partsA[i].getIntValue(), y = partsB[i].getIntValue();
+
+        if (x != y)
+            return x < y ? -1 : 1;
+    }
+
+    return 0;
+}
+
+SoundPackInfo SoundLibrary::readPackInfo (const juce::File& folder, bool bundled)
+{
+    auto json = juce::JSON::parse (folder.getChildFile ("pack.json"));
+
+    SoundPackInfo info;
+    info.folder = folder;
+    info.bundled = bundled;
+    info.format = json.getProperty ("format", 1);
+    info.id = json["id"].toString();
+    info.name = json.getProperty ("name", folder.getFileName()).toString();
+    info.version = json.getProperty ("version", "0.0.0").toString();
+    info.description = json["description"].toString();
+    info.author = json["author"].toString();
+    info.license = json["license"].toString();
+    info.installedSize = (juce::int64) json.getProperty ("installedSize", 0);
+
+    if (auto licenseFile = json["licenseFile"].toString(); licenseFile.isNotEmpty())
+        info.licenseFile = folder.getChildFile (licenseFile);
+
+    // Older packs have no id: make one from the folder name, e.g.
+    // "Osiris Piano" -> "local.osiris-piano". A malformed id is treated the
+    // same way, so every pack ends up with a usable one.
+    if (! isValidPackId (info.id))
+        info.id = "local." + folder.getFileName().toLowerCase().replaceCharacter (' ', '-')
+                                  .retainCharacters ("abcdefghijklmnopqrstuvwxyz0123456789.-");
+
+    if (auto* credits = json["credits"].getArray())
+    {
+        for (auto& c : *credits)
+            info.credits.push_back ({ c["what"].toString(), c["who"].toString(), c["license"].toString(),
+                                      c["url"].toString(), (bool) c.getProperty ("attributionRequired", false) });
+    }
+    else if (json["credits"].isString())
+    {
+        // Format 1 had a single line of text.
+        info.credits.push_back ({ info.name, json["credits"].toString(), info.license, {}, false });
+    }
+
+    return info;
+}
+
+std::vector<SoundLibrary::KnobMapping> SoundLibrary::readKnobs (const juce::var& json, bool isSfz)
+{
+    auto* list = json.getArray();
+
+    if (list == nullptr || list->size() != numKnobs)
+        return {};
+
+    std::vector<KnobMapping> knobs;
+    const juce::StringArray builtIn { "tone", "room", "drive", "width", "tune" };
+
+    for (auto& k : *list)
+    {
+        KnobMapping knob;
+        knob.name = k["name"].toString();
+        knob.control = k["control"].toString();
+        knob.cc = k.getProperty ("cc", -1);
+        knob.defaultValue = juce::jlimit (0.0f, 1.0f, (float) (double) k.getProperty ("default", 0.5));
+
+        const bool valid = knob.name.isNotEmpty()
+                            && (builtIn.contains (knob.control)
+                                 || (knob.control == "cc" && isSfz && juce::isPositiveAndBelow (knob.cc, 128)));
+
+        // One bad knob and the instrument gets the category's defaults
+        // instead: the Sound tab always shows five working knobs.
+        if (! valid)
+            return {};
+
+        knobs.push_back (knob);
+    }
+
+    return knobs;
+}
+
+void SoundLibrary::readPack (const juce::File& pack, bool bundled)
+{
+    auto packInfo = readPackInfo (pack, bundled);
+
+    // Two packs with the same id: the first one read wins.
+    if (findPack (packInfo.id).has_value())
+        return;
+
+    packs.push_back (packInfo);
 
     // Sampled instruments: one folder each, with an instrument.json.
     for (auto& folder : pack.getChildFile ("Instruments").findChildFiles (juce::File::findDirectories, false))
@@ -199,14 +313,20 @@ void SoundLibrary::readPack (const juce::File& pack)
             continue;
 
         SampledInstrument instrument;
-        instrument.info.id = samplerPrefix + packName + "/" + folder.getFileName();
+        // Sessions save sounds by pack id and folder name, so they find the
+        // same instrument wherever (and on whichever system) the pack is installed.
+        instrument.info.id = samplerPrefix + packInfo.id + "/" + folder.getFileName();
         instrument.info.name = json.getProperty ("name", folder.getFileName()).toString();
         instrument.info.category = json.getProperty ("category", "Keyboards").toString();
         instrument.info.detail = "Sampled";
+        instrument.info.packId = packInfo.id;
+        instrument.info.icon = json["icon"].toString();
         instrument.oneShot = json.getProperty ("oneShot", false);
 
         if (auto sfz = json["sfz"].toString(); sfz.isNotEmpty() && folder.getChildFile (sfz).existsAsFile())
             instrument.sfzFile = folder.getChildFile (sfz);
+
+        instrument.knobs = readKnobs (json["knobs"], instrument.sfzFile != juce::File());
 
         if (auto* samples = json["samples"].getArray())
         {
@@ -262,6 +382,15 @@ void SoundLibrary::readPack (const juce::File& pack)
     }
 }
 
+std::optional<SoundPackInfo> SoundLibrary::findPack (const juce::String& id) const
+{
+    for (auto& p : packs)
+        if (p.id == id)
+            return p;
+
+    return std::nullopt;
+}
+
 std::optional<SoundInfo> SoundLibrary::findSound (const juce::String& id) const
 {
     for (auto& s : sounds)
@@ -296,6 +425,34 @@ const SoundLibrary::SampledInstrument* SoundLibrary::findSampledInstrument (cons
             return &s;
 
     return nullptr;
+}
+
+const SoundLibrary::SampledInstrument* SoundLibrary::resolveSampledInstrument (const juce::String& storedId) const
+{
+    if (auto* s = findSampledInstrument (storedId))
+        return s;
+
+    // Sessions saved before pack ids: "sampler:<pack folder name>/<instrument>".
+    if (! storedId.startsWith (samplerPrefix))
+        return nullptr;
+
+    const auto rest = storedId.fromFirstOccurrenceOf (samplerPrefix, false, false);
+    const auto folderName = rest.upToFirstOccurrenceOf ("/", false, false);
+    const auto instrument = rest.fromFirstOccurrenceOf ("/", false, false);
+
+    for (auto& p : packs)
+        if (p.folder.getFileName() == folderName)
+            return findSampledInstrument (samplerPrefix + p.id + "/" + instrument);
+
+    return nullptr;
+}
+
+juce::String SoundLibrary::getPackIdOf (const juce::String& soundId)
+{
+    if (! soundId.startsWith (samplerPrefix))
+        return {};
+
+    return soundId.fromFirstOccurrenceOf (samplerPrefix, false, false).upToFirstOccurrenceOf ("/", false, false);
 }
 
 } // namespace ikaros

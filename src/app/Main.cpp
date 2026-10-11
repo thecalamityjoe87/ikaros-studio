@@ -36,6 +36,9 @@ public:
         engine = std::make_unique<AudioEngine>();
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
         platform::enableDropsFromWaylandApps();
+
+        // Started by double-clicking a session (or "ikaros-studio My Song.iksession").
+        openSessionsIn (commandLine);
     }
 
     void shutdown() override
@@ -56,9 +59,41 @@ public:
             quit();
     }
 
-    void anotherInstanceStarted (const juce::String&) override {}
+    // Only one copy of the app runs. When another is started, for example by
+    // double-clicking a session while the app is open, its command line comes
+    // here instead (on macOS, so do sessions opened from the Finder).
+    void anotherInstanceStarted (const juce::String& commandLine) override
+    {
+        if (mainWindow == nullptr)
+            return;
+
+        mainWindow->toFront (true);
+        openSessionsIn (commandLine);
+    }
 
 private:
+    // Opens the first session named in a command line, once the window is up
+    // (after the session chooser has appeared, so it can replace it).
+    void openSessionsIn (const juce::String& commandLine)
+    {
+        // fromTokens with quote handling keeps "My Song.iksession" in one piece.
+        for (auto arg : juce::StringArray::fromTokens (commandLine, true))
+        {
+            const juce::File file (juce::File::getCurrentWorkingDirectory().getChildFile (arg.unquoted()));
+
+            if (file.existsAsFile() && (file.hasFileExtension (AudioEngine::sessionFileExtension)
+                                         || file.hasFileExtension (AudioEngine::legacySessionFileExtension)))
+            {
+                juce::MessageManager::callAsync ([window = juce::Component::SafePointer<MainWindow> (mainWindow.get()), file]
+                {
+                    if (window != nullptr)
+                        window->getMainComponent()->openFileFromSystem (file);
+                });
+                return;
+            }
+        }
+    }
+
     static bool isScanWorker()
     {
         return getCommandLineParameters().contains ("--IkarosPluginScan:");

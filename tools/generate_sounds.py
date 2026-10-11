@@ -2,13 +2,17 @@
 """Makes Ikaros Studio's default sound pack ("Ikaros Basics").
 
 Every sample and loop is synthesised here from scratch, so the pack is our
-own work under the project's license, with no third-party samples. Run it
-from the repository root:
+own work, with no third-party samples. The sounds are released under CC0
+(public domain), so anyone can use them in their music with no conditions.
+Run it from the repository root:
 
-    python3 tools/generate_sounds.py
+    python3 tools/generate_sounds.py                  # the sounds and pack.json
+    python3 tools/generate_sounds.py --manifest-only  # just pack.json
 
 It writes resources/sounds/Ikaros Basics. With ffmpeg installed, the audio is
 saved as FLAC (about half the size of WAV); without it, as WAV.
+
+pack.json follows the pack format described in src/engine/SoundLibrary.h.
 
 Only the Python standard library is used, so it's slow-ish (a minute or so),
 but it only needs running when the sounds change.
@@ -27,6 +31,8 @@ from pathlib import Path
 
 RATE = 44100
 PACK = Path("resources/sounds/Ikaros Basics")
+PACK_ID = "ikaros-studio.basics"     # never changes: sessions refer to the pack by it
+PACK_VERSION = "1.0.0"               # bump when the sounds change
 USE_FLAC = shutil.which("ffmpeg") is not None
 
 random.seed(87)   # same output every run
@@ -439,9 +445,40 @@ def write_loops():
     (folder / "loops.json").write_text(json.dumps(entries, indent=2) + "\n")
 
 
+def write_manifest():
+    """pack.json: who made the pack and under what license, its version, and
+    its size once installed (every file except pack.json itself)."""
+    size = sum(f.stat().st_size for f in PACK.rglob("*") if f.is_file() and f.name != "pack.json")
+
+    (PACK / "pack.json").write_text(json.dumps({
+        "format": 2,
+        "id": PACK_ID,
+        "name": "Ikaros Basics",
+        "version": PACK_VERSION,
+        "description": "The sounds that come with Ikaros Studio.",
+        "author": "Ikaros Studio",
+        "license": "CC0-1.0",
+        "installedSize": size,
+        "credits": [
+            {
+                "what": "Every instrument and loop",
+                "who": "Synthesised for Ikaros Studio by tools/generate_sounds.py",
+                "license": "CC0-1.0",
+                "url": "https://github.com/thecalamityjoe87/ikaros-studio",
+                "attributionRequired": False,
+            }
+        ],
+    }, indent=4) + "\n")
+
+
 def main():
     if not Path("CMakeLists.txt").exists():
         sys.exit("Run this from the repository root.")
+
+    if "--manifest-only" in sys.argv:
+        write_manifest()
+        print(f"Wrote {PACK / 'pack.json'}")
+        return
 
     print(f"Writing {PACK} ({'FLAC' if USE_FLAC else 'WAV'})")
     PACK.mkdir(parents=True, exist_ok=True)
@@ -461,12 +498,7 @@ def main():
     write_instrument("Pizzicato", "Strings",
                      pitched_zones([43, 50, 57, 64, 71], lambda n: karplus_strong(n, 1.0, brightness=0.2, decay=0.35, pluck_position=0.3, body=0.5)))
     write_loops()
-
-    (PACK / "pack.json").write_text(json.dumps({
-        "name": "Ikaros Basics",
-        "description": "The sounds that come with Ikaros Studio.",
-        "credits": "Synthesised for Ikaros Studio by tools/generate_sounds.py. Same license as the app.",
-    }, indent=2) + "\n")
+    write_manifest()
     print("Done.")
 
 

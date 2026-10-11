@@ -325,7 +325,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
 
     // Make the new instrument first: if it can't be made, nothing changes.
     te::Plugin::Ptr instrument;
-    juce::String name, category;
+    juce::String name, category, icon;
 
     if (auto* patch = SoundLibrary::findSynthPatch (soundId))
     {
@@ -339,6 +339,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
                                                      : createSampler (*edit, *sampled);
         name = sampled->info.name;
         category = sampled->info.category;
+        icon = sampled->info.icon;
     }
     else if (auto info = owner.getPlugins().findPlugin (soundId.fromFirstOccurrenceOf (thirdPartyPrefix, false, false)))
     {
@@ -377,6 +378,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
     t->state.setProperty (soundIdProp, soundId, um);
     t->state.setProperty (soundNameProp, name, um);
     t->state.setProperty (categoryProp, category, um);
+    t->state.setProperty (soundIconProp, icon, um);
 
     if (nameIsAutomatic)
     {
