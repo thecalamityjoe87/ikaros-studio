@@ -25,12 +25,21 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    // Shared with MeterSlider, so every meter looks and moves the same.
+
+    /** A level in dB as a proportion of the bar (0..1). */
+    static float dbToProportion (float db);
+
+    /** One step of the bar's movement: straight up to a louder level, a
+        gradual fall to a quieter one (so it doesn't flicker). */
+    static float fallTowards (float current, float target);
+
+    /** Draws one bar showing `value` (0..1), green to yellow to red along it. */
+    static void paintBar (juce::Graphics&, juce::Rectangle<float>, float value, Orientation);
+
 private:
     Orientation orientation;
     float left = 0.0f, right = 0.0f;    // displayed values, 0..1
-
-    static float dbToProportion (float db);
-    void paintBar (juce::Graphics&, juce::Rectangle<float>, float value);
 };
 
 } // namespace ikaros

@@ -21,13 +21,16 @@ float LevelMeter::dbToProportion (float db)
     return std::pow (p, 1.6f);
 }
 
-void LevelMeter::setLevel (StereoLevel level)
+float LevelMeter::fallTowards (float current, float target)
 {
     // Instant attack, gradual release.
-    auto fall = [] (float current, float target) { return target > current ? target : current * 0.86f + target * 0.14f; };
+    return target > current ? target : current * 0.86f + target * 0.14f;
+}
 
-    auto newLeft = fall (left, dbToProportion (level.leftDb));
-    auto newRight = fall (right, dbToProportion (level.rightDb));
+void LevelMeter::setLevel (StereoLevel level)
+{
+    auto newLeft = fallTowards (left, dbToProportion (level.leftDb));
+    auto newRight = fallTowards (right, dbToProportion (level.rightDb));
 
     if (std::abs (newLeft - left) > 0.002f || std::abs (newRight - right) > 0.002f)
     {
@@ -43,7 +46,7 @@ void LevelMeter::reset()
     repaint();
 }
 
-void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float value)
+void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float value, Orientation orientation)
 {
     const float radius = juce::jmin (r.getWidth(), r.getHeight()) * 0.5f;
     g.setColour (colour::controlFill);
@@ -76,17 +79,17 @@ void LevelMeter::paint (juce::Graphics& g)
     if (orientation == Orientation::horizontal)
     {
         auto h = juce::jmin (5.0f, (r.getHeight() - 3.0f) / 2.0f);
-        paintBar (g, r.removeFromTop (h), left);
+        paintBar (g, r.removeFromTop (h), left, orientation);
         r.removeFromTop (3.0f);
-        paintBar (g, r.removeFromTop (h), right);
+        paintBar (g, r.removeFromTop (h), right, orientation);
     }
     else
     {
         auto w = juce::jmin (8.0f, (r.getWidth() - 5.0f) / 2.0f);
         auto bars = r.withSizeKeepingCentre (w * 2.0f + 5.0f, r.getHeight());
-        paintBar (g, bars.removeFromLeft (w), left);
+        paintBar (g, bars.removeFromLeft (w), left, orientation);
         bars.removeFromLeft (5.0f);
-        paintBar (g, bars.removeFromLeft (w), right);
+        paintBar (g, bars.removeFromLeft (w), right, orientation);
     }
 }
 

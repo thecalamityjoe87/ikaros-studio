@@ -382,6 +382,11 @@ float TrackController::getMasterVolumeDb() const
     return vol != nullptr ? vol->getVolumeDb() : -100.0f;
 }
 
+float TrackController::getFaderPositionForDb (float db)
+{
+    return te::decibelsToVolumeFaderPosition (db);
+}
+
 void TrackController::setMasterVolume (float pos)
 {
     // No beginUndoStep(): the UI starts one when the fader drag starts.

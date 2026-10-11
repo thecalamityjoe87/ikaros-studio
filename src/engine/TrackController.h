@@ -97,6 +97,10 @@ public:
     float getMasterVolumeDb() const;
     void setMasterVolume (float sliderPosition0to1);
 
+    /** Where a volume fader sits for a level in dB (0 dB = unity gain), for
+        "double-click to reset". Faders use Tracktion's curve, not dB. */
+    static float getFaderPositionForDb (float db);
+
     StereoLevel getTrackLevel (TrackId);
 
     /** The "Show details" box: plugin, output and inputs. */
