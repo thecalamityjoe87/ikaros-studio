@@ -16,6 +16,8 @@ namespace
     constexpr int tabWidth = 76;
     constexpr int modeWidth = 70;      // the Track | Master switch
     constexpr int nameHeight = 34;     // the selected track's name, under the switch
+    constexpr int segmentInset = 3;    // a segmented control's pills sit this far inside its outline
+    constexpr float segmentRadius = 7.0f, segmentOutlineRadius = 10.0f;
 }
 
 //==============================================================================
@@ -307,14 +309,17 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addChildComponent (pianoRoll);
     addChildComponent (mixer);
 
-    auto tabColours = IconButton::Colours { juce::Colour (0xff15181d), colour::text, colour::accent, colour::textOnAccent };
+    // Segmented controls (the tabs, Track | Master): the panel draws the
+    // shared rounded background (see paint), and the chosen segment is a
+    // rounded pill inside it, like the rest of the app's buttons.
+    auto tabColours = IconButton::Colours { juce::Colours::transparentBlack, colour::text, colour::accent, colour::textOnAccent };
 
     int index = 0;
 
     for (auto* b : { &soundTab, &editorTab, &eqTab })
     {
         b->setColours (tabColours);
-        b->setCornerRadius (0.0f);
+        b->setCornerRadius (segmentRadius);
         b->setFont (fonts::uiBold (13.0f));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
         b->onClick = [this, index] { setTab ((Tab) index); if (onViewStateChanged) onViewStateChanged(); };
@@ -326,7 +331,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     for (auto* b : { &trackModeButton, &masterModeButton })
     {
         b->setColours (tabColours);
-        b->setCornerRadius (0.0f);
+        b->setCornerRadius (segmentRadius);
         b->setFont (fonts::uiBold (13.0f));
         b->setRadioGroupId (2);
         addAndMakeVisible (b);
@@ -666,12 +671,17 @@ void BottomPanel::paint (juce::Graphics& g)
         g.drawText ("No track selected", r, juce::Justification::centredLeft);
     }
 
-    // Outlines around the segmented controls.
+    // The segmented controls' shared background and outline; the buttons
+    // inside draw only the chosen (or hovered) segment.
     if (! collapsed)
     {
-        g.setColour (colour::border);
-        g.drawRoundedRectangle (tabsArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
-        g.drawRoundedRectangle (modeArea.toFloat().expanded (0.5f), 9.0f, 1.0f);
+        for (auto area : { tabsArea, modeArea })
+        {
+            g.setColour (colour::cardBg);
+            g.fillRoundedRectangle (area.toFloat(), segmentOutlineRadius);
+            g.setColour (colour::border);
+            g.drawRoundedRectangle (area.toFloat().reduced (0.5f), segmentOutlineRadius, 1.0f);
+        }
     }
 
     // The Editor works on a track's regions, so in Master mode it explains.
@@ -709,8 +719,8 @@ void BottomPanel::resized()
     auto leftColumn = header.removeFromLeft (TrackInspector::preferredWidth);
 
     modeArea = leftColumn.reduced (14, 0).removeFromLeft (modeWidth * 2).withSizeKeepingCentre (modeWidth * 2, 32);
-    auto m = modeArea;
-    trackModeButton.setBounds (m.removeFromLeft (modeWidth));
+    auto m = modeArea.reduced (segmentInset);
+    trackModeButton.setBounds (m.removeFromLeft (m.getWidth() / 2));
     masterModeButton.setBounds (m);
 
     header = header.reduced (14, 8);
@@ -722,9 +732,10 @@ void BottomPanel::resized()
     constexpr int mixerButtonWidth = 80, mixerGap = 12;
     auto group = header.withSizeKeepingCentre (tabWidth * 3 + mixerGap + mixerButtonWidth, 32);
     tabsArea = group.removeFromLeft (tabWidth * 3);
-    auto t = tabsArea;
-    soundTab.setBounds (t.removeFromLeft (tabWidth));
-    editorTab.setBounds (t.removeFromLeft (tabWidth));
+    auto t = tabsArea.reduced (segmentInset);
+    const int segment = t.getWidth() / 3;
+    soundTab.setBounds (t.removeFromLeft (segment));
+    editorTab.setBounds (t.removeFromLeft (segment));
     eqTab.setBounds (t);
     mixerButton.setBounds (group.removeFromRight (mixerButtonWidth));
 

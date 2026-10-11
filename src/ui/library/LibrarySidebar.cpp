@@ -224,7 +224,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     searchField.setTextToShowWhenEmpty ("Search sounds and loops", colour::textSecondary);
     searchField.setFont (fonts::ui (14.0f));
     searchField.setTitle ("Search sounds");
-    searchField.setIndents (32, 9);
+    searchField.setIndents (36, 9);   // room for the magnifier (see paintOverChildren)
     searchField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     searchField.onTextChange = [this] { rebuildList(); };
     searchField.onEscapeKey = [this] { searchField.clear(); rebuildList(); };
@@ -631,14 +631,20 @@ void LibrarySidebar::chooseFolder()
 }
 
 //==============================================================================
+void LibrarySidebar::paintOverChildren (juce::Graphics& g)
+{
+    // Magnifier inside the search field (its left indent leaves room). Drawn
+    // over the children: the TextEditor fills its own background, so
+    // anything paint() drew there would be hidden.
+    icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (34).toFloat().translated (2.0f, 0.0f),
+                 colour::textSecondary, 15.0f, 1.8f);
+}
+
 void LibrarySidebar::paint (juce::Graphics& g)
 {
     g.fillAll (colour::sidebarBg);
     g.setColour (colour::divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
-
-    // Magnifier inside the search field (the TextEditor's left indent leaves room).
-    icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (32).toFloat(), colour::textSecondary, 16.0f, 2.0f);
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::uiBold (11.0f).withExtraKerningFactor (0.1f));
