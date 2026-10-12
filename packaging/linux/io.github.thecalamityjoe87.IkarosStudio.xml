@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ikaros Studio's session files, for file managers (shared-mime-info).
+     Installed to share/mime/packages; see CMakeLists.txt. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ikaros-session">
+    <comment>Ikaros Studio session</comment>
+    <sub-class-of type="application/zip"/>
+    <generic-icon name="io.github.thecalamityjoe87.IkarosStudio"/>
+    <glob pattern="*.iksession"/>
+    <!-- A ZIP whose first entry is "mimetype" holding this type, like ODF files. -->
+    <magic priority="70">
+      <match type="string" value="PK\003\004" offset="0">
+        <match type="string" value="mimetypeapplication/x-ikaros-session" offset="30"/>
+      </match>
+    </magic>
+  </mime-type>
+</mime-info>

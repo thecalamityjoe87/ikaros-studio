@@ -92,7 +92,7 @@ public:
         }
 
         // std::erase_if (C++20) removes every element the lambda returns true for.
-        changed = std::erase_if (regions, [&tracks] (RegionId r) { return ! tracks.getRegion (r).has_value(); }) > 0
+        changed = std::erase_if (regions, [&tracks] (RegionId r) { return ! tracks.regions().getRegion (r).has_value(); }) > 0
                     || changed;
 
         if (current != 0 && ! isSelected (current))

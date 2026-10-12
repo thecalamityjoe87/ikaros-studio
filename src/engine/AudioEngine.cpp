@@ -1,5 +1,13 @@
 #include "engine/AudioEngine.h"
+#include "engine/AudioPreview.h"
+#include "engine/PluginLibrary.h"
+#include "engine/PackStore.h"
+#include "engine/SfzPlugin.h"
+#include "engine/SoundShaper.h"
+#include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
+#include "engine/TrackHelpers.h"
+#include "platform/AppFolders.h"
 
 #include <tracktion_engine/tracktion_engine.h>
 
@@ -20,15 +28,150 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
 
-    // Recorded audio goes to Documents/Ikaros Studio/Recordings rather than
-    // next to the session file: an untitled session lives in a temp folder,
-    // and takes recorded there would be lost. Saving copies them into the
-    // session's own folder (see AudioEngine::saveSessionAs).
+    // Takes are recorded straight into the session's working copy (its
+    // Audio folder), whether or not it has been saved yet.
+    std::function<juce::File()> getRecordingFolder;   // set by AudioEngine::Impl
+
     juce::String getDefaultAudioRecordingFilePattern() override
     {
-        auto folder = AudioEngine::getRecordingsFolder();
+        auto folder = getRecordingFolder();
         folder.createDirectory();
         return folder.getFullPathName() + "/%edit%_%track%_%date%_%time%_Take_%take%";
+    }
+
+    // Audio inputs: each open input channel on its own (microphones and
+    // guitars are mono), plus each neighbouring pair as a stereo input
+    // (keyboards, mixers). Tracktion allows inputs that share channels.
+    // Outputs stay in stereo pairs.
+    bool isDescriptionOfWaveDevicesSupported() override   { return true; }
+
+    void describeWaveDevices (std::vector<te::WaveDeviceDescription>& descriptions,
+                              juce::AudioIODevice& device, bool isInput) override
+    {
+        if (! isInput)
+        {
+            const int num = device.getOutputChannelNames().size();
+
+            for (int i = 0; i < num; i += 2)
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, i + 1 < num ? 2u : 1u, true));
+
+            return;
+        }
+
+        const int num = device.getInputChannelNames().size();
+        auto open = device.getActiveInputChannels();
+
+        // Not open yet: assume the first two, which is what we ask for.
+        if (open.isZero())
+            open.setRange (0, juce::jmin (2, num), true);
+
+        for (int i = 0; i < num; ++i)
+            if (open[i])
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, 1, true));
+
+        for (int i = 0; i + 1 < num; i += 2)
+            if (open[i] && open[i + 1])
+                descriptions.push_back (te::WaveDeviceDescription::withNumChannels ({}, (uint32_t) i, 2, true));
+    }
+};
+
+//==============================================================================
+// Shows a third-party plug-in's own editor. Lives inside the window the UI
+// made; deleted (with the window) by Tracktion when the window closes or the
+// plug-in goes away, which is always before the plug-in itself.
+struct PluginEditorHolder  : public juce::Component
+{
+    PluginEditorHolder (te::Plugin& p, std::unique_ptr<juce::Component> e)
+        : plugin (p), editor (std::move (e))
+    {
+        addAndMakeVisible (*editor);
+        setSize (editor->getWidth(), editor->getHeight());
+    }
+
+    ~PluginEditorHolder() override
+    {
+        editor.reset();   // the editor before saving: some plug-ins only commit changes when their editor closes
+        plugin.edit.flushPluginStateIfNeeded (plugin);
+    }
+
+    // The plug-in resized its editor: follow it (the window follows us).
+    void childBoundsChanged (juce::Component* child) override
+    {
+        if (child == editor.get())
+            setSize (editor->getWidth(), editor->getHeight());
+    }
+
+    void resized() override   { editor->setBounds (getLocalBounds()); }
+
+    te::Plugin& plugin;
+    std::unique_ptr<juce::Component> editor;
+};
+
+// UIBehaviour is how Tracktion asks the app for UI. We only supply plug-in
+// windows, and pass the framing on to the UI layer's factory.
+struct IkarosUIBehaviour  : public te::UIBehaviour
+{
+    PluginWindowFactory factory;
+
+    // Tracktion hands long jobs (like rendering offline, see
+    // AudioEngine::renderPeak) to the UI to run "with a progress bar". There's
+    // no progress bar yet: just run the job here until it's finished.
+    void runTaskWithProgressBar (te::ThreadPoolJobWithProgress& task) override
+    {
+        while (task.runJob() == juce::ThreadPoolJob::jobNeedsRunningAgain)
+        {
+        }
+    }
+
+    std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& state) override
+    {
+        auto* windowState = dynamic_cast<te::Plugin::WindowState*> (&state);
+
+        if (windowState == nullptr || factory == nullptr)
+            return {};
+
+        auto& plugin = windowState->plugin;
+        std::unique_ptr<juce::Component> editor = plugin.createEditor();
+
+        // A plug-in without an editor of its own gets JUCE's generic one (a slider per setting).
+        if (editor == nullptr)
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (&plugin))
+                if (auto* instance = external->getAudioPluginInstance())
+                    editor = std::make_unique<juce::GenericAudioProcessorEditor> (*instance);
+
+        if (editor == nullptr)
+            return {};
+
+        PluginWindowRequest request;
+        request.content = std::make_unique<PluginEditorHolder> (plugin, std::move (editor));
+        request.title = plugin.getName();
+
+        if (auto* track = plugin.getOwnerTrack())
+            request.title << " - " << track->getName();
+
+        request.position = state.lastWindowBounds.has_value() ? state.lastWindowBounds->getPosition()
+                                                              : state.choosePositionForPluginWindow();
+
+        // WeakReference: the window state is gone if the plug-in was deleted.
+        juce::WeakReference<te::PluginWindowState> weakState (&state);
+
+        // Closing deletes the window, so do it after the click that asked for it.
+        request.close = [weakState]
+        {
+            juce::MessageManager::callAsync ([weakState]
+            {
+                if (auto* s = weakState.get())
+                    s->closeWindowExplicitly();
+            });
+        };
+
+        request.moved = [weakState] (juce::Rectangle<int> bounds)
+        {
+            if (auto* s = weakState.get())
+                s->lastWindowBounds = bounds;
+        };
+
+        return factory (std::move (request));
     }
 };
 
@@ -41,12 +184,30 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
                             private juce::ChangeListener,
                             private juce::Timer
 {
-    explicit Impl (AudioEngine& o) : owner (o)
+    Impl (AudioEngine& o, const juce::String& settingsName)
+        : owner (o),
+          engine (settingsName, std::make_unique<IkarosUIBehaviour>(), std::make_unique<IkarosEngineBehaviour>())
     {
         // 2 inputs, 2 outputs by default. (Tracktion's default of "every
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
         engine.getDeviceManager().initialise (2, 2);
+
+        // Our own instrument for SFZ sounds, next to Tracktion's built-in
+        // ones, so sessions can create it (and load it back) by type name.
+        engine.getPluginManager().createBuiltInType<SfzPlugin>();
+
+        // The hidden plugins behind sampled instruments' Sound tab knobs.
+        engine.getPluginManager().createBuiltInType<SoundShaperPlugin>();
+        engine.getPluginManager().createBuiltInType<TransposePlugin>();
+
+        // The Engine owns the behaviour we gave it, so this cast always works.
+        dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
+        {
+            return getAudioFolder();
+        };
+
+        deleteStaleWorkFolders();
 
         // Listen for MIDI devices being plugged in or removed so they can be
         // routed to the selected track.
@@ -60,18 +221,73 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         cancelPendingUpdate();
         detachMasterMeter();
         stopObservingEdit();
+
+        // The working copy goes with the session. (The user has already been
+        // asked about unsaved changes; after a crash it would stay behind.)
+        edit = nullptr;
+        deleteWorkFolder (workFolder);
     }
 
     AudioEngine& owner;
 
     // te::Engine is the root object: device manager, plugin manager, temp files...
     // There should only be one per app.
-    te::Engine engine { "IkarosStudio", std::make_unique<te::UIBehaviour>(),
-                        std::make_unique<IkarosEngineBehaviour>() };
+    te::Engine engine;
 
     std::unique_ptr<te::Edit> edit;
-    juce::File sessionFile;
+
+    // The session being edited: its working copy (an unpacked bundle, see
+    // AudioEngine.h), the session file inside it that Tracktion reads and
+    // writes, and the bundle it's saved as (empty while untitled).
+    juce::File workFolder;
+    juce::File sessionFile;               // workFolder/Session.tracktionedit
+    juce::File bundleFile;
     bool untitled = true;
+
+    // A session from an earlier version: its audio is still in its old
+    // folder until the first save copies it in. Empty otherwise.
+    juce::File legacySessionFile;
+
+    juce::File getAudioFolder() const     { return workFolder.getChildFile (SessionBundle::audioFolder); }
+
+    //==============================================================================
+    // Working copies live in the local data folder, one folder each.
+    static juce::File getWorkRoot()
+    {
+        return platform::getLocalDataFolder().getChildFile ("Open Sessions");
+    }
+
+    static juce::File createWorkFolder()
+    {
+        // A unique name (a UUID), so two sessions (or two copies of the app)
+        // never share one.
+        auto folder = getWorkRoot().getChildFile (juce::Uuid().toString());
+        folder.getChildFile (SessionBundle::audioFolder).createDirectory();
+        return folder;
+    }
+
+    static void deleteWorkFolder (const juce::File& folder)
+    {
+        // Only ever delete inside the working-copy root, whatever we're given.
+        if (folder != juce::File() && folder.isAChildOf (getWorkRoot()))
+            folder.deleteRecursively();
+    }
+
+    // Working copies left behind by a crash. Nothing offers to recover them
+    // yet, so after two weeks untouched they're tidied away.
+    static void deleteStaleWorkFolders()
+    {
+        const auto cutoff = juce::Time::getCurrentTime() - juce::RelativeTime::days (14);
+
+        for (auto& folder : getWorkRoot().findChildFiles (juce::File::findDirectories, false))
+        {
+            auto session = folder.getChildFile (SessionBundle::sessionEntry);
+            auto lastUsed = (session.existsAsFile() ? session : folder).getLastModificationTime();
+
+            if (lastUsed < cutoff)
+                deleteWorkFolder (folder);
+        }
+    }
 
     //==============================================================================
     std::unique_ptr<te::Edit> createEdit (const juce::ValueTree& state)
@@ -91,18 +307,46 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
                                        .numAudioTracks = 0 });   // no default track: we add our own
     }
 
-    // Audio regions refer to their files by path. For a file near the
-    // session, Tracktion stores a path relative to the session *file*
-    // ("../Loop.wav" for a file in the same folder), but its default
-    // resolver reads it from the session's folder, one level too high. This
-    // reads it back the way it was written.
+    // Audio regions refer to their files by path, relative to the session
+    // ("Audio/Take 1.wav"). The working copy is tried first. A session from an
+    // earlier version still has its audio in its old folder; there, paths can
+    // also be relative to the session *file* (one ".." more), which is what
+    // Tracktion wrote when the file didn't exist yet.
     juce::File resolvePath (const juce::String& path) const
     {
         if (path.isEmpty())
             return {};
 
         // getChildFile handles absolute paths too: it just returns them.
-        return sessionFile.getChildFile (path);
+        auto inWorkFolder = workFolder.getChildFile (path);
+
+        if (inWorkFolder.exists() || legacySessionFile == juce::File())
+            return inWorkFolder;
+
+        for (auto candidate : { legacySessionFile.getParentDirectory().getChildFile (path),
+                                legacySessionFile.getChildFile (path) })
+            if (candidate.exists())
+                return candidate;
+
+        return inWorkFolder;
+    }
+
+    // The recently opened sessions, kept in the app's settings file.
+    juce::RecentlyOpenedFilesList getRecentSessionsList()
+    {
+        juce::RecentlyOpenedFilesList list;
+        list.setMaxNumberOfItems (24);
+        list.restoreFromString (engine.getPropertyStorage().getPropertiesFile().getValue ("recentSessions"));
+        return list;
+    }
+
+    void addToRecentSessions (const juce::File& file)
+    {
+        auto list = getRecentSessionsList();
+        list.addFile (file);   // moves it to the top if it's already there
+        auto& props = engine.getPropertyStorage().getPropertiesFile();
+        props.setValue ("recentSessions", list.toString());
+        props.saveIfNeeded();
     }
 
     // Master meter. The playback context (and its masterLevels measurer) can be
@@ -194,36 +438,177 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     }
 
 private:
-    juce::ValueTree observedState;
-
-    // The transport writes its position into the Edit's ValueTree many times a
-    // second while playing. Those changes aren't "model" changes, so skip them.
-    static bool isTransportState (juce::ValueTree v)
-    {
-        for (; v.isValid(); v = v.getParent())
-            if (v.hasType (te::IDs::TRANSPORT))
-                return true;
-
-        return false;
-    }
-
     // ValueTree::Listener callbacks can fire many times for a single user action
-    // (and occasionally off the message thread). AsyncUpdater coalesces them
-    // into one callback on the message thread.
+    // (and occasionally off the message thread). Each one adds what it touched
+    // to `pending`, and AsyncUpdater coalesces them into one callback on the
+    // message thread, which hands the whole lot to the listeners.
     void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier&) override
     {
-        if (! isTransportState (v))
-            triggerAsyncUpdate();
+        addTreeChange (classifyChange (v, {}));
     }
 
-    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override          { triggerAsyncUpdate(); }
-    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override   { triggerAsyncUpdate(); }
-    void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override           { triggerAsyncUpdate(); }
+    void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override
+    {
+        addTreeChange (classifyChange (parent, child));
+    }
+
+    void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override
+    {
+        addTreeChange (classifyChange (parent, child));
+    }
+
+    void valueTreeChildOrderChanged (juce::ValueTree& parent, int, int) override
+    {
+        addTreeChange (classifyChange (parent, {}));
+    }
+
+    /** Works out what kind of thing a change touched from where it happened
+        in the session's ValueTree. `tree` is the tree whose property changed,
+        or the parent a child was added to or removed from (`child`).
+
+        The Edit's tree looks roughly like this:
+
+            EDIT
+              TEMPOSEQUENCE, PITCHSEQUENCE   tempo, time signature, key
+              TRANSPORT                      playhead, loop range
+              MASTERVOLUME, MASTERPLUGINS    the master channel
+              INPUTDEVICES                   which inputs record onto which track
+              TRACK                          one per track (also folder/marker tracks)
+                MIDICLIP / AUDIOCLIP         a region
+                  SEQUENCE / NOTE            a MIDI region's notes
+                PLUGIN                       instrument, effects, volume/pan, sends
+                  (parameters, automation)
+    */
+    static ModelChanges classifyChange (const juce::ValueTree& tree, const juce::ValueTree& child)
+    {
+        ModelChanges c;
+
+        // Walk up from the changed tree, remembering the interesting
+        // ancestors on the way. (A clip's notes sit inside its SEQUENCE, so
+        // e.g. a NOTE property change passes SEQUENCE, then the clip.)
+        juce::ValueTree clip, plugin;
+        bool inSequence = false;
+
+        for (auto t = tree; t.isValid(); t = t.getParent())
+        {
+            // The transport writes its position here many times a second
+            // while playing. Nothing to re-read: the UI polls it.
+            if (t.hasType (te::IDs::TRANSPORT))
+                return c;
+
+            if (t.hasType (te::IDs::TEMPOSEQUENCE) || t.hasType (te::IDs::PITCHSEQUENCE))
+            {
+                c.transport = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::MASTERVOLUME) || t.hasType (te::IDs::MASTERPLUGINS))
+            {
+                c.mixer = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::INPUTDEVICES))
+            {
+                c.tracks = true;
+                return c;
+            }
+
+            if (t.hasType (te::IDs::SEQUENCE))
+                inSequence = true;
+
+            if (! clip.isValid() && te::Clip::isClipState (t))
+                clip = t;
+
+            if (! plugin.isValid() && t.hasType (te::IDs::PLUGIN))
+                plugin = t;
+
+            if (te::TrackList::isTrack (t))
+                break;
+
+            // Tracktion stamps the time of the last change on the Edit itself
+            // after every edit; there's nothing to re-read for that.
+            if (t.hasType (te::IDs::EDIT))
+            {
+                if (te::TrackList::isTrack (child))
+                    c.tracks = c.regions = true;   // a track added or removed (with its regions)
+                else if (child.isValid())
+                    c.session = true;              // something we don't know: play safe
+
+                return c;
+            }
+        }
+
+        if (clip.isValid())
+        {
+            // Something inside one region: its notes, or its own settings.
+            const auto id = te::EditItemID::fromID (clip).getRawID();
+            c.changedRegions.insert (id);
+            c.notes = inSequence;
+            return c;
+        }
+
+        if (plugin.isValid())
+        {
+            // Inside a plug-in: a knob turned (volume, pan, a send, an
+            // effect's setting) or its automation. (Adding or removing a
+            // plug-in happens on the track, below.)
+            c.mixer = true;
+            return c;
+        }
+
+        // On a track itself: a region or a plug-in added/removed, or one of
+        // the track's own settings (name, colour, sound, mute...).
+        if (te::Clip::isClipState (child))
+            c.regions = true;
+        else
+            c.tracks = true;
+
+        return c;
+    }
+
+    // Changes that touch nothing the UI shows (the playhead, Tracktion's own
+    // "last changed" time stamp) aren't worth waking the listeners for.
+    void addTreeChange (const ModelChanges& c)
+    {
+        if (c.any())
+            addPending (c);
+    }
+
+    // `pending` can be written off the message thread (see above), so a lock
+    // guards it. ScopedLock holds the lock until the end of the block.
+    juce::CriticalSection pendingLock;
+    ModelChanges pending;
+
+public:
+    /** Adds to the changes the listeners will hear about, and schedules the call. */
+    void addPending (const ModelChanges& c)
+    {
+        {
+            const juce::ScopedLock sl (pendingLock);
+            pending.merge (c);
+        }
+
+        triggerAsyncUpdate();
+    }
+
+private:
+    juce::ValueTree observedState;
 
     void handleAsyncUpdate() override
     {
+        ModelChanges changes;
+
+        {
+            const juce::ScopedLock sl (pendingLock);
+            std::swap (changes, pending);
+        }
+
         lastModelChange = juce::Time::getMillisecondCounter();
-        owner.sendChangeMessage();
+
+        // Spelled out in full: inside Impl, plain "Listener" would mean the
+        // juce::ValueTree::Listener we inherit from.
+        owner.listeners.call ([&changes] (AudioEngine::Listener& l) { l.sessionChanged (changes); });
     }
 
     void timerCallback() override
@@ -241,7 +626,7 @@ private:
         {
             edit->getUndoManager().clearUndoHistory();
             edit->resetChangedStatus();
-            owner.sendChangeMessage();
+            addPending ({});   // nothing to re-read, but Undo is no longer available
         }
     }
 
@@ -254,9 +639,15 @@ private:
 };
 
 //==============================================================================
-AudioEngine::AudioEngine()
-    : impl (std::make_unique<Impl> (*this))
+AudioEngine::AudioEngine (const juce::String& settingsName)
+    : impl (std::make_unique<Impl> (*this, settingsName))
 {
+    sounds = std::make_unique<SoundLibrary>();
+    packStore = std::make_unique<PackStore> (*sounds);
+    packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
+    plugins = std::make_unique<PluginLibrary> (*this);
+    preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
+                                              impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
     newSession();
 }
@@ -269,36 +660,181 @@ AudioEngine::~AudioEngine()
         impl->edit->getTransport().stop (false, true);
 
     impl->detachMasterMeter();
+    preview.reset();
     trackController.reset();
     impl->stopObservingEdit();
-    impl->edit.reset();
+    impl->edit.reset();   // closes any plug-in windows
+    plugins.reset();
+    packStore.reset();    // stops downloads
+}
+
+void AudioEngine::setPluginWindowFactory (PluginWindowFactory factory)
+{
+    // The UIBehaviour we gave the Engine is ours, so this cast always works.
+    dynamic_cast<IkarosUIBehaviour&> (impl->engine.getUIBehaviour()).factory = std::move (factory);
+}
+
+bool AudioEngine::runPluginScanWorkerIfRequested (const juce::String& commandLine)
+{
+    return PluginLibrary::runScanWorkerIfRequested (commandLine);
 }
 
 te::Engine& AudioEngine::getTeEngine() noexcept    { return impl->engine; }
 te::Edit* AudioEngine::getEdit() const noexcept     { return impl->edit.get(); }
 
 //==============================================================================
-static juce::File getUntitledSessionFile (te::Engine& engine)
+void AudioEngine::newSession (const NewSessionSettings& settings)
 {
-    // Tracktion needs a file for every Edit, even an unsaved one. Untitled
-    // sessions live in Tracktion's temp folder until the user picks "Save As".
-    auto dir = engine.getTemporaryFileManager().getTempDirectory().getChildFile ("UntitledSessions");
-    dir.createDirectory();
-    return dir.getNonexistentChildFile ("Untitled Session", AudioEngine::sessionFileExtension, false);
-}
+    // Even an untitled session has a working copy: recordings go there.
+    loadEdit (te::createEmptyEdit (impl->engine), Impl::createWorkFolder(), {}, {});
 
-void AudioEngine::newSession()
-{
-    // Start every new session with one instrument track so a beginner can play
-    // the keyboard straight away.
-    loadEdit (te::createEmptyEdit (impl->engine), getUntitledSessionFile (impl->engine), true);
-    auto first = trackController->addInstrumentTrack();
-    trackController->setSelectedTrack (first);
+    setBpm (settings.bpm);
+    setTimeSignature (settings.numerator, settings.denominator);
+    setKey (settings.keyRoot, settings.minor);
 
+    // Instrument tracks take the sound's name ("Soft Piano"). If a sound pack
+    // has been removed, the track keeps the built-in synth.
+    auto& tc = *trackController;
+    const juce::String pack ("sampler:ikaros-studio.basics/");
+
+    auto instrument = [&tc] (const juce::String& soundId)
+    {
+        auto id = tc.addInstrumentTrack();
+        tc.effects().setSound (id, soundId, false);
+        return id;
+    };
+
+    auto audio = [&tc] (const juce::String& name)
+    {
+        auto id = tc.addAudioTrack();
+        tc.renameTrack (id, name);
+        return id;
+    };
+
+    // Every template has at least one instrument track, so a beginner can
+    // play the keyboard straight away.
+    switch (settings.kind)
+    {
+        case SessionTemplate::empty:
+            tc.addInstrumentTrack();
+            break;
+
+        case SessionTemplate::keyboards:
+            instrument (pack + "Soft Piano");
+            instrument (pack + "Electric Piano");
+            instrument ("synth:Vintage Organ");
+            break;
+
+        case SessionTemplate::voice:
+            audio ("Voice");
+            instrument (pack + "Soft Piano");
+            break;
+
+        case SessionTemplate::beats:
+            instrument (pack + "Electronic Kit");
+            instrument ("synth:Synth Bass");
+            instrument ("synth:Warm Pad");
+            break;
+
+        case SessionTemplate::songwriter:
+            instrument (pack + "Lo-fi Kit");
+            instrument (pack + "Picked Bass");
+            instrument (pack + "Nylon Guitar");
+            instrument (pack + "Soft Piano");
+            audio ("Voice");
+            break;
+    }
+
+    auto tracks = tc.getTracks();
+    tc.setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
+
+    // Building the template isn't something to undo.
     impl->edit->getUndoManager().clearUndoHistory();
     impl->edit->resetChangedStatus();
     impl->startFromCleanSlateSoon();
     notifyModelChanged();
+}
+
+// The last part of a path saved on any system ("C:\\Samples\\C3.flac" or
+// "/home/me/Samples/C3.flac" -> "C3.flac").
+static juce::String fileNameOf (const juce::String& path)
+{
+    return path.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
+}
+
+// A session saves where each sampled instrument's files were on the computer
+// that saved it. Before the session is built, point every instrument at the
+// files of the same instrument here, found by its pack id (or, for sessions
+// from before pack ids, its pack folder's name). Instruments whose pack isn't
+// installed are left as they were, so saving keeps the reference.
+static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibrary& sounds,
+                                         const juce::String& reloadPackId = {})
+{
+
+    using namespace detail;
+
+    for (auto child : tree)
+    {
+        if (! te::TrackList::isTrack (child))
+            continue;
+
+        pointInstrumentsAtLocalFiles (child, sounds, reloadPackId);   // tracks inside folder tracks
+
+        auto* instrument = sounds.resolveSampledInstrument (child[soundIdProp].toString());
+
+        if (instrument == nullptr)
+            continue;
+
+        child.setProperty (soundIdProp, instrument->info.id, nullptr);   // saved the new way from now on
+
+        if (auto pack = sounds.findPack (instrument->info.packId))
+            child.setProperty (packNameProp, pack->name, nullptr);         // so a computer without it can name it
+
+        // For reloadPackId (a pack just installed into the open session),
+        // each path is cleared and set again, so the instrument loads its
+        // files even if the path is the same as before. Not undoable: it's
+        // not an edit.
+        const bool reload = reloadPackId.isNotEmpty() && instrument->info.packId == reloadPackId;
+
+        auto setPath = [reload] (juce::ValueTree v, const juce::Identifier& property, const juce::String& path)
+        {
+            if (reload)
+                v.setProperty (property, {}, nullptr);
+
+            v.setProperty (property, path, nullptr);
+        };
+
+        for (auto plugin : child)
+        {
+            if (! plugin.hasType (te::IDs::PLUGIN))
+                continue;
+
+            const auto type = plugin[te::IDs::type].toString();
+
+            if (type == te::SamplerPlugin::xmlTypeName)
+            {
+                // Each of the sampler's sounds, matched to a key zone by file name.
+                for (auto sound : plugin)
+                    for (auto& zone : instrument->zones)
+                        if (sound.hasType (te::IDs::SOUND) && zone.file.getFileName() == fileNameOf (sound[te::IDs::source].toString()))
+                            setPath (sound, te::IDs::source, zone.file.getFullPathName());
+            }
+            else if (type == SfzPlugin::xmlTypeName && instrument->sfzFile.existsAsFile())
+            {
+                setPath (plugin, SfzPlugin::sfzFileProp, instrument->sfzFile.getFullPathName());
+            }
+        }
+    }
+}
+
+void AudioEngine::soundPacksChanged (const juce::String& packId)
+{
+    sounds->rescan();
+
+    if (impl->edit != nullptr)
+        pointInstrumentsAtLocalFiles (impl->edit->state, *sounds, packId);
+
+    notifyModelChanged();   // everything: the library, and tracks' missing-pack state
 }
 
 bool AudioEngine::openSession (const juce::File& file)
@@ -306,13 +842,44 @@ bool AudioEngine::openSession (const juce::File& file)
     if (! file.existsAsFile())
         return false;
 
-    // Read the file first, so a broken file leaves the current session alone.
-    auto state = te::loadEditFromFile (impl->engine, file, te::ProjectItemID());
+    // Unpack the bundle (or, for a session from an earlier version, copy its
+    // session file) into a new working copy and read it, before anything
+    // changes: a broken file leaves the current session alone.
+    const bool isBundle = SessionBundle::isBundleFile (file);
+    auto work = Impl::createWorkFolder();
+    auto workSession = work.getChildFile (SessionBundle::sessionEntry);
+
+    const bool unpacked = isBundle ? SessionBundle::unpack (file, work).wasOk()
+                                   : file.copyFileTo (workSession);
+
+    auto state = unpacked ? te::loadEditFromFile (impl->engine, workSession, te::ProjectItemID()) : juce::ValueTree();
 
     if (! state.isValid())
+    {
+        Impl::deleteWorkFolder (work);
         return false;
+    }
 
-    loadEdit (state, file, false);
+    pointInstrumentsAtLocalFiles (state, *sounds);
+
+    if (isBundle)
+    {
+        loadEdit (state, work, file, {});
+    }
+    else
+    {
+        // An older session ("My Song/My Song.tracktionedit") is saved as a
+        // bundle next to its folder ("My Song.iksession"), unless one is
+        // already there: then Save asks where.
+        auto folder = file.getParentDirectory();
+        auto bundle = folder.getFileName() == file.getFileNameWithoutExtension()
+                        ? folder.getSiblingFile (file.getFileNameWithoutExtension() + sessionFileExtension)
+                        : file.withFileExtension (sessionFileExtension);
+
+        loadEdit (state, work, bundle.exists() ? juce::File() : bundle, file);
+    }
+
+    impl->addToRecentSessions (file);
 
     auto tracks = trackController->getTracks();
     trackController->setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
@@ -321,12 +888,13 @@ bool AudioEngine::openSession (const juce::File& file)
     return true;
 }
 
-void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& file, bool untitled)
+void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
+                            const juce::File& bundle, const juce::File& legacySessionFile)
 {
     if (impl->edit != nullptr)
     {
         impl->edit->getTransport().stop (false, true);
-        trackController->allNotesOff();
+        trackController->inputs().allNotesOff();
     }
 
     impl->detachMasterMeter();
@@ -337,9 +905,17 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& file
     trackController->sessionChanged();
 
     // Set before creating the Edit: it finds its audio files from here while loading.
-    impl->sessionFile = file;
-    impl->untitled = untitled;
+    const auto oldWorkFolder = impl->workFolder;
+    impl->workFolder = workFolder;
+    impl->sessionFile = workFolder.getChildFile (SessionBundle::sessionEntry);
+    impl->bundleFile = bundle;
+    impl->legacySessionFile = legacySessionFile;
+    impl->untitled = bundle == juce::File();
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
+
+    // ...so the old session's working copy isn't needed any more.
+    if (oldWorkFolder != workFolder)
+        Impl::deleteWorkFolder (oldWorkFolder);
 
     auto& edit = *impl->edit;
 
@@ -354,47 +930,124 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& file
 
 bool AudioEngine::saveSession()
 {
-    if (impl->untitled)
+    return ! impl->untitled && saveSessionAs (impl->bundleFile);
+}
+
+bool AudioEngine::saveSessionAs (const juce::File& file)
+{
+    auto job = beginSave (file);
+
+    if (job == nullptr)
         return false;
 
-    return saveSessionAs (impl->sessionFile);
+    job->run();
+    return finishSave (*job);
 }
 
-juce::File AudioEngine::getRecordingsFolder()
+juce::File AudioEngine::getSessionFileFor (const juce::File& chosenFile)
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-               .getChildFile ("Ikaros Studio").getChildFile ("Recordings");
+    if (chosenFile.hasFileExtension (sessionFileExtension))
+        return chosenFile;
+
+    // "My Song" or "My Song.tracktionedit" -> "My Song.iksession". (Not
+    // withFileExtension on its own: "Take 2.1" would lose its ".1".)
+    if (chosenFile.hasFileExtension (legacySessionFileExtension))
+        return chosenFile.withFileExtension (sessionFileExtension);
+
+    return chosenFile.getSiblingFile (chosenFile.getFileName() + sessionFileExtension);
 }
 
-juce::File AudioEngine::getRecordingsFolderFor (const juce::File& sessionFile)
+juce::File AudioEngine::getPreviewFile() const
 {
-    return sessionFile.getSiblingFile (sessionFile.getFileNameWithoutExtension() + " Recordings");
+    return impl->workFolder.getChildFile (SessionBundle::previewEntry);
 }
 
-// Copies a recording into a session's recordings folder, unless an earlier
-// save already did. Returns the copy, or the original if copying failed.
-static juce::File copyRecordingInto (const juce::File& recording, const juce::File& folder)
+juce::var AudioEngine::getAppSetting (const juce::String& name, const juce::var& defaultValue) const
 {
-    auto target = folder.getChildFile (recording.getFileName());
+    auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
+    return props.containsKey (name) ? juce::var (props.getValue (name)) : defaultValue;
+}
 
-    if (target.existsAsFile() && target.getSize() == recording.getSize())
+void AudioEngine::setAppSetting (const juce::String& name, const juce::var& value)
+{
+    auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
+    props.setValue (name, value);
+    props.saveIfNeeded();
+}
+
+std::vector<RecentSession> AudioEngine::getRecentSessions() const
+{
+    std::vector<RecentSession> result;
+    auto list = impl->getRecentSessionsList();
+
+    // A bundle's preview is inside it; it's copied out once (and again only
+    // when the bundle changes), so the session chooser can show it as a file.
+    auto previews = platform::getLocalDataFolder().getChildFile ("Previews");
+
+    for (int i = 0; i < list.getNumFiles(); ++i)
+    {
+        auto file = list.getFile (i);
+
+        if (! file.existsAsFile())
+            continue;
+
+        juce::File preview;
+
+        if (SessionBundle::isBundleFile (file))
+        {
+            preview = previews.getChildFile (juce::String::toHexString (file.getFullPathName().hashCode64()) + ".png");
+
+            if (! preview.existsAsFile() || preview.getLastModificationTime() < file.getLastModificationTime())
+            {
+                auto data = SessionBundle::readEntry (file, SessionBundle::previewEntry);
+
+                if (data.getSize() > 0 && previews.createDirectory())
+                    preview.replaceWithData (data.getData(), data.getSize());
+            }
+        }
+        else
+        {
+            preview = file.getSiblingFile (SessionBundle::previewEntry);   // an older session's folder
+        }
+
+        result.push_back ({ file, file.getFileNameWithoutExtension(), file.getLastModificationTime(),
+                            preview.existsAsFile() ? preview : juce::File() });
+    }
+
+    return result;
+}
+
+// Copies an audio file into the session's Audio folder under a name every
+// system accepts, unless an earlier save already did (a file of that name
+// and the same content is there). Returns the copy, or the original if
+// copying failed.
+static juce::File copyIntoFolder (const juce::File& source, const juce::File& folder)
+{
+    const auto name = SessionBundle::makePortableFileName (source.getFileName());
+    auto target = folder.getChildFile (name);
+
+    if (target.existsAsFile() && target.hasIdenticalContentTo (source))
         return target;
 
     if (target.exists())
-        target = folder.getNonexistentChildFile (recording.getFileNameWithoutExtension(),
-                                                 recording.getFileExtension(), false);
+        target = folder.getNonexistentChildFile (juce::File (name).getFileNameWithoutExtension(),
+                                                 source.getFileExtension(), false);
 
-    return folder.createDirectory() && recording.copyFileTo (target) ? target : recording;
+    return folder.createDirectory() && source.copyFileTo (target) ? target : source;
 }
 
-bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
+std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& requestedFile)
 {
-    auto file = requestedFile.withFileExtension (sessionFileExtension);
+    const auto bundle = getSessionFileFor (requestedFile);
     auto& edit = *impl->edit;
+    const auto workFolder = impl->workFolder;
+    const auto audioFolder = impl->getAudioFolder();
 
-    // Audio regions refer to their files by a path that Tracktion stores
-    // relative to the session file when it can. Find every region's file
-    // while those paths still resolve from the old location.
+    if (! bundle.getParentDirectory().createDirectory() || ! audioFolder.createDirectory())
+        return nullptr;
+
+    // Audio regions refer to their files by path. Find every region's file
+    // (while the paths still resolve as they did).
     struct Source { te::Clip::Ptr clip; juce::File file; juce::var oldPath; };
     std::vector<Source> sources;
 
@@ -403,55 +1056,142 @@ bool AudioEngine::saveSessionAs (const juce::File& requestedFile)
             if (dynamic_cast<te::WaveAudioClip*> (clip) != nullptr)
                 sources.push_back ({ clip, clip->getSourceFileReference().getFile(), clip->state[te::IDs::source] });
 
-    const auto oldFile = impl->sessionFile;
-    const auto oldRecordings = impl->untitled ? juce::File() : getRecordingsFolderFor (oldFile);
-    const auto newRecordings = getRecordingsFolderFor (file);
-    impl->sessionFile = file;   // paths are now worked out from the new location
+    // Every file the session plays goes in its Audio folder, under a name
+    // every system accepts. Each file is copied (or renamed) once, however
+    // many regions use it.
+    std::map<juce::String, juce::File> moved;
+    std::vector<juce::File> audioFiles;
 
     for (auto& source : sources)
     {
-        auto target = source.file;
+        auto& target = moved[source.file.getFullPathName()];
 
-        // The session's recordings (new takes, or ones in the folder of the
-        // session it was saved from) are copied next to the new session file.
-        // Imported audio files stay where they are.
-        const bool isRecording = source.file.isAChildOf (getRecordingsFolder())
-                                  || (oldRecordings != juce::File() && source.file.isAChildOf (oldRecordings));
+        if (target == juce::File())
+        {
+            target = source.file;
 
-        if (isRecording && source.file.existsAsFile() && ! source.file.isAChildOf (newRecordings))
-            target = copyRecordingInto (source.file, newRecordings);
+            if (source.file.existsAsFile() && ! source.file.isAChildOf (audioFolder))
+            {
+                target = copyIntoFolder (source.file, audioFolder);
+            }
+            else if (source.file.isAChildOf (audioFolder))
+            {
+                // A take named after a track called "Verse: 1", say.
+                const auto portable = SessionBundle::makePortableFileName (source.file.getFileName());
 
-        // Re-store every path relative to the new location. nullptr = not an
-        // undo step: the user shouldn't be able to "undo" a save.
-        source.clip->state.setProperty (te::IDs::source,
-                                        te::SourceFileReference::findPathFromFile (edit, target, true), nullptr);
+                if (portable != source.file.getFileName())
+                {
+                    auto renamed = audioFolder.getNonexistentChildFile (juce::File (portable).getFileNameWithoutExtension(),
+                                                                        source.file.getFileExtension(), false);
+
+                    if (source.file.moveFileTo (renamed))
+                        target = renamed;
+                }
+            }
+
+            if (target.isAChildOf (audioFolder))
+                audioFiles.push_back (target);
+        }
+
+        // Paths inside the session are relative, with "/" on every system,
+        // so the session reads back the same wherever it's opened.
+        // nullptr = not an undo step: the user shouldn't be able to "undo" a save.
+        const auto path = target.isAChildOf (workFolder) ? target.getRelativePathFrom (workFolder).replaceCharacter ('\\', '/')
+                                                          : target.getFullPathName();
+        source.clip->state.setProperty (te::IDs::source, path, nullptr);
     }
 
-    // writeToFile is synchronous, which keeps the menu code simple.
-    if (! te::EditFileOperations (edit).writeToFile (file, false))
+    if (! te::EditFileOperations (edit).writeToFile (impl->sessionFile, false))
     {
-        // Point everything back at the files it used before.
-        impl->sessionFile = oldFile;
-
+        // Point everything back at the files it used before. (Copies made in
+        // the Audio folder do no harm.)
         for (auto& source : sources)
             source.clip->state.setProperty (te::IDs::source, source.oldPath, nullptr);
 
-        return false;
+        return nullptr;
     }
 
+    auto job = std::make_unique<SaveJob>();
+    job->bundle = bundle;
+    job->entries.push_back ({ SessionBundle::sessionEntry, impl->sessionFile, true });
+
+    if (auto preview = getPreviewFile(); preview.existsAsFile())
+        job->entries.push_back ({ SessionBundle::previewEntry, preview, false });
+
+    for (auto& f : audioFiles)
+        job->entries.push_back ({ juce::String (SessionBundle::audioFolder) + "/" + f.getFileName(), f, false });
+
+    // bundle.json: what saved it, and the sound packs it needs, so a computer
+    // without them can say which ones (and later offer to download them).
+    juce::Array<juce::var> packsUsed;
+    juce::StringArray packIds;
+
+    for (auto* track : te::getAudioTracks (edit))
+    {
+        const auto packId = SoundLibrary::getPackIdOf (track->state[detail::soundIdProp].toString());
+
+        if (packId.isNotEmpty() && ! packIds.contains (packId))
+        {
+            packIds.add (packId);
+            auto pack = sounds->findPack (packId);
+            auto entry = new juce::DynamicObject();
+            entry->setProperty ("id", packId);
+            entry->setProperty ("version", pack.has_value() ? pack->version : juce::String());
+            packsUsed.add (juce::var (entry));
+        }
+    }
+
+    auto info = new juce::DynamicObject();
+    info->setProperty ("format", 1);
+    info->setProperty ("app", "Ikaros Studio");
+    info->setProperty ("appVersion", IKAROS_VERSION);
+    info->setProperty ("saved", juce::Time::getCurrentTime().toISO8601 (true));
+    info->setProperty ("packs", packsUsed);
+    job->info = juce::var (info);
+
+    return job;
+}
+
+bool AudioEngine::finishSave (SaveJob& job)
+{
+    if (job.result.failed())
+        return false;
+
+    impl->bundleFile = job.bundle;
     impl->untitled = false;
+    impl->legacySessionFile = juce::File();   // its audio has all been copied in now
+    impl->addToRecentSessions (job.bundle);
     impl->edit->resetChangedStatus();
     notifyModelChanged();
     return true;
 }
 
+float AudioEngine::renderPeak (double startBeat, double endBeat)
+{
+    auto& edit = *impl->edit;
+    const te::TimeRange range { edit.tempoSequence.toTime (te::BeatPosition::fromBeats (startBeat)),
+                                edit.tempoSequence.toTime (te::BeatPosition::fromBeats (endBeat)) };
+
+    // Every track (the renderer takes them as a set of track indexes).
+    juce::BigInteger tracks;
+    tracks.setRange (0, te::getAllTracks (edit).size(), true);
+
+    return te::Renderer::measureStatistics ("Peak", edit, range, tracks, 512).peak;
+}
+
 bool AudioEngine::isUntitled() const                { return impl->untitled; }
-juce::File AudioEngine::getSessionFile() const      { return impl->sessionFile; }
+juce::File AudioEngine::getSessionFile() const      { return impl->bundleFile; }
 
 juce::String AudioEngine::getSessionName() const
 {
-    return impl->untitled ? juce::String ("Untitled Session")
-                          : impl->sessionFile.getFileNameWithoutExtension();
+    if (! impl->untitled)
+        return impl->bundleFile.getFileNameWithoutExtension();
+
+    // An older session that can't be saved next to its folder yet.
+    if (impl->legacySessionFile != juce::File())
+        return impl->legacySessionFile.getFileNameWithoutExtension();
+
+    return "Untitled Session";
 }
 
 bool AudioEngine::hasUnsavedChanges() const
@@ -459,9 +1199,9 @@ bool AudioEngine::hasUnsavedChanges() const
     return impl->edit != nullptr && impl->edit->hasChangedSinceSaved();
 }
 
-void AudioEngine::notifyModelChanged()
+void AudioEngine::notifyModelChanged (const ModelChanges& changes)
 {
-    sendChangeMessage();
+    impl->addPending (changes);
 }
 
 //==============================================================================
@@ -482,7 +1222,7 @@ void AudioEngine::stop()
     transport.stop (false, false);   // false = keep the recording
 
     if (wasRecording && impl->autoArmedTrack != 0)
-        trackController->setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
+        trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
 }
 
 void AudioEngine::toggleRecord()
@@ -495,9 +1235,9 @@ void AudioEngine::toggleRecord()
         return;
     }
 
-    impl->autoArmedTrack = trackController->armForRecording();
+    impl->autoArmedTrack = trackController->inputs().armForRecording();
 
-    if (trackController->getArmedTrack() == 0)
+    if (trackController->inputs().getArmedTrack() == 0)
         return;   // no track to record onto
 
     // With the count-in on, Tracktion starts playback a bar early and clicks

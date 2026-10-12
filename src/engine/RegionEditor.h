@@ -57,6 +57,12 @@ public:
     /** Moves a region's edges. Clamped to RegionInfo::minStartBeat/maxEndBeat. */
     void trimRegion (RegionId, double newStartBeat, double newEndBeat);
 
+    /** Repeats a region's content up to newEndBeat, as one "Loop Region"
+        undo step. The first time, whatever the region shows now becomes the
+        part that repeats. A looped region stays looped when it's made shorter
+        again. Returns false if nothing changed. */
+    bool loopRegion (RegionId, double newEndBeat);
+
     /** Splits each region that crosses `beat` in two. Returns the new right-hand halves. */
     std::vector<RegionId> splitRegions (const std::vector<RegionId>&, double beat);
 

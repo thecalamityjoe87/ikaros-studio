@@ -1,0 +1,42 @@
+{
+    "format": 1,
+    "packs": [
+        {
+            "id": "ikaros-studio.store-bass",
+            "name": "Store Bass",
+            "version": "1.0.0",
+            "category": "Bass",
+            "description": "A tiny pack for testing downloads: one sine-wave instrument (bass).",
+            "author": "Ikaros Studio",
+            "license": "CC0-1.0",
+            "downloadSize": 22291,
+            "installedSize": 22548,
+            "url": "ikaros-studio.store-bass-1.0.0.zip",
+            "sha256": "6cbfb9c1d3cf99466346c5b0412bb86427901a848899a3b6929056d31c84ee5f"
+        },
+        {
+            "id": "ikaros-studio.store-test",
+            "name": "Store Pack",
+            "version": "1.0.0",
+            "category": "Keyboards",
+            "description": "A tiny pack for testing downloads: one sine-wave instrument (keyboards).",
+            "author": "Ikaros Studio",
+            "license": "CC0-1.0",
+            "downloadSize": 22472,
+            "installedSize": 22558,
+            "url": "ikaros-studio.store-test-1.0.0.zip",
+            "sha256": "0b1c8308ddc8e65471015743d44594fb0f4081e2e57081f836a0b23b729058b7"
+        }
+    ],
+    "collections": [
+        {
+            "id": "starter",
+            "name": "Starter Sounds",
+            "description": "The test store's starter set: both test packs.",
+            "packs": [
+                "ikaros-studio.store-test",
+                "ikaros-studio.store-bass"
+            ]
+        }
+    ]
+}

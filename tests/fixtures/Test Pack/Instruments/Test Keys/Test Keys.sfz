@@ -1,0 +1,8 @@
+// Test instrument for the engine smoke test (see generate_test_pack.py).
+<global> lokey=0 hikey=127 pitch_keycenter=60 amp_veltrack=0
+ampeg_attack_oncc73=2 ampeg_release_oncc72=3
+<group> lovel=1 hivel=63
+<region> sample=soft.wav
+<group> lovel=64 hivel=127 seq_length=2
+<region> sample=loud1.wav seq_position=1
+<region> sample=loud2.wav seq_position=2

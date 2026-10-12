@@ -60,24 +60,60 @@ void Knob::setArcColour (juce::Colour c)
 
 void Knob::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds();
     g.setColour (colour::cardBg);
-    g.fillRoundedRectangle (r.toFloat(), 12.0f);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 12.0f);
 
-    r.removeFromTop (8 + 60 + 4);
+    auto r = textArea;
+
+    if (wide)
+    {
+        // Name and value beside the dial, centred vertically.
+        r = r.withSizeKeepingCentre (r.getWidth(), 40);
+        g.setColour (colour::text);
+        g.setFont (fonts::uiBold (15.0f));
+        g.drawText (label, r.removeFromTop (22), juce::Justification::centredLeft, true);
+
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::mono (14.0f));
+        g.drawText (valueText, r, juce::Justification::centredLeft, true);
+        return;
+    }
 
     g.setColour (colour::text);
     g.setFont (fonts::uiBold (12.0f));
-    g.drawText (label, r.removeFromTop (16), juce::Justification::centred);
+    g.drawText (label, r.removeFromTop (16), juce::Justification::centred, true);
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::mono (11.0f));
-    g.drawText (valueText, r.removeFromTop (16), juce::Justification::centred);
+    g.drawText (valueText, r.removeFromTop (16), juce::Justification::centred, true);
 }
 
 void Knob::resized()
 {
-    slider.setBounds (getLocalBounds().removeFromTop (8 + 60).withTrimmedTop (8).withSizeKeepingCentre (60, 60));
+    // Two ways to lay out the tile; use whichever gives the bigger dial.
+    // Stacked: dial at the top, then the name and value (16px each).
+    // Wide: dial on the left as tall as the tile, name and value to its right
+    // (they need about 70px).
+    const auto bounds = getLocalBounds();
+    const int stackedDial = juce::jmin (bounds.getWidth() - 20, bounds.getHeight() - 52);
+    const int wideDial = juce::jmin (bounds.getHeight() - 16, bounds.getWidth() - 24 - 12 - 70, 120);
+    wide = wideDial > stackedDial;
+
+    if (wide)
+    {
+        auto r = bounds.reduced (12, 8);
+        slider.setBounds (r.removeFromLeft (wideDial).withSizeKeepingCentre (wideDial, wideDial));
+        r.removeFromLeft (12);
+        textArea = r;
+        return;
+    }
+
+    auto r = bounds;
+    r.removeFromTop (8);
+    const int dial = juce::jmax (24, stackedDial);
+    slider.setBounds (r.removeFromTop (dial).withSizeKeepingCentre (dial, dial));
+    r.removeFromTop (4);
+    textArea = r;
 }
 
 } // namespace ikaros

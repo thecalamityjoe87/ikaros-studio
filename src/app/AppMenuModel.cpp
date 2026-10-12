@@ -30,6 +30,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::saveSession);
         add (CommandIDs::saveSessionAs);
+        add (CommandIDs::closeSession);
         m.addSeparator();
         add (CommandIDs::audioSettings);
         // TODO(milestone-4): Export / Share submenu.
@@ -102,12 +103,15 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::showSoundTab);
         add (CommandIDs::showEditorTab);
+        add (CommandIDs::showEqTab);
         add (CommandIDs::showMixerTab);
         m.addSeparator();
         add (CommandIDs::toggleDetails);
     }
     else if (name == "Window")
     {
+        add (CommandIDs::moreSounds);
+        m.addSeparator();
         add (CommandIDs::toggleFullScreen);
     }
     else if (name == "Help")

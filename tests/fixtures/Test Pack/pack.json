@@ -1,0 +1,19 @@
+{
+    "format": 2,
+    "id": "ikaros-studio.test",
+    "name": "Test Pack",
+    "version": "1.2.3",
+    "description": "Sine waves for the engine smoke test.",
+    "author": "Ikaros Studio",
+    "license": "CC0-1.0",
+    "installedSize": 66282,
+    "credits": [
+        {
+            "what": "Test tones",
+            "who": "generate_test_pack.py",
+            "license": "CC0-1.0",
+            "url": "",
+            "attributionRequired": true
+        }
+    ]
+}

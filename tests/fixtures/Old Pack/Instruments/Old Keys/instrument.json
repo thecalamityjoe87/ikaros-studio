@@ -1,0 +1,30 @@
+{
+    "name": "Old Keys",
+    "category": "Keyboards",
+    "samples": [
+        {
+            "file": "tone.wav",
+            "root": 60,
+            "low": 0,
+            "high": 127
+        }
+    ],
+    "knobs": [
+        {
+            "name": "Tone",
+            "control": "tone"
+        },
+        {
+            "name": "Tone",
+            "control": "tone"
+        },
+        {
+            "name": "Tone",
+            "control": "tone"
+        },
+        {
+            "name": "Tone",
+            "control": "tone"
+        }
+    ]
+}

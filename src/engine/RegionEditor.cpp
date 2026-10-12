@@ -1,5 +1,6 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -40,6 +41,10 @@ static void findTrimLimits (te::Clip& clip, double& minStartBeat, double& maxEnd
 {
     minStartBeat = 0.0;
     maxEndBeat = std::numeric_limits<double>::max();
+
+    // A looped region repeats its content as far as it's dragged, both ways.
+    if (clip.isLooping())
+        return;
 
     if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -106,16 +111,27 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
     if (auto* track = clip.getClipTrack())
         r.trackId = track->itemID.getRawID();
 
+    if (clip.isLooping())
+    {
+        r.loopLengthBeats = clip.getLoopLengthBeats().inBeats();
+        r.loopOffsetBeats = loopOffsetBeats (clip);
+    }
+
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
         r.isMidi = true;
         auto contentOffset = contentOffsetBeats (clip);
 
+        // Recorded notes (and ones from older sessions) get their IDs the
+        // first time anyone looks at them.
+        assignNoteIds (*midi);
+
         for (auto* n : midi->getSequence().getNotes())
             r.notes.push_back ({ n->getNoteNumber(),
                                  n->getStartBeat().inBeats() + contentOffset,
                                  n->getLengthBeats().inBeats(),
-                                 n->getVelocity() });
+                                 n->getVelocity(),
+                                 getNoteId (*n) });
     }
     else
     {
@@ -305,7 +321,22 @@ void RegionEditor::trimRegion (RegionId id, double newStart, double newEnd)
     owner.beginUndoStep ("Trim Region");
     auto* um = &edit->getUndoManager();
 
-    if (newStart != oldStart)
+    if (newStart != oldStart && clip->isLooping())
+    {
+        // A looped region keeps repeating in both directions: moving its
+        // start just changes where in the loop it begins. Tracktion's offset
+        // can't go below zero, so when the start moves earlier, wrap the
+        // offset round by whole loops (the content still lines up).
+        const double loopLength = clip->getLoopLengthBeats().inBeats();
+        double offset = loopOffsetBeats (*clip) - (oldStart - newStart);
+        offset -= std::floor (offset / loopLength) * loopLength;
+
+        auto pos = clip->getPosition();
+        pos.time = { beatToTime (*edit, newStart), pos.time.getEnd() };
+        pos.offset = pos.time.getStart() - beatToTime (*edit, newStart - offset);
+        clip->setPosition (pos);
+    }
+    else if (newStart != oldStart)
     {
         auto* midi = dynamic_cast<te::MidiClip*> (clip);
         const double contentStart = clip->getContentStartBeat().inBeats();
@@ -331,6 +362,63 @@ void RegionEditor::trimRegion (RegionId id, double newStart, double newEnd)
         clip->setEnd (beatToTime (*edit, newEnd), true);
 
     clearSpaceFor (*clip, { clip });
+}
+
+bool RegionEditor::loopRegion (RegionId id, double newEndBeat)
+{
+    auto* edit = owner.getEdit();
+    auto* clip = findClip (edit, id);
+
+    if (clip == nullptr)
+        return false;
+
+    const double start = clip->getStartBeat().inBeats();
+    const double oldEnd = clip->getEndBeat().inBeats();
+    newEndBeat = juce::jmax (newEndBeat, start + minRegionBeats);
+
+    if (std::abs (newEndBeat - oldEnd) < 1.0e-9)
+        return false;
+
+    // Not looped yet and not made any longer: nothing to repeat.
+    if (! clip->isLooping() && newEndBeat <= oldEnd)
+        return false;
+
+    owner.beginUndoStep ("Loop Region");
+
+    if (! clip->isLooping())
+    {
+        // Tracktion only loops audio it knows the length of in beats (library
+        // loops know theirs). For any other recording, work it out from the
+        // session's tempo, so every region can loop.
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); wave != nullptr && ! wave->canLoop())
+        {
+            auto& loopInfo = wave->getLoopInfo();
+            const auto seconds = wave->getSourceLength().inSeconds();
+            loopInfo.setNumBeats (seconds * edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart()));
+
+            if (loopInfo.getNumerator() <= 0 || loopInfo.getDenominator() <= 0)
+            {
+                loopInfo.setNumerator (4);
+                loopInfo.setDenominator (4);
+            }
+        }
+
+        if (! clip->canLoop())
+            return false;
+
+        // What the region shows now becomes the part that repeats: the loop
+        // range is in the clip's own content time, starting at its offset.
+        // The offset then goes back to 0: the region starts at the loop's start.
+        auto pos = clip->getPosition();
+        clip->setLoopRange ({ te::TimePosition() + pos.offset, pos.getLength() });
+
+        pos.offset = {};
+        clip->setPosition (pos);
+    }
+
+    clip->setEnd (beatToTime (*edit, newEndBeat), true);
+    clearSpaceFor (*clip, { clip });
+    return true;
 }
 
 std::vector<RegionId> RegionEditor::splitRegions (const std::vector<RegionId>& ids, double beat)
@@ -413,7 +501,7 @@ void RegionEditor::renameRegion (RegionId id, const juce::String& newName)
 void RegionEditor::copyRegions (const std::vector<RegionId>& ids)
 {
     auto* edit = owner.getEdit();
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
 
     struct Found { te::Clip* clip; te::AudioTrack* track; };
     std::vector<Found> found;
@@ -461,7 +549,7 @@ std::vector<RegionId> RegionEditor::pasteRegions (TrackId targetId, double beat)
     if (clipboard.empty())
         return {};
 
-    auto tracks = te::getAudioTracks (*edit);
+    auto tracks = getUserTracks (*edit);
     const int targetIndex = tracks.indexOf (findTrack (edit, targetId));
 
     owner.beginUndoStep ("Paste");
@@ -536,11 +624,28 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
 
     for (auto& file : files)
     {
-        const auto length = te::TimeDuration::fromSeconds (te::AudioFile (engine, file).getLength());
+        const auto fileSeconds = te::AudioFile (engine, file).getLength();
+        auto length = te::TimeDuration::fromSeconds (fileSeconds);
+
+        // A loop from the library knows its tempo: it lasts that many beats
+        // at the session's tempo, stretched to fit (and keeps following the
+        // tempo if it changes).
+        const auto loopBpm = owner.getSounds().getLoopBpm (file);
+        const auto loopBeats = fileSeconds * loopBpm / 60.0;
+
+        if (loopBpm > 0.0)
+            length = beatToTime (*edit, timeToBeat (*edit, start) + loopBeats) - start;
 
         // ClipPosition = { time range on the timeline, offset into the file }.
         if (auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file, { { start, start + length }, {} }, false))
         {
+            if (loopBpm > 0.0)
+            {
+                clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
+                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+                clip->setAutoTempo (true);
+            }
+
             added.push_back (clip.get());
             start = start + length;
         }

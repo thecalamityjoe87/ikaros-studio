@@ -4,6 +4,7 @@
 #include "engine/AudioEngine.h"
 #include "ui/arrangement/ArrangementView.h"
 #include "ui/bottompanel/BottomPanel.h"
+#include "ui/dialogs/SessionChooser.h"
 #include "ui/library/LibrarySidebar.h"
 #include "ui/titlebar/MenuBar.h"
 #include "ui/state/Selection.h"
@@ -19,13 +20,16 @@ namespace ikaros
     and bottom panel, and handles every application command (menus + shortcuts).
 
     It also drives the UI's two refresh paths:
-      - model changes (tracks, regions, undo...) arrive as change messages from
-        AudioEngine and trigger a full refresh();
+      - model changes (tracks, regions, undo...) arrive from AudioEngine with
+        what kind of thing changed (ModelChanges), and only the parts of the
+        window that show it re-read the engine;
       - fast-moving state (playhead, meters, CPU) is polled by a 30 Hz Timer.
 */
 class MainComponent  : public juce::Component,
                        public juce::ApplicationCommandTarget,
-                       private juce::ChangeListener,
+                       public juce::DragAndDropContainer,   // library files dragged onto the timeline
+                       private AudioEngine::Listener,        // session changes
+                       private juce::ChangeListener,         // selection changes
                        private juce::Timer
 {
 public:
@@ -34,6 +38,10 @@ public:
 
     /** Asks to save unsaved changes, then quits. Called for the close button and Quit. */
     void requestQuit();
+
+    /** Opens a session the system handed us: double-clicked in the file
+        manager, or named on the command line. */
+    void openFileFromSystem (const juce::File&);
 
     /** For the custom title bar: what's at a point in this component's coordinates. */
     WindowControlKind getWindowControlAt (juce::Point<float>) const;
@@ -73,6 +81,17 @@ private:
     int resizeStartSize = 0;   // the panel's size when a resize drag started
 
     void refreshAll();
+
+    // What the menu bar shows about the session, so it's only told when that changes.
+    struct SessionStatus
+    {
+        juce::String name;
+        bool untitled = true, unsaved = false;
+        bool operator== (const SessionStatus&) const = default;   // C++20: compares every member
+    };
+
+    std::optional<SessionStatus> shownSessionStatus;
+    void updateSessionStatus();
     void setLibraryVisible (bool);
     void setBottomPanelVisible (bool);
     void setUpResizers();
@@ -82,14 +101,22 @@ private:
         selected track's regions. */
     std::vector<RegionId> getRegionsToSplit() const;
     bool canSplitAtPlayhead() const;
+    void sessionChanged (const ModelChanges&) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
     // Session commands (all asynchronous: dialogs never block the message loop)
-    void newSession();
-    void openSession();
+    void newSession();          // the session chooser's templates
+    void openSession();         // the session chooser's recent sessions
+    void closeSession();        // back to the session chooser
+    void showSessionChooser (SessionChooser::Page);
+    void openOtherSession();    // the computer's file dialog
+    void openSessionFile (const juce::File&);
+    void writeSessionPreview();
     void saveSession (std::function<void (bool saved)> afterSave = nullptr);
     void saveSessionAs (std::function<void (bool saved)> afterSave = nullptr);
+    void save (const juce::File& bundle, std::function<void (bool saved)> afterSave);
+    bool saving = false;        // a save is being written (see SavingOverlay)
     void confirmDiscardChanges (std::function<void()> thenDo);
     void showAudioSettings();
     void showNewTrackDialog();

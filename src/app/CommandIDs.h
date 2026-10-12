@@ -16,6 +16,7 @@ namespace CommandIDs
         openSession,
         saveSession,
         saveSessionAs,
+        closeSession,
         audioSettings,
 
         undo,
@@ -59,10 +60,12 @@ namespace CommandIDs
         snapOff,
         showSoundTab,
         showEditorTab,
+        showEqTab,
         showMixerTab,
         toggleDetails,
 
         toggleFullScreen,
+        moreSounds,
         about,
     };
 }

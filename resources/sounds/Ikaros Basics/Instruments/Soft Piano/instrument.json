@@ -1,0 +1,37 @@
+{
+  "name": "Soft Piano",
+  "category": "Keyboards",
+  "oneShot": false,
+  "samples": [
+    {
+      "file": "C2.flac",
+      "root": 36,
+      "low": 0,
+      "high": 42
+    },
+    {
+      "file": "C3.flac",
+      "root": 48,
+      "low": 43,
+      "high": 54
+    },
+    {
+      "file": "C4.flac",
+      "root": 60,
+      "low": 55,
+      "high": 66
+    },
+    {
+      "file": "C5.flac",
+      "root": 72,
+      "low": 67,
+      "high": 78
+    },
+    {
+      "file": "C6.flac",
+      "root": 84,
+      "low": 79,
+      "high": 127
+    }
+  ]
+}

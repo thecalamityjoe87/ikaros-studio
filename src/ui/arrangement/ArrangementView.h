@@ -4,6 +4,7 @@
 #include "ui/state/Selection.h"
 #include "ui/arrangement/TrackHeader.h"
 #include "ui/widgets/IconButton.h"
+#include "ui/theme/Tokens.h"
 #include <map>
 
 namespace ikaros
@@ -39,6 +40,8 @@ namespace ikaros
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
+                         public juce::TextDragAndDropTarget,
+                         public juce::DragAndDropTarget,
                          private juce::ScrollBar::Listener
 {
 public:
@@ -47,6 +50,15 @@ public:
 
     /** Re-reads tracks and regions from the engine. Call after model changes. */
     void refresh();
+
+    /** Re-reads only the tracks' own settings (names, mute, volume, the
+        selection), not their regions. Falls back to refresh() if tracks were
+        added, removed or reordered. */
+    void refreshTracks();
+
+    /** Re-reads only these regions. Falls back to refresh() if one of them
+        is new, gone, or on another track. */
+    void refreshRegions (const std::set<RegionId>&);
 
     /** Updates the playhead and loop bar. Called by the owner's ~30 Hz timer. */
     void updateTransport();
@@ -60,6 +72,9 @@ public:
     /** The nearest grid line to a beat (or the beat itself with snap off). */
     double snapBeat (double beat) const;
 
+    /** The distance between grid lines in beats (0 with snap off). */
+    double getSnapBeats() const;
+
     void zoomIn();
     void zoomOut();
 
@@ -70,7 +85,6 @@ public:
     void startRenamingTrack (TrackId);
 
     std::function<void (RegionId)> onOpenRegionInEditor;
-    std::function<void (juce::Component*)> onAddTrackRequested;   // shows the track-type menu at this component
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
 
     //==============================================================================
@@ -85,12 +99,28 @@ public:
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
+    // TextDragAndDropTarget: some file managers' drags arrive as text, a list
+    // of file:// links, one per line. Treated the same as a file drag.
+    bool isInterestedInTextDrag (const juce::String& text) override;
+    void textDragEnter (const juce::String& text, int x, int y) override;
+    void textDragMove (const juce::String& text, int x, int y) override;
+    void textDragExit (const juce::String& text) override;
+    void textDropped (const juce::String& text, int x, int y) override;
+
+    // DragAndDropTarget: sounds, loops and audio files dragged from the library.
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override;
+    void itemDragMove (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails&) override;
+
     /** Maps between beats and x-positions within a lane. */
     struct Geometry
     {
         double pixelsPerBeat = 20.0;
         double beatsPerBar = 4.0;
         double scrollBeats = 0.0;      // the beat at the left edge of the lanes
+        int rowHeight = tokens::size::trackRowHeight;   // track height: grows when zoomed in (see setZoom)
 
         float beatToX (double beat) const          { return (float) ((beat - scrollBeats) * pixelsPerBeat); }
         double xToBeat (float x) const             { return x / pixelsPerBeat + scrollBeats; }
@@ -126,6 +156,7 @@ private:
     std::vector<TrackInfo> tracks;
     double contentEndBeat = 0.0;
     bool zoomInitialised = false;
+    double startPixelsPerBeat = 20.0;   // the first zoom (16 bars across): tracks are their normal height here and below
     float lastPlayheadX = 0.0f;
 
     //==============================================================================
@@ -134,6 +165,7 @@ private:
     double getVisibleBeats() const;
     double getTotalBeats() const;
     void setZoom (double pixelsPerBeat, float anchorX);
+    float getZoomAnchorX (float fallbackX) const;   // where a zoom should stay put, in lane x
     void scrollToBeat (double beat);
     void timelineChanged();
     void updateScrollBar();
@@ -177,6 +209,7 @@ private:
     // Audio file drops
     struct DropTarget { TrackId track = 0; int row = -1; double beat = 0.0; };
     DropTarget findDropTarget (int x, int y) const;
+    int findSoundDropRow (int y) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ArrangementView)
 };

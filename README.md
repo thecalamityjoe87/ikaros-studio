@@ -2,13 +2,19 @@
 
 A simple music studio for Linux, Windows and macOS, in the spirit of GarageBand. Built with JUCE and Tracktion Engine.
 
-Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone or a guitar (with a count-in if you like), drag in audio files, edit regions and notes, add effects, and save sessions. Third-party plug-ins aren't in yet.
+Early development. You can make instrument and audio tracks, record from a MIDI keyboard, a microphone, a guitar or a stereo source (with a count-in if you like), pick sounds and loops from the library, edit regions and notes, add effects, send tracks to a shared reverb and delay, and save sessions. VST3 and LV2 plug-ins work on Linux and Windows, and VST3 and Audio Units on macOS.
 
-New recordings go to `Documents/Ikaros Studio/Recordings`. When you save a session, its recordings are copied into a folder next to the session file, so you can move or back up the two together.
+A saved session is a single `.iksession` file, like a GarageBand project: it holds the session and every recording, loop and audio file it uses, so you can move it, back it up or send it to someone on Linux, Windows or macOS. Instruments from sound packs aren't copied into it; the session finds them by pack on whichever computer opens it. Sessions saved as folders by earlier versions still open, and saving one writes a `.iksession` next to its folder.
+
+## Sounds and plug-ins
+
+The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`.
+
+Plug-ins are found by a scan in the background at startup. Each plug-in is loaded in a separate helper process, so one that crashes or freezes is just skipped (and remembered) instead of taking the app down. The Plug-ins tile in the library shows what was found and can scan again.
 
 ## Building
 
-You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`. The first build takes a while because it compiles both.
+You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`, sfizz, which plays SFZ instruments, in `external/sfizz`, and miniz, which reads and writes session files, in `external/miniz`. The first build takes a while because it compiles all of them. The projects Ikaros Studio is built on, and their licenses, are listed in `CREDITS`.
 
 ```sh
 git clone --recursive https://github.com/thecalamityjoe87/ikaros-studio.git
@@ -30,7 +36,7 @@ cmake --build build
 ./build/IkarosStudio_artefacts/Release/Ikaros\ Studio
 ```
 
-`sudo cmake --install build` installs the binary, desktop file, metainfo and icons.
+`sudo cmake --install build` installs the binary, desktop file, metainfo, icons and the sound packs.
 
 Debug builds draw a lot slower, so resizing feels choppy. Use `RelWithDebInfo` for day-to-day work; it's fast and relinks much quicker than `Release`.
 
@@ -62,6 +68,8 @@ cmake -B build -DIKAROS_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build
 ```
+
+Add `-DIKAROS_BUILD_TEST_PLUGINS=ON` to also build a few tiny VST3/LV2 plug-ins (and two deliberately broken ones) that the test scans and loads. They end up in `build/TestPlugins`, never in your real plug-in folders. The test keeps its own settings, so it doesn't touch the app's.
 
 ### Flatpak
 

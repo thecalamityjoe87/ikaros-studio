@@ -1,6 +1,7 @@
 #include "ui/bottompanel/PluginEditor.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include <algorithm>
 
 namespace ikaros
 {
@@ -13,7 +14,7 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour 
     powerButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
     powerButton.setCornerRadius (6.0f);
     powerButton.setIconSize (14.0f);
-    powerButton.onClick = [this] { engine.getTracks().setEffectEnabled (trackId, pluginId, ! slot.enabled); };
+    powerButton.onClick = [this] { engine.getTracks().effects().setEffectEnabled (trackId, pluginId, ! slot.enabled); };
     addAndMakeVisible (powerButton);
 
     auto doneColours = IconButton::raisedColours();
@@ -24,7 +25,7 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour 
     doneButton.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible (doneButton);
 
-    auto params = engine.getTracks().getEffectParameters (trackId, pluginId);
+    auto params = engine.getTracks().effects().getEffectParameters (trackId, pluginId);
 
     for (int i = 0; i < (int) params.size(); ++i)
     {
@@ -33,7 +34,7 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour 
         knob->onDragStart = [this, knob] { engine.beginUndoStep (slot.name + " " + knob->getName()); };
         knob->onValueChange = [this, i] (float v)
         {
-            engine.getTracks().setEffectParameter (trackId, pluginId, i, v);
+            engine.getTracks().effects().setEffectParameter (trackId, pluginId, i, v);
             refreshValues();
         };
         addAndMakeVisible (knob);
@@ -47,7 +48,7 @@ void PluginEditor::refreshValues()
 {
     auto& tracks = engine.getTracks();
 
-    for (auto& s : tracks.getEffectChain (trackId))
+    for (auto& s : tracks.effects().getEffectChain (trackId))
     {
         if (s.id == pluginId)
         {
@@ -64,7 +65,7 @@ void PluginEditor::refreshValues()
         }
     }
 
-    auto params = tracks.getEffectParameters (trackId, pluginId);
+    auto params = tracks.effects().getEffectParameters (trackId, pluginId);
 
     for (int i = 0; i < knobs.size() && i < (int) params.size(); ++i)
         knobs[i]->setValue (params[(size_t) i].value, params[(size_t) i].valueText);
@@ -73,7 +74,10 @@ void PluginEditor::refreshValues()
 void PluginEditor::timerCallback()
 {
     // If the effect was removed (e.g. by Undo) while we're showing it, close.
-    if (engine.getTracks().getEffectParameters (trackId, pluginId).empty())
+    // (Look for it in the chain: an effect with no settings is still there.)
+    auto chain = engine.getTracks().effects().getEffectChain (trackId);
+
+    if (std::none_of (chain.begin(), chain.end(), [this] (const PluginSlot& s) { return s.id == pluginId; }))
     {
         stopTimer();
 

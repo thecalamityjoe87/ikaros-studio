@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include <tuple>
 
 namespace ikaros
 {
@@ -10,7 +11,7 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int panSize = 40;
+    constexpr int panSize = 46;
 }
 
 TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
@@ -38,7 +39,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     armButton.onClick = [this]
     {
         selection.selectTrack (info.id);
-        engine.getTracks().setArmed (info.id, ! info.armed);
+        engine.getTracks().inputs().setArmed (info.id, ! info.armed);
     };
     addAndMakeVisible (armButton);
 
@@ -47,7 +48,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
     monitorButton.setCornerRadius (size::radiusSmall);
     monitorButton.setIconSize (14.0f);
-    monitorButton.onClick = [this] { engine.getTracks().setMonitoring (info.id, ! info.monitoring); };
+    monitorButton.onClick = [this] { engine.getTracks().inputs().setMonitoring (info.id, ! info.monitoring); };
     addChildComponent (monitorButton);
 
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };
@@ -101,6 +102,13 @@ void TrackHeader::updateAccessibleNames()
 
 void TrackHeader::update (const TrackInfo& t, bool isSelected)
 {
+    // Only redraw the header itself if something paint() draws changed. The
+    // buttons and knobs redraw themselves when their own values change.
+    // (std::tie bundles references to the members, so the two sets compare
+    // in one go.)
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.colour, i.muted, i.silencedBySolo); };
+    const bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
+
     info = t;
     selected = isSelected;
 
@@ -130,7 +138,9 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     if (wasAudio != monitorButton.isVisible())
         resized();
     updateAccessibleNames();
-    repaint();
+
+    if (needsRepaint)
+        repaint();
 }
 
 void TrackHeader::mouseDown (const juce::MouseEvent& e)
@@ -235,7 +245,9 @@ void TrackHeader::paint (juce::Graphics& g)
     // Icon tile
     g.setColour (selected ? colour::controlFill : juce::Colour (0xff1f232a));
     g.fillRoundedRectangle (iconArea.toFloat(), size::radiusLarge);
-    icons::draw (g, icons::forTrack (info.icon, info.category), iconArea.toFloat(), info.colour, 22.0f);
+    // The icon the user picked, or else the one the sound suggests, or else the category's.
+    icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
+                 iconArea.toFloat(), info.colour, 22.0f);
 
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
     g.setFont (fonts::uiBold (14.0f));
@@ -248,38 +260,37 @@ void TrackHeader::paint (juce::Graphics& g)
 
 void TrackHeader::resized()
 {
-    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (10, 8);
+    // Laid out from the top: when zooming makes the row taller, the
+    // controls stay together and the lane gets the extra room.
+    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (12, 10);
 
-    iconArea = r.removeFromLeft (40).removeFromTop (40);
-    r.removeFromLeft (10);
+    iconArea = r.removeFromLeft (44).removeFromTop (44);
+    r.removeFromLeft (12);
 
-    auto top = r.removeFromTop (22);
-    armButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
+    auto top = r.removeFromTop (26);
 
-    if (monitorButton.isVisible())
+    for (auto* b : { &armButton, &monitorButton, &soloButton, &muteButton })
     {
-        monitorButton.setBounds (top.removeFromRight (24));
-        top.removeFromRight (4);
+        if (b->isVisible())
+        {
+            b->setBounds (top.removeFromRight (26));
+            top.removeFromRight (5);
+        }
     }
 
-    soloButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
-    muteButton.setBounds (top.removeFromRight (24));
-    top.removeFromRight (4);
     nameArea = top;
     nameEditor.setBounds (nameArea.expanded (2, 0));
 
-    r.removeFromTop (2);
-    soundArea = r.removeFromTop (16).withTrimmedRight (panSize);
-    r.removeFromTop (2);
+    r.removeFromTop (4);
+    soundArea = r.removeFromTop (18).withTrimmedRight (panSize);
+    r.removeFromTop (8);
 
     // Pan knob at the end of the volume slider's row, centred on it. Its
-    // bounds are taller than the row: the knob is drawn inset (about 26px
-    // across), and the extra space is empty.
-    auto volumeRow = r.removeFromTop (16);
+    // bounds are taller than the row: the knob is drawn inset, and the extra
+    // space is empty.
+    auto volumeRow = r.removeFromTop (22);
     pan.setBounds (volumeRow.removeFromRight (panSize).withSizeKeepingCentre (panSize, panSize));
-    volumeRow.removeFromRight (4);
+    volumeRow.removeFromRight (6);
     volume.setBounds (volumeRow);
 }
 

@@ -24,11 +24,17 @@ class AudioEngine;
     note to move it, drag its right end to resize, Shift-click or Shift-drag
     to select several, drag a stem in the velocity lane to change velocity,
     click a key to hear it. Right-click for more.
-    Keys: Delete, Ctrl/Cmd+A, Escape, Q (quantize), arrows (move/transpose).
+    Keys: Delete, Ctrl/Cmd+A, Escape (deselect, or cancel a drag), Q
+    (quantize), arrows (move/transpose).
 
-    Every change goes through TrackController as one undo step. Notes are
-    identified by index (see NoteInfo), so after each edit the roll re-reads
-    the region and updates its selection from the returned index map.
+    The code is in three files: PianoRoll.cpp (the region, view and editing),
+    PianoRollGestures.cpp (mouse, wheel and keys) and PianoRollPainting.cpp,
+    with shared sizes in PianoRollLayout.h.
+
+    Every change goes through TrackController as one undo step, and the roll
+    re-reads the region after each edit. The selection is kept by note ID
+    (see NoteInfo), so it follows notes that move. Mouse hit-testing works
+    with indices into the region's current note list.
 */
 class PianoRoll  : public juce::Component,
                    private juce::ScrollBar::Listener
@@ -60,7 +66,7 @@ private:
 
         Mode mode = Mode::none;
         juce::Point<int> start;
-        int anchor = -1;                       // index of the note that was clicked
+        int anchor = -1;                       // index (in `notes`) of the note that was clicked
         bool selectOnlyAnchorOnClick = false;
         std::vector<NoteInfo> notes;           // the notes as they'll look if the gesture ends now
         NoteInfo newNote;                      // draw mode: the note being drawn
@@ -82,7 +88,7 @@ private:
 
     Grid grid = Grid::sixteenth;
     double lastNoteLength = 0.25;   // new notes get the length of the last one drawn or resized
-    std::vector<int> selected;      // note indices, sorted
+    std::vector<NoteId> selected;   // note IDs, sorted
     Gesture gesture;
     int previewNote = -1;           // the note sounding while the mouse is held, or -1
 
@@ -104,6 +110,7 @@ private:
     double visibleBeats() const;
     double visibleRows() const;
     double regionLength() const;
+    double contentStartBeat() const;
     juce::Rectangle<float> noteBounds (const NoteInfo&) const;
 
     // Grid
@@ -128,9 +135,11 @@ private:
     bool isSelected (int index) const;
     void selectOnly (int index);
     void toggleSelected (int index);
+    void selectAll();
+    std::vector<int> selectedIndices() const;   // where the selected notes are in region->notes
 
     void rereadRegion();
-    void applyChanges (const std::vector<NoteChange>&, const juce::String& undoName);
+    void applyChanges (const std::vector<NoteInfo>&, const juce::String& undoName);
     void deleteSelected();
     void quantize();
     void nudgeSelected (double beats, int semitones);

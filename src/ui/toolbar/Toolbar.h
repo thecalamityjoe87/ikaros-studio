@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ui/widgets/IconButton.h"
-#include "ui/widgets/LevelMeter.h"
+#include "ui/widgets/MeterSlider.h"
 #include "ui/toolbar/TransportBar.h"
 
 namespace ikaros
@@ -12,8 +12,8 @@ class AudioEngine;
 //==============================================================================
 /**
     The 64px toolbar: library toggle, "+ New Track", Undo and Redo on the left, the
-    TransportBar in the centre, master meters and CPU / sample-rate / latency on
-    the right.
+    TransportBar in the centre, the master level and volume (one slider, its
+    track a meter) and CPU / sample-rate / latency on the right.
 
     Left-side buttons fire application commands, so they behave exactly like
     the matching menu items and keyboard shortcuts.
@@ -41,7 +41,7 @@ private:
     IconButton undoButton     { "Undo", Icon::undo };
     IconButton redoButton     { "Redo", Icon::redo };
     TransportBar transport;
-    LevelMeter masterMeter;
+    MeterSlider masterVolume;   // the master level and volume in one
 
     juce::String statsLine1, statsLine2;
     juce::Rectangle<int> masterArea, statsArea;

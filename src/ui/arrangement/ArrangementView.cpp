@@ -5,6 +5,10 @@
 #include "ui/arrangement/ArrangementRegionDrag.h"
 #include "ui/arrangement/ArrangementRuler.h"
 #include "app/CommandIDs.h"
+#include "engine/AudioPreview.h"
+#include "engine/PluginLibrary.h"
+#include "engine/SoundLibrary.h"
+#include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -69,7 +73,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     zoomSlider.setTitle ("Zoom");
     zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
     zoomSlider.setRange (0.0, 1.0);
-    zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), (float) getLaneWidth() * 0.5f); };
+    zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), getZoomAnchorX ((float) getLaneWidth() * 0.5f)); };
     addAndMakeVisible (zoomSlider);
 
     addAndMakeVisible (*overlay);
@@ -92,20 +96,47 @@ void ArrangementView::refresh()
     tracks = tc.getTracks();
 
     std::map<TrackId, std::vector<RegionInfo>> regions;
-    contentEndBeat = 0.0;
 
     for (auto& t : tracks)
-    {
-        auto& list = regions[t.id] = tc.getRegions (t.id);
-
-        for (auto& r : list)
-            contentEndBeat = juce::jmax (contentEndBeat, r.getEndBeat());
-    }
+        regions[t.id] = tc.regions().getRegions (t.id);
 
     geometry.beatsPerBar = engine.beatsPerBar();
     content->sync (tracks, regions);
+    contentEndBeat = content->getEndBeat();
     layoutContent();
     timelineChanged();
+}
+
+void ArrangementView::refreshTracks()
+{
+    tracks = engine.getTracks().getTracks();
+
+    if (! content->syncTracks (tracks))
+        refresh();
+}
+
+void ArrangementView::refreshRegions (const std::set<RegionId>& ids)
+{
+    for (auto id : ids)
+    {
+        auto info = engine.getTracks().regions().getRegion (id);
+
+        if (! info.has_value() || ! content->syncRegion (*info))
+        {
+            refresh();
+            return;
+        }
+    }
+
+    // A region may now end later (or earlier), which changes how far the
+    // timeline scrolls.
+    const auto end = content->getEndBeat();
+
+    if (end != contentEndBeat)
+    {
+        contentEndBeat = end;
+        timelineChanged();
+    }
 }
 
 void ArrangementView::layoutContent()
@@ -143,20 +174,45 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     const double anchorBeat = geometry.xToBeat (anchorX);
     geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat, pixelsPerBeat);
     geometry.scrollBeats = anchorBeat - anchorX / geometry.pixelsPerBeat;
+
+    // Like GarageBand, zooming in makes the tracks taller too, so regions
+    // and waveforms grow both ways. Square root: twice as wide for every
+    // four times the zoom. Zoomed out, tracks keep their normal height (the
+    // header's controls need it).
+    const int oldRowHeight = geometry.rowHeight;
+    const double growth = std::sqrt (geometry.pixelsPerBeat / startPixelsPerBeat);
+    geometry.rowHeight = juce::jlimit (size::trackRowHeight, maxRowHeight,
+                                       juce::roundToInt (size::trackRowHeight * growth));
+
+    if (geometry.rowHeight != oldRowHeight)
+    {
+        // Keep the same tracks in view as they grow or shrink.
+        const auto oldY = viewport.getViewPositionY();
+        layoutContent();
+        viewport.setViewPosition (viewport.getViewPositionX(), oldY * geometry.rowHeight / oldRowHeight);
+    }
+
     timelineChanged();
+}
+
+float ArrangementView::getZoomAnchorX (float fallbackX) const
+{
+    // Like GarageBand, every zoom (slider, keys, Ctrl + wheel) keeps the
+    // playhead where it is, so you stay looking at the part of the song
+    // you're working on. Only if it's off screen does the fallback (the
+    // middle, or the mouse) stay put instead.
+    const auto x = geometry.beatToX (engine.getTransportState().positionBeats);
+    return juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : fallbackX;
 }
 
 void ArrangementView::zoomIn()
 {
-    // Zoom around the playhead if it's on screen, or else the middle.
-    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
-    setZoom (geometry.pixelsPerBeat * 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+    setZoom (geometry.pixelsPerBeat * 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::zoomOut()
 {
-    auto x = geometry.beatToX (engine.getTransportState().positionBeats);
-    setZoom (geometry.pixelsPerBeat / 1.5, juce::isPositiveAndBelow (x, (float) getLaneWidth()) ? x : (float) getLaneWidth() * 0.5f);
+    setZoom (geometry.pixelsPerBeat / 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::scrollToBeat (double beat)
@@ -197,8 +253,9 @@ bool ArrangementView::handleWheel (const juce::MouseEvent& event, const juce::Mo
 
     if (e.mods.isCommandDown())
     {
-        // Ctrl/Cmd + wheel: zoom around the mouse. One wheel notch zooms ~1.4×.
-        const float anchorX = (float) (e.x - headerWidth);
+        // Ctrl/Cmd + wheel: zoom around the playhead (or the mouse, if the
+        // playhead is off screen). One wheel notch zooms ~1.4x.
+        const float anchorX = getZoomAnchorX ((float) (e.x - headerWidth));
         setZoom (geometry.pixelsPerBeat * std::pow (2.0, (double) wheel.deltaY * 2.5), anchorX);
         return true;
     }
@@ -231,9 +288,14 @@ void ArrangementView::setSnap (Snap newSnap)
         onSnapChanged();
 }
 
+double ArrangementView::getSnapBeats() const
+{
+    return snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+}
+
 double ArrangementView::snapBeat (double beat) const
 {
-    const double grid = snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+    const double grid = getSnapBeats();
     return grid > 0.0 ? std::round (beat / grid) * grid : beat;
 }
 
@@ -280,7 +342,7 @@ void ArrangementView::updateTransport()
     playhead->setX (x);
 
     if (state.recording)
-        content->setRecording (engine.getTracks().getArmedTrack(), state.recordStartBeats, state.positionBeats);
+        content->setRecording (engine.getTracks().inputs().getArmedTrack(), state.recordStartBeats, state.positionBeats);
     else
         content->setRecording (0, 0.0, 0.0);
 }
@@ -323,6 +385,7 @@ void ArrangementView::resized()
         geometry.beatsPerBar = engine.beatsPerBar();
         geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
                                                getLaneWidth() / (16.0 * geometry.beatsPerBar));
+        startPixelsPerBeat = geometry.pixelsPerBeat;
     }
 
     layoutContent();
@@ -354,12 +417,12 @@ int ArrangementView::rowOf (TrackId id) const
 int ArrangementView::rowAt (int y) const
 {
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
-    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / rowHeight);
+    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / geometry.rowHeight);
 }
 
 juce::Rectangle<float> ArrangementView::rowAreaInOverlay (int row) const
 {
-    return { 0.0f, (float) (row * rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) rowHeight };
+    return { 0.0f, (float) (row * geometry.rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) geometry.rowHeight };
 }
 
 void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDown (comp, e); }
@@ -403,7 +466,7 @@ void ArrangementView::showRegionMenu()
 
 void ArrangementView::startRenaming (RegionId id)
 {
-    auto region = engine.getTracks().getRegion (id);
+    auto region = engine.getTracks().regions().getRegion (id);
     const int row = region ? rowOf (region->trackId) : -1;
 
     if (row < 0)
@@ -436,9 +499,9 @@ void ArrangementView::startRenamingTrack (TrackId id)
 
 void ArrangementView::scrollRowIntoView (int row)
 {
-    const int rowY = row * rowHeight;
+    const int rowY = row * geometry.rowHeight;
 
-    if (rowY < viewport.getViewPositionY() || rowY + rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
+    if (rowY < viewport.getViewPositionY() || rowY + geometry.rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
         viewport.setViewPosition (0, rowY);
 }
 
@@ -514,23 +577,23 @@ void ArrangementView::showLaneMenu (TrackId track, double beat)
         return;
 
     const auto at = snapBeat (juce::jmax (0.0, beat));
-    const auto regions = tc.getRegions (track);
+    const auto regions = tc.regions().getRegions (track);
     juce::PopupMenu menu;
 
     if (info->kind == TrackKind::instrument)
     {
         menu.addItem (juce::PopupMenu::Item ("Add Chord Region Here").setAction ([this, track, at]
         {
-            if (auto rid = engine.getTracks().createChordRegion (track, at))
+            if (auto rid = engine.getTracks().regions().createChordRegion (track, at))
                 selection.selectRegion (track, rid);
         }));
     }
 
-    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.canPaste()).setAction ([this, track, at]
+    menu.addItem (juce::PopupMenu::Item ("Paste Here").setEnabled (tc.regions().canPaste()).setAction ([this, track, at]
     {
-        auto pasted = engine.getTracks().pasteRegions (track, at);
+        auto pasted = engine.getTracks().regions().pasteRegions (track, at);
 
-        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().getRegion (pasted.front()))
+        if (auto first = pasted.empty() ? std::nullopt : engine.getTracks().regions().getRegion (pasted.front()))
             selection.selectRegions (first->trackId, pasted);
     }));
 
@@ -538,7 +601,7 @@ void ArrangementView::showLaneMenu (TrackId track, double beat)
     {
         std::vector<RegionId> ids;
 
-        for (auto& r : engine.getTracks().getRegions (track))
+        for (auto& r : engine.getTracks().regions().getRegions (track))
             ids.push_back (r.id);
 
         selection.selectRegions (track, ids);
@@ -577,7 +640,7 @@ ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
 
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
 
-    if (y >= viewport.getY() && contentY < (int) tracks.size() * rowHeight)
+    if (y >= viewport.getY() && contentY < (int) tracks.size() * geometry.rowHeight)
     {
         target.row = rowAt (y);
 
@@ -592,7 +655,7 @@ ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
 bool ArrangementView::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (auto& f : files)
-        if (engine.getTracks().isSupportedAudioFile (juce::File (f)))
+        if (engine.getTracks().regions().isSupportedAudioFile (juce::File (f)))
             return true;
 
     return false;
@@ -622,7 +685,7 @@ void ArrangementView::fileDragMove (const juce::StringArray&, int x, int y)
     else
     {
         // Below the tracks: the drop zone.
-        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
                  (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
         text = "Add on a new audio track";
     }
@@ -635,19 +698,144 @@ void ArrangementView::fileDragExit (const juce::StringArray&)
     overlay->clear();
 }
 
+//==============================================================================
+namespace
+{
+    // The files in a text drag: lines that are file:// links or full paths.
+    juce::StringArray filesFromText (const juce::String& text)
+    {
+        juce::StringArray files;
+
+        for (auto line : juce::StringArray::fromLines (text))
+        {
+            line = line.trim();
+
+            if (line.startsWithIgnoreCase ("file://"))
+                line = juce::URL (line).getLocalFile().getFullPathName();
+
+            if (juce::File::isAbsolutePath (line) && juce::File (line).existsAsFile())
+                files.add (line);
+        }
+
+        return files;
+    }
+}
+
+bool ArrangementView::isInterestedInTextDrag (const juce::String& text)
+{
+    return isInterestedInFileDrag (filesFromText (text));
+}
+
+void ArrangementView::textDragEnter (const juce::String& text, int x, int y)  { fileDragEnter (filesFromText (text), x, y); }
+void ArrangementView::textDragMove (const juce::String& text, int x, int y)   { fileDragMove (filesFromText (text), x, y); }
+void ArrangementView::textDragExit (const juce::String& text)                 { fileDragExit (filesFromText (text)); }
+void ArrangementView::textDropped (const juce::String& text, int x, int y)    { filesDropped (filesFromText (text), x, y); }
+
+//==============================================================================
+// Loops and audio files dragged from the library: the same as dropping a
+// file from the file manager.
+bool ArrangementView::isInterestedInDragSource (const SourceDetails& details)
+{
+    return dragtypes::getLibraryFile (details.description).existsAsFile()
+        || dragtypes::getLibrarySound (details.description).isNotEmpty();
+}
+
+void ArrangementView::itemDragEnter (const SourceDetails& details)
+{
+    itemDragMove (details);
+}
+
+// A sound goes on the instrument track it's dropped on; anywhere else, it
+// makes a new instrument track. Returns that track's row, or -1 for a new one.
+int ArrangementView::findSoundDropRow (int y) const
+{
+    const int contentY = y - viewport.getY() + viewport.getViewPositionY();
+
+    if (y < viewport.getY() || contentY >= (int) tracks.size() * geometry.rowHeight)
+        return -1;
+
+    const int row = rowAt (y);
+    return tracks[(size_t) row].kind == TrackKind::instrument ? row : -1;
+}
+
+void ArrangementView::itemDragMove (const SourceDetails& details)
+{
+    const auto soundId = dragtypes::getLibrarySound (details.description);
+
+    if (soundId.isEmpty())
+    {
+        fileDragMove ({}, details.localPosition.x, details.localPosition.y);
+        return;
+    }
+
+    const int row = findSoundDropRow (details.localPosition.y);
+    juce::String name ("this sound");
+
+    if (auto sound = engine.getSounds().findSound (soundId))
+        name = sound->name;
+    else if (auto plugin = engine.getPlugins().findPlugin (soundId.fromFirstOccurrenceOf ("plugin:", false, false)))
+        name = plugin->name;
+
+    if (row >= 0)
+    {
+        overlay->setDropTarget (rowAreaInOverlay (row).reduced (2.0f), -1.0f, "Use " + name + " on " + tracks[(size_t) row].name);
+    }
+    else
+    {
+        // The drop zone below the tracks.
+        juce::Rectangle<float> area { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+                                      (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
+        overlay->setDropTarget (area, -1.0f, "New instrument track with " + name);
+    }
+}
+
+void ArrangementView::itemDragExit (const SourceDetails&)
+{
+    overlay->clear();
+}
+
+void ArrangementView::itemDropped (const SourceDetails& details)
+{
+    overlay->clear();
+    const auto soundId = dragtypes::getLibrarySound (details.description);
+
+    if (soundId.isNotEmpty())
+    {
+        auto& tc = engine.getTracks();
+        const int row = findSoundDropRow (details.localPosition.y);
+
+        if (row >= 0)
+        {
+            tc.effects().setSound (tracks[(size_t) row].id, soundId);
+            selection.selectTrack (tracks[(size_t) row].id);
+        }
+        else if (auto id = tc.addInstrumentTrack())
+        {
+            tc.effects().setSound (id, soundId, false);   // part of the "Add Track" undo step
+            selection.selectTrack (id);
+        }
+
+        return;
+    }
+
+    engine.getPreview().stop();
+    filesDropped ({ dragtypes::getLibraryFile (details.description).getFullPathName() },
+                  details.localPosition.x, details.localPosition.y);
+}
+
 void ArrangementView::filesDropped (const juce::StringArray& files, int x, int y)
 {
     overlay->clear();
     auto target = findDropTarget (x, y);
     auto& tc = engine.getTracks();
-    auto ids = tc.importAudioFiles (target.track, files, target.beat);
+    auto ids = tc.regions().importAudioFiles (target.track, files, target.beat);
 
     if (ids.empty())
         return;
 
     refresh();
 
-    if (auto first = tc.getRegion (ids.front()))
+    if (auto first = tc.regions().getRegion (ids.front()))
         selection.selectRegions (first->trackId, ids);
 }
 

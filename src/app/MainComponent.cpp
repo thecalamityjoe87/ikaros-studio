@@ -1,6 +1,11 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
+#include "ui/dialogs/AboutDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/library/MoreSoundsDialog.h"
+#include "ui/dialogs/SavingOverlay.h"
+#include "ui/pluginwindow/PluginWindow.h"
+#include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Tokens.h"
 
@@ -31,13 +36,15 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     arrangement.onOpenRegionInEditor = [this] (RegionId)
     {
         setBottomPanelVisible (true);
+        bottomPanel.setMasterMode (false);   // the Editor works on a track
         bottomPanel.setTab (BottomPanel::Tab::editor);
     };
-    arrangement.onAddTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
+    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
+    library.onMoreSoundsRequested = [this] { MoreSoundsDialog::show (*this, engine); };
     setUpResizers();
 
     // Commands: register everything this component can do, make it the
@@ -50,19 +57,54 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     juce::MenuBarModel::setMacMainMenu (&menuModel);
    #endif
 
-    engine.addChangeListener (this);
+    engine.addListener (this);
     selection.addChangeListener (this);
+
+    // Third-party plug-in windows: the engine supplies the plug-in's editor,
+    // PluginWindow the frame around it.
+    engine.setPluginWindowFactory (&PluginWindow::create);
+
+    // Look for new plug-ins in the background once the window is up. Ones
+    // scanned before load straight from the saved list.
+    juce::Timer::callAfterDelay (1500, [safeThis = SafePointer<MainComponent> (this)]
+    {
+        if (safeThis != nullptr)
+            safeThis->engine.getPlugins().scan();
+    });
 
     refreshAll();
     startTimerHz (30);   // playhead, meters, CPU
     setSize (1440, 900);
+
+    // Like GarageBand, start with the session chooser: recent sessions if
+    // there are any, otherwise the templates. On first run, offer the
+    // starter sounds first. (Async: the window isn't on screen yet.)
+    juce::MessageManager::callAsync ([safeThis = SafePointer<MainComponent> (this)]
+    {
+        if (safeThis == nullptr)
+            return;
+
+        auto showChooser = [safeThis]
+        {
+            if (safeThis != nullptr)
+                safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                                                          : SessionChooser::Page::recent);
+        };
+
+        if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+            MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+        else
+            showChooser();
+    });
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
-    engine.removeChangeListener (this);
+    engine.removeListener (this);
     selection.removeChangeListener (this);
+    engine.setPluginWindowFactory (nullptr);
+    engine.getPlugins().cancelScan();
 
    #if JUCE_MAC
     juce::MenuBarModel::setMacMainMenu (nullptr);
@@ -77,6 +119,13 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::resized()
 {
+    // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
+    for (auto* child : getChildren())
+        if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
+             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
+             || dynamic_cast<AboutDialog*> (child) != nullptr)
+            child->setBounds (getLocalBounds());
+
     auto r = getLocalBounds();
     menuBar.setBounds (r.removeFromTop (size::menuBarHeight));
     toolbar.setBounds (r.removeFromTop (size::toolbarHeight));
@@ -183,18 +232,68 @@ void MainComponent::refreshAll()
     arrangement.refresh();
     bottomPanel.refresh();
     library.refresh();
-    menuBar.setSessionStatus (engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges());
+    updateSessionStatus();
 
     // Tells menus and shortcuts to re-query getCommandInfo (e.g. Undo enabled).
     commands.commandStatusChanged();
 }
 
-void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
-{
-    if (source == &engine)
-        selection.validate();   // the selected track/region may have been undone or the session replaced
 
-    refreshAll();
+void MainComponent::sessionChanged (const ModelChanges& changes)
+{
+    // The selected track or region may have been deleted, undone, or gone
+    // with the old session. (Notes and knobs can't remove either.)
+    if (changes.session || changes.tracks || changes.regions)
+        selection.validate();
+
+    if (changes.session)
+    {
+        refreshAll();
+        return;
+    }
+
+    // Tempo, time signature and key move every region on the beat grid.
+    if (changes.regions || changes.transport)
+    {
+        arrangement.refresh();
+    }
+    else
+    {
+        if (changes.tracks || changes.mixer)
+            arrangement.refreshTracks();
+
+        if (! changes.changedRegions.empty())
+            arrangement.refreshRegions (changes.changedRegions);
+    }
+
+    bottomPanel.refresh (changes);
+
+    if (changes.tracks)
+        library.refresh();   // the selected track's sound is highlighted there
+
+    updateSessionStatus();
+    commands.commandStatusChanged();
+}
+
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // The selection changed: the regions themselves didn't, so only the
+    // highlights, the bottom panel and the library's highlighted sound move.
+    arrangement.refreshTracks();
+    bottomPanel.refresh();
+    library.refresh();
+    commands.commandStatusChanged();
+}
+
+void MainComponent::updateSessionStatus()
+{
+    const SessionStatus status { engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges() };
+
+    if (status != shownSessionStatus)
+    {
+        shownSessionStatus = status;
+        menuBar.setSessionStatus (status.name, status.untitled, status.unsaved);
+    }
 }
 
 juce::Component::WindowControlKind MainComponent::getWindowControlAt (juce::Point<float> p) const
@@ -212,14 +311,15 @@ void MainComponent::timerCallback()
     toolbar.update (libraryVisible);
     arrangement.updateTransport();
     bottomPanel.update();
-    menuBar.setSessionStatus (engine.getSessionName(), engine.isUntitled(), engine.hasUnsavedChanges());
+    library.update();
+    updateSessionStatus();   // "unsaved" isn't broadcast, so check it here (cheap: it only tells the menu bar on a change)
 }
 
 //==============================================================================
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
-                                   CommandIDs::saveSessionAs, CommandIDs::audioSettings,
+                                   CommandIDs::saveSessionAs, CommandIDs::closeSession, CommandIDs::audioSettings,
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
@@ -232,9 +332,9 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::toggleMetronome, CommandIDs::toggleCountIn,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
-                                   CommandIDs::showSoundTab, CommandIDs::showEditorTab,
+                                   CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleDetails,
-                                   CommandIDs::toggleFullScreen, CommandIDs::about,
+                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
@@ -252,7 +352,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
     switch (id)
     {
         case CommandIDs::newSession:
-            info.setInfo ("New Session", "Start a new, empty session", "File", 0);
+            info.setInfo ("New Session...", "Start a new session from a template", "File", 0);
             info.addDefaultKeypress ('n', cmd);
             break;
         case CommandIDs::openSession:
@@ -266,6 +366,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case CommandIDs::saveSessionAs:
             info.setInfo ("Save As...", "Save the session under a new name", "File", 0);
             info.addDefaultKeypress ('s', cmd | shift);
+            break;
+        case CommandIDs::closeSession:
+            info.setInfo ("Close Session", "Close the session and choose another", "File", 0);
+            info.addDefaultKeypress ('w', cmd);
             break;
         case CommandIDs::audioSettings:
             info.setInfo ("Audio & MIDI Settings...", "Choose audio and MIDI devices", "File", 0);
@@ -370,7 +474,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::pasteRegions:
             info.setInfo ("Paste at Playhead", "Paste the copied regions on the selected track at the playhead", "Region", 0);
-            info.setActive (hasTrack && engine.getTracks().canPaste());
+            info.setActive (hasTrack && engine.getTracks().regions().canPaste());
             info.addDefaultKeypress ('v', cmd);
             break;
         case CommandIDs::renameRegion:
@@ -448,18 +552,23 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::showSoundTab:
             info.setInfo ("Sound", "Show the Sound controls", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::sound);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::sound);
             info.addDefaultKeypress ('1', cmd);
+            break;
+        case CommandIDs::showEqTab:
+            info.setInfo ("EQ", "Show the EQ", "View", 0);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::eq);
+            info.addDefaultKeypress ('3', cmd);
             break;
         case CommandIDs::showEditorTab:
             info.setInfo ("Editor", "Show the piano roll", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::editor);
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
         case CommandIDs::showMixerTab:
-            info.setInfo ("Mixer", "Show the mixer", "View", 0);
-            info.setTicked (bottomPanel.getTab() == BottomPanel::Tab::mixer);
-            info.addDefaultKeypress ('3', cmd);
+            info.setInfo ("Mixer", "Show every track's fader at once", "View", 0);
+            info.setTicked (bottomPanel.isMixerShown());
+            info.addDefaultKeypress ('4', cmd);
             break;
         case CommandIDs::toggleDetails:
             info.setInfo ("Show Details", "Show advanced track details", "View", 0);
@@ -474,6 +583,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress (juce::KeyPress::F11Key, 0);
            #endif
             break;
+        case CommandIDs::moreSounds:
+            info.setInfo ("More Sounds...", "Download more instruments and loops", "Window", 0);
+            break;
+
         case CommandIDs::about:
             info.setInfo ("About Ikaros Studio", "About this app", "Help", 0);
             break;
@@ -490,6 +603,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
 
 bool MainComponent::perform (const InvocationInfo& info)
 {
+    // Nothing happens while a save is being written (see SavingOverlay); a
+    // change then wouldn't be in the file, yet would look saved.
+    if (saving)
+        return true;
+
     auto& tracks = engine.getTracks();
     const auto trackId = selection.getTrack();
 
@@ -499,6 +617,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::openSession:     openSession(); break;
         case CommandIDs::saveSession:     saveSession(); break;
         case CommandIDs::saveSessionAs:   saveSessionAs(); break;
+        case CommandIDs::closeSession:    closeSession(); break;
         case CommandIDs::audioSettings:   showAudioSettings(); break;
 
         case CommandIDs::undo:            engine.undo(); break;
@@ -506,7 +625,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::deleteSelection:
             if (selection.hasRegions())
-                tracks.deleteRegions (selection.getRegions());
+                tracks.regions().deleteRegions (selection.getRegions());
             else if (trackId != 0)
                 tracks.deleteTrack (trackId);
             break;
@@ -523,7 +642,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::armTrack:
             if (auto t = tracks.getTrack (trackId))
-                tracks.setArmed (trackId, ! t->armed);
+                tracks.inputs().setArmed (trackId, ! t->armed);
             break;
 
         case CommandIDs::deleteTrack:     tracks.deleteTrack (trackId); break;
@@ -549,13 +668,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::moveTrackDown:   tracks.moveTrack (trackId, 1); break;
 
         case CommandIDs::newRegion:
-            if (auto rid = tracks.createChordRegion (trackId, engine.getTransportState().positionBeats))
+            if (auto rid = tracks.regions().createChordRegion (trackId, engine.getTransportState().positionBeats))
                 selection.selectRegion (trackId, rid);
             break;
 
         case CommandIDs::splitRegion:
         {
-            auto rightHalves = tracks.splitRegions (getRegionsToSplit(), engine.getTransportState().positionBeats);
+            auto rightHalves = tracks.regions().splitRegions (getRegionsToSplit(), engine.getTransportState().positionBeats);
 
             if (! rightHalves.empty())
                 selection.selectRegions (trackId, rightHalves);
@@ -565,7 +684,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::duplicateRegion:
         {
             // Selecting the copies means pressing it again keeps adding copies.
-            auto copies = tracks.duplicateRegions (selection.getRegions());
+            auto copies = tracks.regions().duplicateRegions (selection.getRegions());
 
             if (! copies.empty())
                 selection.selectRegions (trackId, copies);
@@ -573,23 +692,23 @@ bool MainComponent::perform (const InvocationInfo& info)
         }
 
         case CommandIDs::cutRegions:
-            tracks.copyRegions (selection.getRegions());
-            tracks.deleteRegions (selection.getRegions());
+            tracks.regions().copyRegions (selection.getRegions());
+            tracks.regions().deleteRegions (selection.getRegions());
             break;
 
-        case CommandIDs::copyRegions:     tracks.copyRegions (selection.getRegions()); break;
+        case CommandIDs::copyRegions:     tracks.regions().copyRegions (selection.getRegions()); break;
 
         case CommandIDs::pasteRegions:
         {
-            auto pasted = tracks.pasteRegions (trackId, engine.getTransportState().positionBeats);
+            auto pasted = tracks.regions().pasteRegions (trackId, engine.getTransportState().positionBeats);
 
-            if (auto first = pasted.empty() ? std::nullopt : tracks.getRegion (pasted.front()))
+            if (auto first = pasted.empty() ? std::nullopt : tracks.regions().getRegion (pasted.front()))
                 selection.selectRegions (first->trackId, pasted);
             break;
         }
 
         case CommandIDs::renameRegion:    arrangement.startRenaming (selection.getRegion()); break;
-        case CommandIDs::deleteRegion:    tracks.deleteRegions (selection.getRegions()); break;
+        case CommandIDs::deleteRegion:    tracks.regions().deleteRegions (selection.getRegions()); break;
 
         case CommandIDs::togglePlay:      engine.togglePlay(); break;
         case CommandIDs::toggleRecord:    engine.toggleRecord(); break;
@@ -609,8 +728,9 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         // Picking a tab (or details) also opens the bottom panel if it's hidden.
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
+        case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
-        case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::mixer); break;
+        case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
         case CommandIDs::toggleDetails:
             setBottomPanelVisible (true);
@@ -622,6 +742,7 @@ bool MainComponent::perform (const InvocationInfo& info)
                 window->setFullScreen (! window->isFullScreen());
             break;
 
+        case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
         case CommandIDs::about:           showAbout(); break;
         case juce::StandardApplicationCommandIDs::quit: requestQuit(); break;
 
@@ -641,7 +762,7 @@ std::vector<RegionId> MainComponent::getRegionsToSplit() const
 
     std::vector<RegionId> ids;
 
-    for (auto& r : engine.getTracks().getRegions (selection.getTrack()))
+    for (auto& r : engine.getTracks().regions().getRegions (selection.getTrack()))
         ids.push_back (r.id);
 
     return ids;
@@ -652,7 +773,7 @@ bool MainComponent::canSplitAtPlayhead() const
     const auto beat = engine.getTransportState().positionBeats;
 
     for (auto id : getRegionsToSplit())
-        if (auto r = engine.getTracks().getRegion (id))
+        if (auto r = engine.getTracks().regions().getRegion (id))
             if (beat > r->startBeat && beat < r->getEndBeat())
                 return true;
 
@@ -708,24 +829,111 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
 
 void MainComponent::newSession()
 {
-    confirmDiscardChanges ([this] { engine.newSession(); });
+    showSessionChooser (SessionChooser::Page::newSession);
 }
 
 void MainComponent::openSession()
 {
+    showSessionChooser (SessionChooser::Page::recent);
+}
+
+// Like closing a GarageBand project: after asking about unsaved changes,
+// the session is replaced by an empty one and the chooser comes up.
+void MainComponent::closeSession()
+{
     confirmDiscardChanges ([this]
     {
+        engine.newSession();
+        showSessionChooser (engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                               : SessionChooser::Page::recent);
+    });
+}
+
+void MainComponent::showSessionChooser (SessionChooser::Page page)
+{
+    // The chooser only reports the choice; unsaved changes are asked about
+    // after it, so cancelling the chooser never loses anything.
+    SessionChooser::Callbacks callbacks;
+
+    callbacks.onNew = [this] (const NewSessionSettings& settings)
+    {
+        confirmDiscardChanges ([this, settings] { engine.newSession (settings); });
+    };
+
+    callbacks.onOpen = [this] (const juce::File& file)
+    {
+        confirmDiscardChanges ([this, file] { openSessionFile (file); });
+    };
+
+    callbacks.onOpenOther = [this] { openOtherSession(); };
+
+    SessionChooser::show (*this, engine, page, std::move (callbacks));
+}
+
+void MainComponent::openOtherSession()
+{
+    confirmDiscardChanges ([this]
+    {
+        // Bundles, and session folders from earlier versions.
         fileChooser = std::make_unique<juce::FileChooser> ("Open Session", getDefaultSessionFolder(),
-                                                           juce::String ("*") + AudioEngine::sessionFileExtension);
+                                                           juce::String ("*") + AudioEngine::sessionFileExtension
+                                                             + ";*" + AudioEngine::legacySessionFileExtension);
 
         fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                   [this] (const juce::FileChooser& fc)
         {
-            auto file = fc.getResult();
-
-            if (file != juce::File() && ! engine.openSession (file))
-                showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read.");
+            if (auto file = fc.getResult(); file != juce::File())
+                openSessionFile (file);
         });
+    });
+}
+
+void MainComponent::openSessionFile (const juce::File& file)
+{
+    if (! engine.openSession (file))
+        showError ("Couldn't open session", "\"" + file.getFileName() + "\" isn't a session Ikaros Studio can read, "
+                                            "or it's damaged.");
+}
+
+void MainComponent::openFileFromSystem (const juce::File& file)
+{
+    // Double-clicked in the file manager (or passed on the command line):
+    // it replaces the session chooser, after asking about unsaved changes.
+    if (saving || ! file.existsAsFile())
+        return;
+
+    SessionChooser::dismiss (*this);
+    confirmDiscardChanges ([this, file] { openSessionFile (file); });
+}
+
+void MainComponent::save (const juce::File& bundle, std::function<void (bool)> afterSave)
+{
+    // The picture for the session chooser goes into the session first.
+    writeSessionPreview();
+    auto job = engine.beginSave (bundle);
+
+    if (job == nullptr)
+    {
+        showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + bundle.getFullPathName()
+                                            + "\". Check that the folder exists and that you can write to it.");
+        if (afterSave)
+            afterSave (false);
+
+        return;
+    }
+
+    // Packing the audio into the file runs in the background (see SavingOverlay).
+    saving = true;
+
+    SavingOverlay::run (*this, engine, std::move (job), [this, bundle, afterSave] (bool ok)
+    {
+        saving = false;
+
+        if (! ok)
+            showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + bundle.getFullPathName()
+                                                + "\". Check that there's enough space on the disk.");
+        if (afterSave)
+            afterSave (ok);
     });
 }
 
@@ -737,46 +945,101 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
         return;
     }
 
-    const bool ok = engine.saveSession();
-
-    if (! ok)
-        showError ("Couldn't save session", "Check that the folder still exists and that you can write to it.");
-
-    if (afterSave)
-        afterSave (ok);
+    save (engine.getSessionFile(), std::move (afterSave));
 }
 
 void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
 {
-    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile ("My Session")
+    // A session is one file ("My Song.iksession").
+    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
+                                                                                    ? juce::String ("My Session")
+                                                                                    : engine.getSessionName())
                                        : engine.getSessionFile();
 
     fileChooser = std::make_unique<juce::FileChooser> ("Save Session As", initial,
                                                        juce::String ("*") + AudioEngine::sessionFileExtension);
 
-    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode
-                                | juce::FileBrowserComponent::canSelectFiles
-                                | juce::FileBrowserComponent::warnAboutOverwriting,
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
                               [this, afterSave] (const juce::FileChooser& fc)
     {
-        auto file = fc.getResult();
-        bool ok = false;
+        auto chosen = fc.getResult();
 
-        if (file != juce::File())
+        if (chosen == juce::File())
         {
-            ok = engine.saveSessionAs (file);
+            if (afterSave)
+                afterSave (false);
 
-            if (! ok)
-                showError ("Couldn't save session", "Ikaros Studio couldn't write \"" + file.getFullPathName() + "\".");
+            return;
         }
 
-        if (afterSave)
-            afterSave (ok);
+        // The dialog may hand back the name as typed, without the extension.
+        const auto target = AudioEngine::getSessionFileFor (chosen);
+
+        auto save = [this, target, afterSave]
+        {
+            this->save (target, afterSave);
+        };
+
+        if (! target.exists() || target == engine.getSessionFile())
+        {
+            save();
+            return;
+        }
+
+        auto options = juce::MessageBoxOptions()
+                           .withIconType (juce::MessageBoxIconType::WarningIcon)
+                           .withTitle ("Replace session?")
+                           .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
+                                           + "\" already exists in " + target.getParentDirectory().getFullPathName()
+                                           + ". Replace it?")
+                           .withButton ("Replace")
+                           .withButton ("Cancel")
+                           .withAssociatedComponent (this);
+
+        juce::AlertWindow::showAsync (options, [save, afterSave] (int result)
+        {
+            if (result == 1)
+                save();
+            else if (afterSave)
+                afterSave (false);
+        });
     });
+}
+
+// A picture of the tracks for the session chooser, saved into the session.
+// It's taken from what's on screen, so it shows the session the way the user
+// left it.
+void MainComponent::writeSessionPreview()
+{
+    if (arrangement.getWidth() <= 0 || arrangement.getHeight() <= 0)
+        return;
+
+    // The left part (track names and the first bars), in the chooser tiles'
+    // 16:10 shape, reads better at tile size than the whole arrangement.
+    auto area = arrangement.getLocalBounds();
+    area = area.withWidth (juce::jmin (area.getWidth(), area.getHeight() * 16 / 10));
+    auto snapshot = arrangement.createComponentSnapshot (area, true, 1.0f);
+    const int width = juce::jmin (800, snapshot.getWidth());
+    auto image = snapshot.rescaled (width, snapshot.getHeight() * width / snapshot.getWidth(),
+                                    juce::Graphics::highResamplingQuality);
+
+    auto file = engine.getPreviewFile();
+    file.deleteFile();   // FileOutputStream appends to an existing file
+    juce::FileOutputStream out (file);
+    juce::PNGImageFormat png;
+
+    if (out.openedOk())
+        png.writeImageToStream (image, out);
+
+    // The chooser caches decoded previews by file; drop the old picture.
+    juce::ImageCache::releaseUnusedImages();
 }
 
 void MainComponent::requestQuit()
 {
+    if (saving)
+        return;   // the save finishes first (it only takes a moment)
+
     confirmDiscardChanges ([] { juce::JUCEApplication::getInstance()->quit(); });
 }
 
@@ -793,14 +1056,7 @@ void MainComponent::showAudioSettings()
 
 void MainComponent::showAbout()
 {
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                      .withIconType (juce::MessageBoxIconType::InfoIcon)
-                                      .withTitle ("Ikaros Studio")
-                                      .withMessage ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion()
-                                                    + "\n\nAn easy-first music studio.\nBuilt with JUCE and Tracktion Engine.")
-                                      .withButton ("OK")
-                                      .withAssociatedComponent (this),
-                                  nullptr);
+    AboutDialog::show (*this, engine);
 }
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)

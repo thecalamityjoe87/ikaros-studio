@@ -21,71 +21,63 @@ namespace
     constexpr double minNoteBeats = 1.0 / 32.0;
 }
 
-int NoteEditor::addNote (RegionId id, const NoteInfo& note)
+NoteId NoteEditor::addNote (RegionId id, const NoteInfo& note)
 {
     auto* edit = owner.getEdit();
     auto* clip = findMidiClip (edit, id);
 
     if (clip == nullptr)
-        return -1;
+        return 0;
 
     owner.beginUndoStep ("Add Note");
+    assignNoteIds (*clip);   // so the new note's ID can't clash with one handed out later
+
     auto& sequence = clip->getSequence();
     auto* added = sequence.addNote (juce::jlimit (0, 127, note.pitch),
                                     te::BeatPosition::fromBeats (note.startBeat - contentOffsetBeats (*clip)),
                                     te::BeatDuration::fromBeats (juce::jmax (minNoteBeats, note.lengthBeats)),
                                     juce::jlimit (1, 127, note.velocity), 0, &edit->getUndoManager());
 
-    return sequence.getNotes().indexOf (added);
+    if (added == nullptr)
+        return 0;
+
+    assignNoteIds (*clip);
+    return getNoteId (*added);
 }
 
-// Where each note in `before` (a copy of an earlier note list) is now.
-static NoteEditor::NoteIndexMap mapNotes (const juce::Array<te::MidiNote*>& before, te::MidiList& sequence)
-{
-    NoteEditor::NoteIndexMap map;
-    auto& after = sequence.getNotes();
-
-    for (auto* note : before)
-        map.push_back (after.indexOf (note));
-
-    return map;
-}
-
-NoteEditor::NoteIndexMap NoteEditor::changeNotes (RegionId id, const std::vector<NoteChange>& changes,
-                                                            const juce::String& undoName)
+void NoteEditor::changeNotes (RegionId id, const std::vector<NoteInfo>& changes, const juce::String& undoName)
 {
     auto* edit = owner.getEdit();
     auto* clip = findMidiClip (edit, id);
 
-    if (clip == nullptr)
-        return {};
+    if (clip == nullptr || changes.empty())
+        return;
 
-    // A copy of the note list as it is now: getNotes() is kept sorted by
-    // time, so changing a note can re-order it.
-    auto notes = clip->getSequence().getNotes();
-
-    if (changes.empty())
-        return mapNotes (notes, clip->getSequence());
-    const auto offset = contentOffsetBeats (*clip);
-    auto* um = &edit->getUndoManager();
-
-    owner.beginUndoStep (undoName);
+    // Find every note first: setting a note's start re-sorts the sequence.
+    std::vector<std::pair<te::MidiNote*, NoteInfo>> found;
 
     for (auto& change : changes)
-    {
-        if (auto* n = notes[change.index])
-        {
-            n->setStartAndLength (te::BeatPosition::fromBeats (change.note.startBeat - offset),
-                                  te::BeatDuration::fromBeats (juce::jmax (minNoteBeats, change.note.lengthBeats)), um);
-            n->setNoteNumber (juce::jlimit (0, 127, change.note.pitch), um);
-            n->setVelocity (juce::jlimit (1, 127, change.note.velocity), um);
-        }
-    }
+        if (auto* n = findNote (*clip, change.id))
+            found.push_back ({ n, change });
 
-    return mapNotes (notes, clip->getSequence());
+    if (found.empty())
+        return;
+
+    const auto offset = contentOffsetBeats (*clip);
+    auto* um = &edit->getUndoManager();
+    owner.beginUndoStep (undoName);
+
+    // Structured binding: unpacks each pair into the note and its new values.
+    for (auto& [n, note] : found)
+    {
+        n->setStartAndLength (te::BeatPosition::fromBeats (note.startBeat - offset),
+                              te::BeatDuration::fromBeats (juce::jmax (minNoteBeats, note.lengthBeats)), um);
+        n->setNoteNumber (juce::jlimit (0, 127, note.pitch), um);
+        n->setVelocity (juce::jlimit (1, 127, note.velocity), um);
+    }
 }
 
-void NoteEditor::deleteNotes (RegionId id, const std::vector<int>& indices)
+void NoteEditor::deleteNotes (RegionId id, const std::vector<NoteId>& ids)
 {
     auto* edit = owner.getEdit();
     auto* clip = findMidiClip (edit, id);
@@ -93,12 +85,10 @@ void NoteEditor::deleteNotes (RegionId id, const std::vector<int>& indices)
     if (clip == nullptr)
         return;
 
-    auto& sequence = clip->getSequence();
-    auto notes = sequence.getNotes();
     std::vector<te::MidiNote*> toRemove;
 
-    for (auto index : indices)
-        if (auto* n = notes[index])
+    for (auto noteId : ids)
+        if (auto* n = findNote (*clip, noteId))
             if (std::find (toRemove.begin(), toRemove.end(), n) == toRemove.end())
                 toRemove.push_back (n);
 
@@ -108,31 +98,35 @@ void NoteEditor::deleteNotes (RegionId id, const std::vector<int>& indices)
     owner.beginUndoStep (toRemove.size() == 1 ? "Delete Note" : "Delete Notes");
 
     for (auto* n : toRemove)
-        sequence.removeNote (*n, &edit->getUndoManager());
+        clip->getSequence().removeNote (*n, &edit->getUndoManager());
 }
 
-NoteEditor::NoteIndexMap NoteEditor::quantiseNotes (RegionId id, const std::vector<int>& indices, double gridBeats)
+void NoteEditor::quantiseNotes (RegionId id, const std::vector<NoteId>& ids, double gridBeats)
 {
     auto* clip = findMidiClip (owner.getEdit(), id);
 
     if (clip == nullptr || gridBeats <= 0.0)
-        return {};
+        return;
 
-    // The region's start, and its notes as the piano roll sees them (from the
-    // region start), read straight from the clip.
-    const double regionStart = clip->getStartBeat().inBeats();
+    assignNoteIds (*clip);
+
+    // Where the notes' beat 0 is on the timeline (the region's start, or for a
+    // looped region the start of its first loop), and how far the clip's
+    // own note positions are from that.
+    const double regionStart = clip->getStartBeat().inBeats() - loopOffsetBeats (*clip);
     const auto offset = contentOffsetBeats (*clip);
-    std::vector<NoteInfo> regionNotes;
+    std::vector<NoteInfo> changes;
 
     for (auto* n : clip->getSequence().getNotes())
-        regionNotes.push_back ({ n->getNoteNumber(), n->getStartBeat().inBeats() + offset,
-                                 n->getLengthBeats().inBeats(), n->getVelocity() });
-
-    std::vector<NoteChange> changes;
-
-    auto quantise = [&] (int index)
     {
-        auto note = regionNotes[(size_t) index];
+        const auto noteId = getNoteId (*n);
+
+        // An empty list means every note.
+        if (! ids.empty() && std::find (ids.begin(), ids.end(), noteId) == ids.end())
+            continue;
+
+        NoteInfo note { n->getNoteNumber(), n->getStartBeat().inBeats() + offset,
+                        n->getLengthBeats().inBeats(), n->getVelocity(), noteId };
 
         // Snap on the song's timeline, so notes line up with the bars even
         // when the region doesn't start on a grid line.
@@ -145,24 +139,11 @@ NoteEditor::NoteIndexMap NoteEditor::quantiseNotes (RegionId id, const std::vect
         if (std::abs (snapped - absolute) > 1.0e-6)
         {
             note.startBeat = snapped - regionStart;
-            changes.push_back ({ index, note });
+            changes.push_back (note);
         }
-    };
-
-    if (indices.empty())
-    {
-        for (int i = 0; i < (int) regionNotes.size(); ++i)
-            quantise (i);
-    }
-    else
-    {
-        for (auto i : indices)
-            if (juce::isPositiveAndBelow (i, (int) regionNotes.size()))
-                quantise (i);
     }
 
-    // Even with nothing to change, changeNotes returns the (unchanged) map.
-    return changeNotes (id, changes, "Quantize");
+    changeNotes (id, changes, "Quantize");
 }
 
 } // namespace ikaros

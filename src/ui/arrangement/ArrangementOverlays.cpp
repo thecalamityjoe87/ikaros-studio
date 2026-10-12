@@ -10,15 +10,13 @@ using namespace tokens;
 
 //==============================================================================
 // DropZone
-ArrangementView::DropZone::DropZone() : juce::Button ("Add a track")
+ArrangementView::DropZone::DropZone()
 {
-    setTitle ("Add a track");
-    setMouseClickGrabsKeyboardFocus (false);
-    setTooltip ("Click to add a new track, or drop audio files here");
-    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setInterceptsMouseClicks (false, false);
+    setAccessible (false);   // nothing to do with it except drop things on it
 }
 
-void ArrangementView::DropZone::paintButton (juce::Graphics& g, bool over, bool)
+void ArrangementView::DropZone::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (1.0f);
 
@@ -27,28 +25,12 @@ void ArrangementView::DropZone::paintButton (juce::Graphics& g, bool over, bool)
     const float dashes[] = { 5.0f, 4.0f };
     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
 
-    if (over)
-    {
-        g.setColour (colour::raised.withAlpha (0.4f));
-        g.fillPath (outline);
-    }
-
-    g.setColour (over ? colour::textSecondary : colour::borderStrong);
+    g.setColour (colour::borderStrong);
     g.fillPath (dashed);
 
-    auto text = juce::String ("Drop a sound, loop or audio file here");
-    auto font = fonts::ui (14.0f);
-    auto textW = juce::GlyphArrangement::getStringWidth (font, text);
-    auto group = r.withSizeKeepingCentre (textW + 26.0f, 20.0f);
-
-    icons::draw (g, Icon::plus, group.removeFromLeft (18.0f), colour::textSecondary, 18.0f, 2.0f);
-    group.removeFromLeft (8.0f);
     g.setColour (colour::textSecondary);
-    g.setFont (font);
-    g.drawText (text, group, juce::Justification::centredLeft);
-
-    if (hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
+    g.setFont (fonts::ui (14.0f));
+    g.drawText ("Drop a sound, loop or audio file here", r, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -188,10 +170,14 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
         g.fillRoundedRectangle (dropArea, 10.0f);
         g.setColour (colour::accent);
         g.drawRoundedRectangle (dropArea.reduced (1.0f), 10.0f, 1.5f);
-        g.fillRect (dropMarkerX - 1.0f, dropArea.getY(), 2.0f, dropArea.getHeight());
+        // Where a file will start. (Sounds have no position: markerX < 0.)
+        const bool hasMarker = dropMarkerX >= 0.0f;
+
+        if (hasMarker)
+            g.fillRect (dropMarkerX - 1.0f, dropArea.getY(), 2.0f, dropArea.getHeight());
 
         g.setFont (fonts::uiBold (13.0f));
-        g.drawText (dropText, dropArea.withLeft (dropMarkerX + 8.0f).reduced (0.0f, 6.0f),
+        g.drawText (dropText, dropArea.withLeft (hasMarker ? dropMarkerX + 8.0f : dropArea.getX() + 14.0f).reduced (0.0f, 6.0f),
                     juce::Justification::topLeft, true);
     }
 }

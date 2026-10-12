@@ -8,6 +8,7 @@
 // without multiple-definition link errors.
 
 #include "engine/EngineTypes.h"
+#include "engine/SoundShaper.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 
@@ -25,8 +26,40 @@ inline const juce::Identifier kindProp      ("ikarosKind");      // "audio" for 
 inline const juce::Identifier inputProp     ("ikarosInput");     // audio input device ID
 inline const juce::Identifier monitorProp   ("ikarosMonitor");   // hear the input live
 inline const juce::Identifier iconProp      ("ikarosIcon");      // the track icon the user chose (empty = automatic)
+inline const juce::Identifier soundIdProp   ("ikarosSoundId");   // the library sound (SoundInfo::id)
+inline const juce::Identifier soundIconProp ("ikarosSoundIcon"); // the icon that sound suggests (SoundInfo::icon), or empty
+inline const juce::Identifier autoNameProp  ("ikarosAutoName");  // the name the app gave the track (so we know if the user renamed it)
+inline const juce::Identifier packNameProp  ("ikarosPackName");  // the name of the sound pack the sound comes from (for when it isn't installed)
+inline const juce::Identifier busProp       ("ikarosBus");       // on the hidden tracks that hold the shared effect buses: the bus number
+
+// On a plugin's state: this plugin is the track's instrument. Tracktion only
+// knows a third-party plugin is an instrument once it has loaded, so a
+// missing one would otherwise look like an effect.
+inline const juce::Identifier instrumentProp ("ikarosInstrument");
 
 inline bool isAudioTrack (const te::AudioTrack& t)   { return t.state.getProperty (kindProp).toString() == "audio"; }
+
+// The shared Reverb and Delay buses each live on a track of their own,
+// hidden from the user (see SendBuses).
+inline bool isBusTrack (const te::Track& t)          { return t.state.hasProperty (busProp); }
+
+inline bool isInstrumentPlugin (te::Plugin& p)       { return p.isSynth() || (bool) p.state.getProperty (instrumentProp, false); }
+
+// The hidden plugins behind a sampled instrument's Sound tab knobs (see
+// SoundShaper.h). Like the EQ, they aren't among the user's effects.
+inline bool isSoundShapingPlugin (te::Plugin& p)
+{
+    return dynamic_cast<SoundShaperPlugin*> (&p) != nullptr || dynamic_cast<TransposePlugin*> (&p) != nullptr;
+}
+
+// The EQ tab's equaliser (see EqController). It's a plugin like any other,
+// but not one of the user's effects, so the effects list leaves it out.
+inline const juce::Identifier eqProp ("ikarosEq");
+inline bool isEqPlugin (const te::Plugin& p)         { return (bool) p.state.getProperty (eqProp, false); }
+
+// "plugin:<id>" names a third-party plugin (PluginInfo::id) wherever a
+// plugin type is expected; anything else is one of Tracktion's built-in types.
+inline const juce::String thirdPartyPrefix ("plugin:");
 
 // Track colours from the design tokens: blue, orange, green, purple, yellow.
 // They live here (not in the UI tokens) because a track's colour is part of
@@ -42,12 +75,62 @@ inline te::FourOscPlugin* findSynth (te::AudioTrack& t)
     return t.pluginList.findFirstPluginOfType<te::FourOscPlugin>();
 }
 
+// The tracks the user sees, in order: every audio track except the hidden bus tracks.
+inline juce::Array<te::AudioTrack*> getUserTracks (te::Edit& edit)
+{
+    auto tracks = te::getAudioTracks (edit);
+    tracks.removeIf ([] (te::AudioTrack* t) { return isBusTrack (*t); });
+    return tracks;
+}
+
+// A track the user can see, by ID (nullptr for the hidden bus tracks).
 inline te::AudioTrack* findTrack (te::Edit* edit, TrackId id)
 {
     if (edit == nullptr || id == 0)
         return nullptr;
 
-    return asAudioTrack (te::findTrackForID (*edit, te::EditItemID::fromRawID (id)));
+    auto* track = asAudioTrack (te::findTrackForID (*edit, te::EditItemID::fromRawID (id)));
+    return track != nullptr && ! isBusTrack (*track) ? track : nullptr;
+}
+
+// The plugins a track runs, or for masterTrackId the master channel's
+// (processed before the master volume).
+inline te::PluginList* findPluginList (te::Edit* edit, TrackId id)
+{
+    if (edit != nullptr && id == masterTrackId)
+        return &edit->getMasterPluginList();
+
+    if (auto* t = findTrack (edit, id))
+        return &t->pluginList;
+
+    return nullptr;
+}
+
+// Creates (but doesn't insert) a plugin: a built-in type such as "reverb",
+// or "plugin:<id>" for a third-party plugin from the scan. nullptr if it
+// can't be made (e.g. the plugin is no longer installed).
+inline te::Plugin::Ptr createPlugin (te::Edit& edit, const juce::String& type)
+{
+    if (type.startsWith (thirdPartyPrefix))
+    {
+        auto& known = edit.engine.getPluginManager().knownPluginList;
+
+        if (auto desc = known.getTypeForIdentifierString (type.substring (thirdPartyPrefix.length())))
+            return edit.getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, *desc);
+
+        return {};
+    }
+
+    return edit.getPluginCache().createNewPlugin (type, {});
+}
+
+// The type string createPlugin() takes to make another one of these.
+inline juce::String getPluginTypeString (te::Plugin& p)
+{
+    if (auto* external = dynamic_cast<te::ExternalPlugin*> (&p))
+        return thirdPartyPrefix + external->getIdentifierString();
+
+    return p.getPluginType();
 }
 
 inline te::Clip* findClip (te::Edit* edit, RegionId id)
@@ -73,11 +156,70 @@ inline double timeToBeat (te::Edit& edit, te::TimePosition time)
     return edit.tempoSequence.toBeats (time).inBeats();
 }
 
+// Notes get an ID of their own, stored on the note's ValueTree so it's saved
+// with the session and restored by undo. Tracktion's notes don't have one.
+inline const juce::Identifier noteIdProp ("ikarosNoteId");
+
+inline NoteId getNoteId (const te::MidiNote& note)
+{
+    return (NoteId) (juce::int64) note.state.getProperty (noteIdProp, 0);
+}
+
+// Gives every note in the clip that hasn't got an ID yet (recorded notes,
+// notes from sessions saved before IDs existed) the next free one. Not an
+// undo step: an ID is bookkeeping, not an edit. (If an undo later removes
+// the note and a redo brings it back, it's the same ValueTree, ID included.)
+inline void assignNoteIds (te::MidiClip& clip)
+{
+    NoteId highest = 0;
+    bool anyMissing = false;
+
+    for (auto* n : clip.getSequence().getNotes())
+    {
+        highest = std::max (highest, getNoteId (*n));
+        anyMissing = anyMissing || getNoteId (*n) == 0;
+    }
+
+    if (anyMissing)
+        for (auto* n : clip.getSequence().getNotes())
+            if (getNoteId (*n) == 0)
+                n->state.setProperty (noteIdProp, (juce::int64) ++highest, nullptr);
+}
+
+inline te::MidiNote* findNote (te::MidiClip& clip, NoteId id)
+{
+    for (auto* n : clip.getSequence().getNotes())
+        if (getNoteId (*n) == id)
+            return n;
+
+    return nullptr;
+}
+
+// Looped regions: how far into the repeating part the region starts, in
+// beats (0 up to, not including, one loop's length). Tracktion lets the
+// clip's offset run past one loop (a split or a left trim does that), so
+// this wraps it.
+inline double loopOffsetBeats (te::Clip& clip)
+{
+    if (! clip.isLooping())
+        return 0.0;
+
+    const double loopLength = clip.getLoopLengthBeats().inBeats();
+    const double offset = (clip.getStartBeat() - clip.getContentStartBeat()).inBeats();
+    return loopLength > 0.0 ? offset - std::floor (offset / loopLength) * loopLength : 0.0;
+}
+
 // Note positions in the UI are relative to the region start. Tracktion stores
 // them relative to the clip's *content* start, which is earlier once a
 // region has been trimmed from the left. This is the difference, in beats.
+//
+// A looped region's notes are the repeating part, so the UI sees them
+// relative to the loop's start instead (0 = the first beat that repeats).
 inline double contentOffsetBeats (te::Clip& clip)
 {
+    if (clip.isLooping())
+        return -clip.getLoopStartBeats().inBeats();
+
     return (clip.getContentStartBeat() - clip.getStartBeat()).inBeats();
 }
 

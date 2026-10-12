@@ -10,7 +10,7 @@ namespace ikaros
 //==============================================================================
 // Region gestures (RegionComponent forwards its mouse events to the
 // ArrangementView, which hands them on to this): click to select, drag to
-// move, drag an edge to trim.
+// move, drag an edge to trim, drag the top-right corner to loop.
 class ArrangementView::RegionDrag
 {
 public:
@@ -20,6 +20,11 @@ public:
     void regionMouseDrag (RegionComponent&, const juce::MouseEvent&);
     void regionMouseUp (RegionComponent&, const juce::MouseEvent&);
 
+    /** Escape: abandons a move, trim or loop drag in progress, putting every
+        region back as it was. Nothing reaches the session (drags only change
+        it on mouse-up). Returns false if there was nothing to cancel. */
+    bool cancel();
+
     /** True from a mouse-down on a region until the mouse-up (including a
         click that hasn't moved far enough to count as a drag yet). */
     bool isDragging() const noexcept    { return drag.mode != Drag::Mode::none; }
@@ -27,7 +32,7 @@ public:
 private:
     struct Drag
     {
-        enum class Mode { none, pending, move, trimStart, trimEnd };
+        enum class Mode { none, pending, move, trimStart, trimEnd, loop };
 
         Mode mode = Mode::none;
         RegionId anchor = 0;                 // the region that was clicked
@@ -37,7 +42,7 @@ private:
         std::vector<int> rows;               // each one's track row
         double beatDelta = 0.0;              // move: how far in time
         int rowDelta = 0;                    // move: how many tracks down
-        juce::Range<double> trim;            // trim: the anchor's new edges
+        juce::Range<double> trim;            // trim and loop: the anchor's new edges
     };
 
     ArrangementView& owner;
@@ -45,6 +50,7 @@ private:
 
     void updateMoveDrag (juce::Point<int>);
     void updateTrimDrag (int dx);
+    void updateLoopDrag (int dx);
 };
 
 } // namespace ikaros

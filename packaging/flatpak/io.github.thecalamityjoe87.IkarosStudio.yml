@@ -23,6 +23,7 @@ finish-args:
   - --device=all              # ALSA devices and USB MIDI keyboards
   - --filesystem=xdg-documents/Ikaros Studio:create
   - --filesystem=xdg-music
+  - --share=network           # downloading sound packs (More Sounds)
 
 modules:
   - name: ikaros-studio

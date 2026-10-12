@@ -1,5 +1,6 @@
 #include "ui/arrangement/ArrangementLane.h"
 #include "ui/arrangement/ArrangementLayout.h"
+#include "ui/arrangement/ArrangementRegionDrag.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 
@@ -25,14 +26,52 @@ void ArrangementView::Lane::focusGained (FocusChangeType cause)
     repaint();
 }
 
-void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<RegionInfo>& regionInfos, bool isSelected)
+void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
 {
+    // The lane's own drawing (the selected tint) only changes with the
+    // selection. (setAlpha repaints by itself, and only when it changes.)
+    if (isSelected != selected)
+        repaint();
+
     colour = t.colour;
     selected = isSelected;
     isAudio = t.kind == TrackKind::audio;
     setAlpha (t.silencedBySolo || t.muted ? 0.4f : 1.0f);
     setTooltip (isAudio ? "Drop an audio file here, or press R to record"
                         : "Double-click to add a 4-bar chord region");
+}
+
+void ArrangementView::Lane::updateTrack (const TrackInfo& t, bool isSelected)
+{
+    setTrackInfo (t, isSelected);
+
+    // The regions keep what they show; only the colour and selection may differ.
+    for (auto& [id, comp] : regions)
+        comp->update (comp->getInfo(), colour, owner.selection.isSelected (id));
+}
+
+void ArrangementView::Lane::updateRegion (const RegionInfo& info)
+{
+    if (auto* comp = findRegion (info.id))
+    {
+        comp->update (info, colour, owner.selection.isSelected (info.id));
+        resized();   // it may have moved or changed length
+    }
+}
+
+double ArrangementView::Lane::getEndBeat() const
+{
+    double end = 0.0;
+
+    for (auto& [id, comp] : regions)
+        end = juce::jmax (end, comp->getInfo().getEndBeat());
+
+    return end;
+}
+
+void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<RegionInfo>& regionInfos, bool isSelected)
+{
+    setTrackInfo (t, isSelected);
 
     // Reconcile region components by ID: keep existing ones (so keyboard
     // focus and a drag in progress survive), add new ones, remove deleted ones.
@@ -58,9 +97,10 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             comp->onMouseDrag   = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseDrag (c, e); };
             comp->onMouseUp     = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseUp (c, e); };
             comp->onDoubleClick = [this] (RegionComponent& c, RegionComponent::Zone z)   { owner.regionDoubleClicked (c, z); };
+            comp->onEscape      = [this] { return owner.regionDrag->cancel(); };
 
             auto rid = info.id;
-            comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().renameRegion (rid, name); };
+            comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().regions().renameRegion (rid, name); };
             comp->onOpenEditor = [this, rid]
             {
                 owner.selection.selectRegion (trackId, rid);
@@ -169,7 +209,7 @@ void ArrangementView::Lane::mouseDoubleClick (const juce::MouseEvent& e)
 {
     auto beat = owner.geometry.xToBeat ((float) e.x);
 
-    if (auto rid = owner.engine.getTracks().createChordRegion (trackId, beat))
+    if (auto rid = owner.engine.getTracks().regions().createChordRegion (trackId, beat))
         owner.selection.selectRegion (trackId, rid);
 }
 

@@ -41,6 +41,62 @@ endif()
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
 add_subdirectory("${TE_DIR}/modules"      "${CMAKE_BINARY_DIR}/tracktion" EXCLUDE_FROM_ALL)
 
+# sfizz plays SFZ instruments (velocity layers, round-robins, samples
+# streamed from disk) for the library's sampled sounds; see
+# src/engine/SfzPlugin.h. Only its library is built: no stand-alone apps,
+# JACK client or MIDI renderer. Pinned to a release tag (1.2.3).
+set(SFIZZ_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz")
+
+if(NOT EXISTS "${SFIZZ_DIR}/external/abseil-cpp/CMakeLists.txt")
+    message(FATAL_ERROR
+        "The sfizz submodule (or its own submodules) is missing. Run:\n"
+        "  git submodule update --init --recursive external/sfizz")
+endif()
+
+set(SFIZZ_JACK OFF CACHE BOOL "" FORCE)
+set(SFIZZ_RENDER OFF CACHE BOOL "" FORCE)
+set(SFIZZ_SHARED OFF CACHE BOOL "" FORCE)
+set(SFIZZ_TESTS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_DEMOS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(SFIZZ_DEVTOOLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_LTO OFF CACHE BOOL "" FORCE)   # sfizz's own option; keeps its build quick
+
+# Two settings just for sfizz's code. The values a subdirectory sees are
+# fixed when it's added, so restoring them afterwards leaves our own targets
+# as they were:
+#  - C++17: sfizz doesn't build as C++20 (which the app uses).
+#  - <cstdint>: sfizz's copy of abseil uses uintptr_t in its debug-build
+#    asserts without including it, which newer GCC versions reject.
+set(IKAROS_SAVED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_STANDARD 17)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    string(APPEND CMAKE_CXX_FLAGS " -include cstdint")
+endif()
+
+add_subdirectory("${SFIZZ_DIR}" "${CMAKE_BINARY_DIR}/sfizz" EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_FLAGS "${IKAROS_SAVED_CXX_FLAGS}")
+set(CMAKE_CXX_STANDARD 20)
+
+# miniz writes and reads .iksession files (ZIP archives, ZIP64 when they're
+# over 4 GB); see src/engine/SessionBundle.h. Pinned to a release tag (3.1.2).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/miniz/miniz_zip.c")
+    message(FATAL_ERROR
+        "The miniz submodule is missing. Run:\n"
+        "  git submodule update --init external/miniz")
+endif()
+
+add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
+
+# Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
+# Units on macOS. JUCE ships everything needed to host them.
+if(APPLE)
+    set(IKAROS_PLUGIN_HOST_DEFINITIONS JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LV2=0)
+else()
+    set(IKAROS_PLUGIN_HOST_DEFINITIONS JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0 JUCE_PLUGINHOST_LV2=1)
+endif()
+
 # ------------------------------------------------------------------------------
 # App target
 # ------------------------------------------------------------------------------
@@ -52,7 +108,8 @@ juce_add_gui_app(IkarosStudio
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/io.github.thecalamityjoe87.IkarosStudio.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Ikaros Studio uses audio inputs for recording."
-    NEEDS_CURL FALSE
+    DOCUMENT_EXTENSIONS iksession   # macOS: Finder opens .iksession files with the app
+    NEEDS_CURL TRUE                 # downloading sound packs over https (see PackStore)
     NEEDS_WEB_BROWSER FALSE)
 
 # Fonts are compiled into the binary so the app looks identical everywhere.
@@ -89,11 +146,23 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
-    src/engine/EffectsController.h  src/engine/EffectsController.cpp)
+    src/engine/EffectsController.h  src/engine/EffectsController.cpp
+    src/engine/SendBuses.h          src/engine/SendBuses.cpp
+    src/engine/EqController.h       src/engine/EqController.cpp
+    src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
+    src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
+    src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
+    src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
+    src/engine/PackStore.h          src/engine/PackStore.cpp
+    src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
+    src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
+    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
-    src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp)
+    src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
+    src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
+    src/platform/AppFolders.h          src/platform/AppFolders.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -107,6 +176,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
 
     # state: UI state shared between areas
@@ -114,6 +184,12 @@ set(IKAROS_UI_SOURCES
 
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+    src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
+    src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
+    src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
+
+    # windows of their own
+    src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
 
     # one folder per area of the window
     src/ui/titlebar/MenuBar.h               src/ui/titlebar/MenuBar.cpp
@@ -122,6 +198,7 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
+    src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
@@ -134,6 +211,10 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
+    src/ui/bottompanel/PianoRollLayout.h
+    src/ui/bottompanel/PianoRollGestures.cpp
+    src/ui/bottompanel/PianoRollPainting.cpp
+    src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
@@ -155,27 +236,36 @@ target_include_directories(IkarosStudio PRIVATE src)
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_VERSION>"
-    JUCE_USE_CURL=0
+    JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_MODAL_LOOPS_PERMITTED=0
-    # Plugin hosting is compiled in so Tracktion links, but scanning/VST3 UI is a later milestone.
-    # TODO(milestone-3): enable VST3/AU/LV2 scanning in the sound library.
-    JUCE_PLUGINHOST_VST3=0
-    JUCE_PLUGINHOST_AU=0
-    JUCE_PLUGINHOST_LV2=0
+    ${IKAROS_PLUGIN_HOST_DEFINITIONS}
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+
+# The version, as the engine records it in saved sessions.
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+
+# Where the "More Sounds" window gets its list of downloadable sound packs
+# (see src/engine/PackStore.h). Until the packs are hosted, a local test
+# index made by tools/make_pack.py. A web address or a file path.
+set(IKAROS_PACK_INDEX_URL "${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json"
+    CACHE STRING "The sound pack index the app downloads packs from")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_PACK_INDEX_URL}")
 
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        miniz
+        sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
         tracktion::tracktion_graph
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
@@ -194,11 +284,30 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(IkarosStudio PRIVATE atomic)
 
-    # Xlib for src/platform/WindowManagerHints.cpp (window-manager hints JUCE
-    # doesn't expose). JUCE itself loads X11 at runtime, so it's already required.
+    # Xlib for src/platform (window-manager hints and drag-and-drop fixes JUCE
+    # doesn't do itself). JUCE itself loads X11 at runtime, so it's already required.
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
 endif()
+
+# The sound packs that come with the app (made by tools/generate_sounds.py).
+# The sampler plays them from disk, so they're copied next to the program
+# (into Contents/Resources on macOS); SoundLibrary looks for them there.
+set(IKAROS_SOUNDS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/sounds")
+
+function(ikaros_copy_sounds target)
+    if(APPLE AND target STREQUAL "IkarosStudio")
+        set(dest "$<TARGET_FILE_DIR:${target}>/../Resources/Sounds")
+    else()
+        set(dest "$<TARGET_FILE_DIR:${target}>/Sounds")
+    endif()
+
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${IKAROS_SOUNDS_DIR}" "${dest}"
+        VERBATIM)
+endfunction()
+
+ikaros_copy_sounds(IkarosStudio)
 
 # ------------------------------------------------------------------------------
 # Linux install layout (used by the Flatpak manifest and `cmake --install`)
@@ -215,10 +324,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES packaging/linux/${APP_ID}.metainfo.xml
             DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    install(FILES packaging/linux/${APP_ID}.xml   # the .iksession file type
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
     install(FILES resources/icons/${APP_ID}.svg
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
     install(FILES resources/icons/${APP_ID}.png
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+    install(DIRECTORY resources/sounds/
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/ikaros-studio/Sounds)
+    install(FILES CREDITS
+            DESTINATION ${CMAKE_INSTALL_DOCDIR})
 endif()
 
 # ------------------------------------------------------------------------------
@@ -233,27 +348,36 @@ if(IKAROS_BUILD_TESTS)
 
     target_sources(IkarosEngineSmokeTest PRIVATE
         tests/EngineSmokeTest.cpp
+        src/platform/AppFolders.cpp      # the engine keeps open sessions there
         ${IKAROS_ENGINE_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
+
+    # The test sound pack (made by tests/fixtures/generate_test_pack.py).
+    target_compile_definitions(IkarosEngineSmokeTest PRIVATE
+        IKAROS_VERSION="${PROJECT_VERSION}"
+        IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
+        IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")
 
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_PLUGINHOST_VST3=0
-        JUCE_PLUGINHOST_AU=0
-        JUCE_PLUGINHOST_LV2=0
+        ${IKAROS_PLUGIN_HOST_DEFINITIONS}
         TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        miniz
+        sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
         tracktion::tracktion_graph
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_recommended_config_flags)
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
@@ -264,5 +388,16 @@ if(IKAROS_BUILD_TESTS)
         target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic)
     endif()
 
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest)
+    ikaros_copy_sounds(IkarosEngineSmokeTest)
+
+    # The test scans the test plug-ins when they've been built.
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins")
+endif()
+
+# Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
+# plug-in scanning and hosting. See tests/plugins/CMakeLists.txt.
+option(IKAROS_BUILD_TEST_PLUGINS "Build plug-ins for testing plug-in hosting" OFF)
+
+if(IKAROS_BUILD_TEST_PLUGINS)
+    add_subdirectory(tests/plugins)
 endif()

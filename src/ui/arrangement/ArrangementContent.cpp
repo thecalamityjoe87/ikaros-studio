@@ -9,7 +9,6 @@ using namespace arrangement;
 
 ArrangementView::Content::Content (ArrangementView& o) : owner (o)
 {
-    dropZone.onClick = [this] { if (owner.onAddTrackRequested) owner.onAddTrackRequested (&dropZone); };
     addAndMakeVisible (dropZone);
 }
 
@@ -53,6 +52,47 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
     lanes = std::move (nextLanes);
 }
 
+bool ArrangementView::Content::syncTracks (const std::vector<TrackInfo>& tracks)
+{
+    if (tracks.size() != order.size())
+        return false;
+
+    for (size_t i = 0; i < tracks.size(); ++i)
+        if (tracks[i].id != order[i])
+            return false;
+
+    auto selectedTrack = owner.selection.getTrack();
+
+    for (auto& t : tracks)
+    {
+        headers[t.id]->update (t, t.id == selectedTrack);
+        lanes[t.id]->updateTrack (t, t.id == selectedTrack);
+    }
+
+    return true;
+}
+
+bool ArrangementView::Content::syncRegion (const RegionInfo& info)
+{
+    auto it = lanes.find (info.trackId);
+
+    if (it == lanes.end() || it->second->findRegion (info.id) == nullptr)
+        return false;
+
+    it->second->updateRegion (info);
+    return true;
+}
+
+double ArrangementView::Content::getEndBeat() const
+{
+    double end = 0.0;
+
+    for (auto& [id, lane] : lanes)
+        end = juce::jmax (end, lane->getEndBeat());
+
+    return end;
+}
+
 TrackHeader* ArrangementView::Content::findHeader (TrackId id) const
 {
     auto it = headers.find (id);
@@ -90,7 +130,7 @@ void ArrangementView::Content::setRecording (TrackId track, double startBeat, do
 
 int ArrangementView::Content::getIdealHeight() const
 {
-    return (int) order.size() * rowHeight + dropZoneHeight + dropZoneMargin * 2;
+    return (int) order.size() * owner.geometry.rowHeight + dropZoneHeight + dropZoneMargin * 2;
 }
 
 void ArrangementView::Content::paint (juce::Graphics& g)
@@ -108,9 +148,9 @@ void ArrangementView::Content::resized()
 
     for (auto id : order)
     {
-        headers[id]->setBounds (0, y, headerWidth - 1, rowHeight);
-        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, rowHeight);
-        y += rowHeight;
+        headers[id]->setBounds (0, y, headerWidth - 1, owner.geometry.rowHeight);
+        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, owner.geometry.rowHeight);
+        y += owner.geometry.rowHeight;
     }
 
     dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,

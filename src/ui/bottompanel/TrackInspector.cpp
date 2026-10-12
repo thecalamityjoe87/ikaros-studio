@@ -39,6 +39,13 @@ void TrackInspector::refresh()
     plugins.refresh();
 }
 
+void TrackInspector::setMasterMode (bool master)
+{
+    recordingSection.setVisible (! master);
+    plugins.setMasterMode (master);
+    layoutSections();
+}
+
 void TrackInspector::update()
 {
     recording.updateMeter();
@@ -56,6 +63,9 @@ void TrackInspector::layoutSections()
 
     for (auto* section : { &recordingSection, &pluginsSection })
     {
+        if (! section->isVisible())
+            continue;
+
         section->setBounds (0, y, width, section->getPreferredHeight());
         y += section->getHeight();
     }

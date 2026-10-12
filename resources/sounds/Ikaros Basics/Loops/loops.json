@@ -1,0 +1,25 @@
+[
+  {
+    "file": "Electro Beat.flac",
+    "name": "Electro Beat",
+    "bpm": 120,
+    "key": "C"
+  },
+  {
+    "file": "Hat Groove.flac",
+    "name": "Hat Groove",
+    "bpm": 120
+  },
+  {
+    "file": "Pluck Bass.flac",
+    "name": "Pluck Bass",
+    "bpm": 120,
+    "key": "C"
+  },
+  {
+    "file": "Glass Chords.flac",
+    "name": "Glass Chords",
+    "bpm": 120,
+    "key": "C"
+  }
+]

@@ -8,15 +8,15 @@ namespace ikaros
 {
 
 //==============================================================================
-// The dashed "Drop a sound, loop or audio file here" zone. Clicking it adds a
-// track; dropping audio files on it adds them on a new audio track (the
-// ArrangementView handles the drop).
-class ArrangementView::DropZone  : public juce::Button
+// The dashed "Drop a sound, loop or audio file here" zone. It only shows
+// where to drop: the ArrangementView handles the drop itself, and highlights
+// the zone while something is dragged over it. Clicks pass through.
+class ArrangementView::DropZone  : public juce::Component
 {
 public:
     DropZone();
 
-    void paintButton (juce::Graphics&, bool over, bool) override;
+    void paint (juce::Graphics&) override;
 };
 
 //==============================================================================
@@ -71,6 +71,7 @@ public:
     Overlay();
 
     void setGhosts (std::vector<Ghost> newGhosts);
+    /** markerX: where a dropped file would start (negative = no marker). */
     void setDropTarget (juce::Rectangle<float> area, float markerX, const juce::String& text);
     void clear();
 

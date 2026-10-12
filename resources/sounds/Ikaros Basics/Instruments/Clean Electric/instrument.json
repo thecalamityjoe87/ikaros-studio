@@ -1,0 +1,37 @@
+{
+  "name": "Clean Electric",
+  "category": "Guitar",
+  "oneShot": false,
+  "samples": [
+    {
+      "file": "E2.flac",
+      "root": 40,
+      "low": 0,
+      "high": 43
+    },
+    {
+      "file": "B2.flac",
+      "root": 47,
+      "low": 44,
+      "high": 51
+    },
+    {
+      "file": "G3.flac",
+      "root": 55,
+      "low": 52,
+      "high": 58
+    },
+    {
+      "file": "D4.flac",
+      "root": 62,
+      "low": 59,
+      "high": 65
+    },
+    {
+      "file": "A4.flac",
+      "root": 69,
+      "low": 66,
+      "high": 127
+    }
+  ]
+}

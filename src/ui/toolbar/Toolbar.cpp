@@ -1,6 +1,7 @@
 #include "ui/toolbar/Toolbar.h"
 #include "app/CommandIDs.h"
 #include "engine/AudioEngine.h"
+#include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -30,7 +31,16 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     redoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::redo, true); };
 
     addAndMakeVisible (transport);
-    addAndMakeVisible (masterMeter);
+
+    // The master volume, its track a level meter, like GarageBand's. It's
+    // the same setting as the Master page's knob and the Mixer's master
+    // fader. Double-click goes back to 0 dB; one undo step per drag.
+    masterVolume.setTitle ("Master volume");
+    masterVolume.setVelocityModeParameters (1.0, 1, 0.0, false);
+    masterVolume.setDoubleClickReturnValue (true, TrackController::getFaderPositionForDb (0.0f));
+    masterVolume.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
+    masterVolume.onValueChange = [this] { engine.getTracks().setMasterVolume ((float) masterVolume.getValue()); };
+    addAndMakeVisible (masterVolume);
 }
 
 void Toolbar::update (bool libraryVisible)
@@ -42,7 +52,18 @@ void Toolbar::update (bool libraryVisible)
     redoButton.setTooltip (juce::String ("Redo " + engine.getRedoDescription()).trimEnd());
 
     transport.update();
-    masterMeter.setLevel (engine.getMasterLevel());
+    masterVolume.setLevel (engine.getMasterLevel());
+
+    // Follow changes made elsewhere (the Mixer, undo), but don't fight a drag.
+    if (! masterVolume.isMouseButtonDown())
+    {
+        auto& tc = engine.getTracks();
+        masterVolume.setValue (tc.getMasterVolume(), juce::dontSendNotification);
+
+        const auto db = tc.getMasterVolumeDb();
+        masterVolume.setTooltip ("Master volume: " + (db <= -99.0f ? juce::String ("off") : juce::String (db, 1) + " dB")
+                                 + " (double-click for 0 dB)");
+    }
 
     // CPU text changes constantly; refreshing it ~3 times a second is easier to read.
     if (--statsCountdown <= 0)
@@ -74,7 +95,7 @@ void Toolbar::paint (juce::Graphics& g)
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (11.0f));
-    g.drawText ("Master", masterArea.withHeight (14), juce::Justification::centredLeft);
+    g.drawText ("Master", masterArea.withHeight (13), juce::Justification::centredLeft);
 
     g.setFont (fonts::mono (11.0f));
     auto s = statsArea;
@@ -104,8 +125,9 @@ void Toolbar::resized()
     auto right = r.withLeft (transport.getRight() + 12);
     statsArea = right.removeFromRight (110).withSizeKeepingCentre (110, 32);
     right.removeFromRight (14);
-    masterArea = right.removeFromRight (120).withSizeKeepingCentre (120, 30);
-    masterMeter.setBounds (masterArea.withTrimmedTop (16));
+    // "Master", and the level-and-volume slider under it.
+    masterArea = right.removeFromRight (120).withSizeKeepingCentre (120, 34);
+    masterVolume.setBounds (masterArea.withTrimmedTop (14).expanded (6, 0));   // the handle overhangs the bars a little
 }
 
 } // namespace ikaros

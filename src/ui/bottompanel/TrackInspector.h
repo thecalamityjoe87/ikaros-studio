@@ -31,6 +31,9 @@ public:
     std::function<void (PluginId)> onOpenEffect;
     void setOpenEffect (PluginId id)    { plugins.setOpenEffect (id); }
 
+    /** Master mode: just the master channel's effects (no Recording section). */
+    void setMasterMode (bool);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
