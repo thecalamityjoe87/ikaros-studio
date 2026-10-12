@@ -18,6 +18,7 @@ namespace ikaros
 class TrackController;
 class SoundLibrary;
 class PluginLibrary;
+class PackStore;
 class AudioPreview;
 
 //==============================================================================
@@ -206,6 +207,11 @@ public:
     /** The library's sounds and loops. */
     SoundLibrary& getSounds() noexcept          { return *sounds; }
 
+    /** Downloadable sound packs (the "More Sounds" window). After a pack is
+        installed or removed, the library is rescanned, tracks that were
+        waiting for it start playing, and listeners hear about it. */
+    PackStore& getPackStore() noexcept          { return *packStore; }
+
     /** Third-party plug-ins and the plug-in scan. */
     PluginLibrary& getPlugins() noexcept        { return *plugins; }
 
@@ -246,6 +252,10 @@ private:
         call this for changes that don't live there (arming, plug-in scans). */
     void notifyModelChanged (const ModelChanges& = ModelChanges::everything());
 
+    /** After a sound pack was installed, updated or removed: rescans the
+        library and points tracks using that pack at its files. */
+    void soundPacksChanged (const juce::String& packId);
+
     // ListenerList is safe even if a listener removes itself while being called.
     juce::ListenerList<Listener> listeners;
 
@@ -255,6 +265,7 @@ private:
     // Declared after impl, so they're destroyed before it (members are
     // destroyed in reverse order), while Tracktion's Engine still exists.
     std::unique_ptr<SoundLibrary> sounds;
+    std::unique_ptr<PackStore> packStore;
     std::unique_ptr<PluginLibrary> plugins;
     std::unique_ptr<AudioPreview> preview;
     std::unique_ptr<TrackController> trackController;

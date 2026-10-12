@@ -92,6 +92,10 @@ public:
         decides the layout, so it calls setCollapsed(). */
     std::function<void (bool shouldCollapse)> onCollapseRequested;
 
+    /** The Sound tab's Download button, on a track whose sound pack isn't
+        installed. The owner opens the More Sounds window. */
+    std::function<void (const juce::String& packId)> onDownloadPackRequested;
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseUp (const juce::MouseEvent&) override;

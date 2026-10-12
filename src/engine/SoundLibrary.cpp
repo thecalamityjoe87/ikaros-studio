@@ -177,7 +177,8 @@ void SoundLibrary::rescan()
             continue;
 
         // Sorted, so the library comes out the same on every computer.
-        auto folders = root.findChildFiles (juce::File::findDirectories, false);
+        // Hidden folders are left out: PackStore unpacks downloads in them.
+        auto folders = root.findChildFiles (juce::File::findDirectories | juce::File::ignoreHiddenFiles, false);
         folders.sort();
 
         for (auto& pack : folders)

@@ -110,6 +110,8 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     }
     else if (name == "Window")
     {
+        add (CommandIDs::moreSounds);
+        m.addSeparator();
         add (CommandIDs::toggleFullScreen);
     }
     else if (name == "Help")

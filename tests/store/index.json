@@ -1,0 +1,18 @@
+{
+    "format": 1,
+    "packs": [
+        {
+            "id": "ikaros-studio.store-test",
+            "name": "Store Pack",
+            "version": "1.0.0",
+            "category": "Keyboards",
+            "description": "A tiny pack for testing downloads: one sine-wave instrument.",
+            "author": "Ikaros Studio",
+            "license": "CC0-1.0",
+            "downloadSize": 22462,
+            "installedSize": 22546,
+            "url": "ikaros-studio.store-test-1.0.0.zip",
+            "sha256": "c8548e2874c6acc8e8a24810ebadb43309f3e140f841bdc085b1ba73cac87aa0"
+        }
+    ]
+}

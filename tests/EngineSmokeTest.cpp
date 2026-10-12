@@ -3,6 +3,7 @@
 // IkarosEngineSmokeTest binary directly.
 
 #include "engine/AudioEngine.h"
+#include "engine/PackStore.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
@@ -1335,6 +1336,122 @@ int main (int argc, char* argv[])
             pumpMessages();
             check (effects.getSoundControls (kt).size() == 5 && effects.getSoundControls (kt)[0].name == "Brightness",
                    "the synth keeps its own knobs");
+        }
+
+        std::cout << "Downloadable sound packs\n";
+        {
+            auto& store = engine.getPackStore();
+            auto& sounds = engine.getSounds();
+            auto& effects = tracks.effects();
+            using Status = PackStore::IndexStatus;
+            using State = StorePack::State;
+
+            // Packs install into a folder of the test's own, never the user's Sounds.
+            auto storeFolder = dir.getChildFile ("Store Sounds");
+            store.setInstallFolder (storeFolder);
+            sounds.addPackFolder (storeFolder);
+
+            const juce::String packId ("ikaros-studio.store-test");
+            const juce::String storeSound ("sampler:ikaros-studio.store-test/Store Keys");
+            const juce::String storeIndex = juce::String (IKAROS_TEST_STORE) + "/index.json";
+
+            auto waitForStore = [&store]
+            {
+                for (int i = 0; i < 250 && (store.getIndexStatus() == Status::loading || store.isBusy()); ++i)
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+
+                pumpMessages();
+            };
+
+            auto useIndex = [&] (const juce::String& url)
+            {
+                store.setIndexUrl (url);
+                store.refreshIndex();
+                waitForStore();
+            };
+
+            auto leftovers = [&storeFolder]
+            {
+                return storeFolder.findChildFiles (juce::File::findFilesAndDirectories, false, "*").size();
+            };
+
+            useIndex (dir.getChildFile ("Nowhere").getChildFile ("index.json").getFullPathName());
+            auto basics = store.findPack ("ikaros-studio.basics");
+            check (store.getIndexStatus() == Status::unavailable && basics && basics->bundled && basics->state == State::installed,
+                   "without the index (offline), the installed packs are still listed");
+
+            useIndex (storeIndex);
+            auto offered = store.findPack (packId);
+            check (store.getIndexStatus() == Status::loaded && offered && offered->state == State::notInstalled
+                     && offered->downloadSize > 0 && offered->category == "Keyboards" && offered->name == "Store Pack",
+                   "the index lists a pack to download, with its size");
+
+            useIndex (juce::String (IKAROS_TEST_STORE) + "/index-damaged.json");
+            store.install (packId);
+            waitForStore();
+            check (! sounds.findPack (packId).has_value() && store.findPack (packId)->error.isNotEmpty() && leftovers() == 0,
+                   "a download that fails its SHA-256 check is refused and leaves nothing behind");
+
+            useIndex (storeIndex);
+            store.install (packId);
+            check (store.findPack (packId)->state == State::downloading, "(downloading)");
+            waitForStore();
+            auto installed = store.findPack (packId);
+            check (sounds.findPack (packId).has_value() && installed && installed->state == State::installed
+                     && installed->installedVersion == "1.0.0" && installed->error.isEmpty()
+                     && sounds.findSound (storeSound).has_value() && leftovers() == 1,
+                   "a pack downloads, installs and joins the library");
+
+            // A session that uses it.
+            engine.newSession();
+            pumpMessages();
+            auto pt = tracks.getTracks().front().id;
+            check (effects.setSound (pt, storeSound), "(a track plays the downloaded instrument)");
+            tracks.regions().createChordRegion (pt, 0.0);
+            pumpMessages();
+            check (engine.renderPeak (0.0, 1.0) > 0.05f, "a downloaded instrument plays");
+
+            // An update: the index has a newer version than the one installed.
+            auto packJson = sounds.findPack (packId)->folder.getChildFile ("pack.json");
+            packJson.replaceWithText (packJson.loadFileAsString().replace ("\"1.0.0\"", "\"0.9.0\""));
+            sounds.rescan();
+            check (store.findPack (packId)->state == State::updateAvailable, "a newer version in the index shows as an update");
+            store.install (packId);
+            waitForStore();
+            check (store.findPack (packId)->state == State::installed && store.findPack (packId)->installedVersion == "1.0.0"
+                     && leftovers() == 1 && engine.renderPeak (0.0, 1.0) > 0.05f,
+                   "updating replaces the old version, and its tracks keep playing");
+
+            // Removing it: the track waits for it, like a missing plug-in.
+            check (! store.remove ("ikaros-studio.basics"), "the pack that comes with the app can't be removed");
+            check (store.remove (packId), "(remove the downloaded pack)");
+            pumpMessages();
+            auto slot = effects.getInstrument (pt);
+            check (! sounds.findPack (packId).has_value() && leftovers() == 0 && store.findPack (packId)->state == State::notInstalled
+                     && slot && slot->missing && slot->missingPackId == packId && slot->missingPackName == "Store Pack"
+                     && effects.getSoundControls (pt).empty(),
+                   "removing a pack leaves its tracks showing it as not installed");
+
+            // Saved and reopened without the pack, then saved again: the
+            // reference is kept, so it works once the pack is back.
+            auto missingSession = dir.getChildFile ("Missing Pack");
+            check (engine.saveSessionAs (missingSession), "(save)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (missingSession)), "(reopen)");
+            pumpMessages();
+            check (engine.saveSessionAs (dir.getChildFile ("Missing Pack Again")), "(save again)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (dir.getChildFile ("Missing Pack Again"))), "(reopen)");
+            pumpMessages();
+            pt = tracks.getTracks().front().id;
+            slot = effects.getInstrument (pt);
+            check (effects.getSoundId (pt) == storeSound && slot && slot->missing && slot->missingPackId == packId,
+                   "a session keeps its missing pack's sound through save and reopen");
+
+            store.install (packId);
+            waitForStore();
+            pumpMessages();
+            slot = effects.getInstrument (pt);
+            check (slot && ! slot->missing && effects.getSoundControls (pt).size() == 5 && engine.renderPeak (0.0, 1.0) > 0.05f,
+                   "installing the pack brings the open session's track back");
         }
     }
 

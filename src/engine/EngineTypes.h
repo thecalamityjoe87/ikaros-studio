@@ -196,7 +196,10 @@ struct PluginSlot
     juce::String name;             // what the user sees, e.g. "Reverb"
     bool enabled = true;           // false = bypassed
     bool isThirdParty = false;     // a VST3/AU/LV2 plug-in: it has its own window
-    bool missing = false;          // a third-party plug-in that isn't installed (or failed to load)
+    bool missing = false;          // a third-party plug-in that isn't installed (or failed to load),
+                                   // or a sampled instrument whose sound pack isn't installed
+    juce::String missingPackId;    // for the latter: the pack it needs (see PackStore)
+    juce::String missingPackName;  // and its name, as last seen (may be empty for older sessions)
     juce::String manufacturer;     // third-party plug-ins only
 };
 
@@ -232,6 +235,31 @@ struct SoundPackInfo
     juce::File folder;
     int format = 1;                // pack.json's layout: 1 = before ids and versions, 2 = now
     bool bundled = false;          // installed with the app: always there, can't be removed
+};
+
+// A sound pack as the "More Sounds" window shows it: what the pack index
+// offers (see PackStore), what's installed, or both.
+struct StorePack
+{
+    enum class State
+    {
+        notInstalled,      // in the index, not on this computer
+        installed,         // up to date (or not in the index at all)
+        updateAvailable,   // the index has a newer version
+        downloading,       // see progress
+        installing,        // checking and unpacking the download
+    };
+
+    juce::String id;               // the pack id (SoundPackInfo::id)
+    juce::String name, description, category, author, license;
+    juce::String installedVersion; // empty if it isn't installed
+    juce::String availableVersion; // empty if the index doesn't list it
+    juce::int64 downloadSize = 0;  // bytes (from the index)
+    juce::int64 installedSize = 0; // bytes on disk once installed
+    bool bundled = false;          // comes with the app: can't be removed
+    State state = State::notInstalled;
+    float progress = 0.0f;         // while downloading, 0..1
+    juce::String error;            // why the last download failed, or empty
 };
 
 // A sound in the library: something an instrument track can play.

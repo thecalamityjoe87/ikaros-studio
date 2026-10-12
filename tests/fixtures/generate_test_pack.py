@@ -18,11 +18,22 @@ Everything is generated here: short sine waves, no third-party audio.
 
 The three samples are the same note at different levels (0.2, 0.8 and 0.6),
 so the test can tell from how loud a note plays which sample it used.
+
+It also makes the local pack store the app and the test download from
+until real packs are hosted (see src/engine/PackStore.h):
+
+    ../store/index.json                       made by tools/make_pack.py
+    ../store/ikaros-studio.store-test-1.0.0.zip   "Store Pack", one sine-wave instrument
+    ../store/index-damaged.json               the same pack with a wrong SHA-256
 """
 
 import json
 import math
+import shutil
 import struct
+import subprocess
+import sys
+import tempfile
 import wave
 from pathlib import Path
 
@@ -31,6 +42,8 @@ PACK = HERE / "Test Pack"
 INSTRUMENT = PACK / "Instruments" / "Test Keys"
 OLD_PACK = HERE / "Old Pack"
 OLD_INSTRUMENT = OLD_PACK / "Instruments" / "Old Keys"
+STORE = HERE.parent / "store"
+MAKE_PACK = HERE.parent.parent / "tools" / "make_pack.py"
 RATE = 22050
 SECONDS = 0.5
 
@@ -110,6 +123,39 @@ def main():
         "description": "A pack in the format before ids.",
         "credits": "Made for the engine smoke test.",
     }, indent=4) + "\n")
+
+    make_store()
+
+
+def make_store():
+    """A downloadable pack, packaged the way real ones are."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pack = Path(tmp) / "Store Pack"
+        instrument = pack / "Instruments" / "Store Keys"
+        instrument.mkdir(parents=True)
+        write_sine(instrument / "tone.wav", 0.7)
+        (instrument / "instrument.json").write_text(json.dumps({
+            "name": "Store Keys",
+            "category": "Keyboards",
+            "samples": [{"file": "tone.wav", "root": 60, "low": 0, "high": 127}],
+        }, indent=4) + "\n")
+        (pack / "pack.json").write_text(json.dumps({
+            "format": 2,
+            "id": "ikaros-studio.store-test",
+            "name": "Store Pack",
+            "version": "1.0.0",
+            "description": "A tiny pack for testing downloads: one sine-wave instrument.",
+            "author": "Ikaros Studio",
+            "license": "CC0-1.0",
+        }, indent=4) + "\n")
+
+        shutil.rmtree(STORE, ignore_errors=True)
+        subprocess.run([sys.executable, str(MAKE_PACK), str(pack), "--category", "Keyboards", "--out", str(STORE)],
+                       check=True)
+
+    index = json.loads((STORE / "index.json").read_text())
+    index["packs"][0]["sha256"] = "0" * 64
+    (STORE / "index-damaged.json").write_text(json.dumps(index, indent=4) + "\n")
 
 
 if __name__ == "__main__":

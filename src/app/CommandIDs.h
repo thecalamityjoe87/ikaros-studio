@@ -65,6 +65,7 @@ namespace CommandIDs
         toggleDetails,
 
         toggleFullScreen,
+        moreSounds,
         about,
     };
 }

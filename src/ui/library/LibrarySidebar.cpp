@@ -269,6 +269,15 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     scanButton.setTooltip ("Look for new plug-ins");
     scanButton.onClick = [this] { showScanMenu(); };
 
+    auto moreColours = IconButton::raisedColours();
+    moreColours.border = colour::border;
+    moreSoundsButton.setColours (moreColours);
+    moreSoundsButton.setFont (fonts::uiSemiBold (13.0f));
+    moreSoundsButton.setIconSize (16.0f);
+    moreSoundsButton.setTooltip ("Download more instruments and loops");
+    moreSoundsButton.onClick = [this] { if (onMoreSoundsRequested) onMoreSoundsRequested(); };
+    addAndMakeVisible (moreSoundsButton);
+
     auto music = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
     audioFolder = music.isDirectory() ? music : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
 
@@ -670,6 +679,9 @@ void LibrarySidebar::resized()
 
     searchField.setBounds (r.removeFromTop (36));
     r.removeFromTop (12);
+
+    moreSoundsButton.setBounds (r.removeFromBottom (34));
+    r.removeFromBottom (10);
 
     const int tileW = (r.getWidth() - tileGap) / 2;
 

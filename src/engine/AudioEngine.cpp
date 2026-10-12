@@ -1,6 +1,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/AudioPreview.h"
 #include "engine/PluginLibrary.h"
+#include "engine/PackStore.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
@@ -642,6 +643,8 @@ AudioEngine::AudioEngine (const juce::String& settingsName)
     : impl (std::make_unique<Impl> (*this, settingsName))
 {
     sounds = std::make_unique<SoundLibrary>();
+    packStore = std::make_unique<PackStore> (*sounds);
+    packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
     plugins = std::make_unique<PluginLibrary> (*this);
     preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
@@ -662,6 +665,7 @@ AudioEngine::~AudioEngine()
     impl->stopObservingEdit();
     impl->edit.reset();   // closes any plug-in windows
     plugins.reset();
+    packStore.reset();    // stops downloads
 }
 
 void AudioEngine::setPluginWindowFactory (PluginWindowFactory factory)
@@ -763,8 +767,10 @@ static juce::String fileNameOf (const juce::String& path)
 // files of the same instrument here, found by its pack id (or, for sessions
 // from before pack ids, its pack folder's name). Instruments whose pack isn't
 // installed are left as they were, so saving keeps the reference.
-static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibrary& sounds)
+static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibrary& sounds,
+                                         const juce::String& reloadPackId = {})
 {
+
     using namespace detail;
 
     for (auto child : tree)
@@ -772,7 +778,7 @@ static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibra
         if (! te::TrackList::isTrack (child))
             continue;
 
-        pointInstrumentsAtLocalFiles (child, sounds);   // tracks inside folder tracks
+        pointInstrumentsAtLocalFiles (child, sounds, reloadPackId);   // tracks inside folder tracks
 
         auto* instrument = sounds.resolveSampledInstrument (child[soundIdProp].toString());
 
@@ -780,6 +786,23 @@ static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibra
             continue;
 
         child.setProperty (soundIdProp, instrument->info.id, nullptr);   // saved the new way from now on
+
+        if (auto pack = sounds.findPack (instrument->info.packId))
+            child.setProperty (packNameProp, pack->name, nullptr);         // so a computer without it can name it
+
+        // For reloadPackId (a pack just installed into the open session),
+        // each path is cleared and set again, so the instrument loads its
+        // files even if the path is the same as before. Not undoable: it's
+        // not an edit.
+        const bool reload = reloadPackId.isNotEmpty() && instrument->info.packId == reloadPackId;
+
+        auto setPath = [reload] (juce::ValueTree v, const juce::Identifier& property, const juce::String& path)
+        {
+            if (reload)
+                v.setProperty (property, {}, nullptr);
+
+            v.setProperty (property, path, nullptr);
+        };
 
         for (auto plugin : child)
         {
@@ -794,14 +817,24 @@ static void pointInstrumentsAtLocalFiles (juce::ValueTree tree, const SoundLibra
                 for (auto sound : plugin)
                     for (auto& zone : instrument->zones)
                         if (sound.hasType (te::IDs::SOUND) && zone.file.getFileName() == fileNameOf (sound[te::IDs::source].toString()))
-                            sound.setProperty (te::IDs::source, zone.file.getFullPathName(), nullptr);
+                            setPath (sound, te::IDs::source, zone.file.getFullPathName());
             }
             else if (type == SfzPlugin::xmlTypeName && instrument->sfzFile.existsAsFile())
             {
-                plugin.setProperty (SfzPlugin::sfzFileProp, instrument->sfzFile.getFullPathName(), nullptr);
+                setPath (plugin, SfzPlugin::sfzFileProp, instrument->sfzFile.getFullPathName());
             }
         }
     }
+}
+
+void AudioEngine::soundPacksChanged (const juce::String& packId)
+{
+    sounds->rescan();
+
+    if (impl->edit != nullptr)
+        pointInstrumentsAtLocalFiles (impl->edit->state, *sounds, packId);
+
+    notifyModelChanged();   // everything: the library, and tracks' missing-pack state
 }
 
 bool AudioEngine::openSession (const juce::File& file)

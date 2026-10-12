@@ -293,17 +293,32 @@ namespace
         return nullptr;
     }
 
+    // The pack a track's sampled sound needs, if it isn't installed (or the
+    // pack no longer has that instrument). Empty when nothing's missing.
+    juce::String missingPackFor (te::AudioTrack& t, const SoundLibrary& sounds)
+    {
+        const auto soundId = t.state.getProperty (soundIdProp).toString();
+        const auto packId = SoundLibrary::getPackIdOf (soundId);
+
+        if (packId.isEmpty() || sounds.findSampledInstrument (soundId) != nullptr)
+            return {};
+
+        return packId;
+    }
+
     // The knobs a track's Sound tab shows, or none if it doesn't play a
-    // sampled instrument. An instrument that's no longer in the library
-    // (its pack was removed) gets its category's defaults.
+    // sampled instrument. A sound whose pack isn't installed has none
+    // either: the Sound tab offers to download the pack instead. (Its
+    // settings stay in the session, ready for when it's back.)
     std::vector<Knob> sampledKnobsFor (te::AudioTrack& t, const SoundLibrary& sounds)
     {
-        if (sampledInstrumentOn (t) == nullptr)
+        if (sampledInstrumentOn (t) == nullptr || missingPackFor (t, sounds).isNotEmpty())
             return {};
 
         if (auto* instrument = sounds.findSampledInstrument (t.state.getProperty (soundIdProp).toString()))
             return SoundLibrary::getKnobsFor (*instrument);
 
+        // A sampler without a library sound (shouldn't happen): general knobs.
         return SoundLibrary::getDefaultKnobs (t.state.getProperty (categoryProp).toString());
     }
 
@@ -527,7 +542,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
 
     // Make the new instrument first: if it can't be made, nothing changes.
     te::Plugin::Ptr instrument, shaper, transpose;
-    juce::String name, category, icon;
+    juce::String name, category, icon, packName;
 
     if (auto* patch = SoundLibrary::findSynthPatch (soundId))
     {
@@ -551,6 +566,9 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
         name = sampled->info.name;
         category = sampled->info.category;
         icon = sampled->info.icon;
+
+        if (auto pack = owner.getSounds().findPack (sampled->info.packId))
+            packName = pack->name;
     }
     else if (auto info = owner.getPlugins().findPlugin (soundId.fromFirstOccurrenceOf (thirdPartyPrefix, false, false)))
     {
@@ -601,6 +619,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
     t->state.setProperty (soundNameProp, name, um);
     t->state.setProperty (categoryProp, category, um);
     t->state.setProperty (soundIconProp, icon, um);
+    t->state.setProperty (packNameProp, packName, um);
 
     if (nameIsAutomatic)
     {
@@ -644,9 +663,26 @@ bool EffectsController::isInstrumentReady (TrackId id) const
 std::optional<PluginSlot> EffectsController::getInstrument (TrackId id) const
 {
     if (auto* t = findTrack (owner.getEdit(), id))
+    {
         for (auto* p : t->pluginList)
+        {
             if (isInstrumentPlugin (*p))
-                return makeSlot (*p);
+            {
+                auto slot = makeSlot (*p);
+
+                // A sampled instrument is "missing" like an uninstalled
+                // plug-in when its sound pack isn't on this computer.
+                if (sampledInstrumentOn (*t) == p)
+                {
+                    slot.missingPackId = missingPackFor (*t, owner.getSounds());
+                    slot.missing = slot.missingPackId.isNotEmpty();
+                    slot.missingPackName = t->state.getProperty (packNameProp).toString();
+                }
+
+                return slot;
+            }
+        }
+    }
 
     return std::nullopt;
 }

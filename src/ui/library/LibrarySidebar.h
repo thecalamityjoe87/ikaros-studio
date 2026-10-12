@@ -36,6 +36,9 @@ public:
     /** ~30 Hz: scan progress and which file is previewing. */
     void update();
 
+    /** The "More Sounds..." button: the owner opens the More Sounds window. */
+    std::function<void()> onMoreSoundsRequested;
+
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
@@ -72,6 +75,9 @@ private:
 
     // Plug-ins: scan status and the scan menu.
     IconButton scanButton { "Scan for plug-ins", std::nullopt, "Scan..." };
+
+    // Downloadable sound packs, at the bottom.
+    IconButton moreSoundsButton { "More sounds", Icon::download, "More Sounds..." };
     juce::String scanText;
     int knownPluginCount = -1;
 

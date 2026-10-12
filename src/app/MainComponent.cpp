@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/library/MoreSoundsDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
@@ -41,6 +42,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
+    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
+    library.onMoreSoundsRequested = [this] { MoreSoundsDialog::show (*this, engine); };
     setUpResizers();
 
     // Commands: register everything this component can do, make it the
@@ -107,7 +110,7 @@ void MainComponent::resized()
     // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
-             || dynamic_cast<SavingOverlay*> (child) != nullptr)
+             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -318,7 +321,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleDetails,
-                                   CommandIDs::toggleFullScreen, CommandIDs::about,
+                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
@@ -567,6 +570,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress (juce::KeyPress::F11Key, 0);
            #endif
             break;
+        case CommandIDs::moreSounds:
+            info.setInfo ("More Sounds...", "Download more instruments and loops", "Window", 0);
+            break;
+
         case CommandIDs::about:
             info.setInfo ("About Ikaros Studio", "About this app", "Help", 0);
             break;
@@ -722,6 +729,7 @@ bool MainComponent::perform (const InvocationInfo& info)
                 window->setFullScreen (! window->isFullScreen());
             break;
 
+        case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
         case CommandIDs::about:           showAbout(); break;
         case juce::StandardApplicationCommandIDs::quit: requestQuit(); break;
 

@@ -109,7 +109,7 @@ juce_add_gui_app(IkarosStudio
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Ikaros Studio uses audio inputs for recording."
     DOCUMENT_EXTENSIONS iksession   # macOS: Finder opens .iksession files with the app
-    NEEDS_CURL FALSE
+    NEEDS_CURL TRUE                 # downloading sound packs over https (see PackStore)
     NEEDS_WEB_BROWSER FALSE)
 
 # Fonts are compiled into the binary so the app looks identical everywhere.
@@ -153,6 +153,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
+    src/engine/PackStore.h          src/engine/PackStore.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
     src/engine/AudioPreview.h       src/engine/AudioPreview.cpp)
@@ -196,6 +197,7 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
+    src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
@@ -233,7 +235,7 @@ target_include_directories(IkarosStudio PRIVATE src)
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_VERSION>"
-    JUCE_USE_CURL=0
+    JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
@@ -243,6 +245,13 @@ target_compile_definitions(IkarosStudio PRIVATE
 
 # The version, as the engine records it in saved sessions.
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+
+# Where the "More Sounds" window gets its list of downloadable sound packs
+# (see src/engine/PackStore.h). Until the packs are hosted, a local test
+# index made by tools/make_pack.py. A web address or a file path.
+set(IKAROS_PACK_INDEX_URL "${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json"
+    CACHE STRING "The sound pack index the app downloads packs from")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_PACK_INDEX_URL}")
 
 target_link_libraries(IkarosStudio
     PRIVATE
@@ -255,6 +264,7 @@ target_link_libraries(IkarosStudio
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
@@ -345,7 +355,9 @@ if(IKAROS_BUILD_TESTS)
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         IKAROS_VERSION="${PROJECT_VERSION}"
-        IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
+        IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")
 
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
@@ -364,6 +376,7 @@ if(IKAROS_BUILD_TESTS)
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_recommended_config_flags)
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")

@@ -52,7 +52,19 @@ public:
                 engine.getTracks().effects().showPluginWindow (selection.getTrack(), instrument->id);
         };
         addChildComponent (openWindowButton);
+
+        downloadButton.setColours (IconButton::accentColours());
+        downloadButton.setFont (fonts::uiSemiBold (13.0f));
+        downloadButton.onClick = [this]
+        {
+            if (instrument.has_value() && onDownloadPack)
+                onDownloadPack (instrument->missingPackId);
+        };
+        addChildComponent (downloadButton);
     }
+
+    /** The Download button on a track whose sound pack isn't installed. */
+    std::function<void (const juce::String& packId)> onDownloadPack;
 
     void refresh (const std::optional<TrackInfo>& track, bool showDetails)
     {
@@ -78,6 +90,7 @@ public:
             k->setVisible (hasKnobs);
 
         openWindowButton.setVisible (! hasKnobs && instrument.has_value() && instrument->isThirdParty && ! instrument->missing);
+        downloadButton.setVisible (! hasKnobs && instrument.has_value() && instrument->missingPackId.isNotEmpty());
 
         for (int i = 0; i < knobs.size() && i < (int) controls.size(); ++i)
         {
@@ -114,6 +127,11 @@ public:
 
             if (! instrument.has_value())
                 message = "Pick a sound in the library on the left.";
+            else if (instrument->missingPackId.isNotEmpty())
+                message = "This sound comes from " + (instrument->missingPackName.isNotEmpty() ? "the \"" + instrument->missingPackName + "\""
+                                                                                              : juce::String ("a"))
+                          + " sound pack, which isn't installed on this computer. Download it to hear this track again, "
+                          "or pick another sound in the library.";
             else if (instrument->missing)
                 message = instrument->name + " isn't installed on this computer. Its settings are kept, so it will "
                           "work again once it's installed. Or pick another sound in the library.";
@@ -123,7 +141,9 @@ public:
                 message = "This instrument has no settings here. Shape its sound with effects under "
                           "Plug-ins on the left, or pick another sound in the library.";
 
-            g.drawFittedText (message, text.withTrimmedBottom (openWindowButton.isVisible() ? 40 : 0),
+            // (The Download button sits at the top right, so the message keeps the full height beside it.)
+            g.drawFittedText (message, text.withTrimmedBottom (openWindowButton.isVisible() ? 40 : 0)
+                                           .withTrimmedRight (downloadButton.isVisible() ? 170 : 0),
                               juce::Justification::topLeft, 3, 1.0f);
         }
 
@@ -184,6 +204,7 @@ public:
         // don't stretch a few lines of text across the whole window).
         cardArea = top.withWidth (juce::jmin (top.getWidth(), 640, tileWidth * knobs.size() + gap * (knobs.size() - 1)));
         openWindowButton.setBounds (cardArea.reduced (20, 14).removeFromBottom (32).removeFromLeft (190));
+        downloadButton.setBounds (cardArea.reduced (20, 14).removeFromTop (32).removeFromRight (150));
 
         for (auto* k : knobs)
         {
@@ -210,6 +231,7 @@ private:
     std::optional<PluginSlot> instrument;
     juce::String soundName;
     IconButton openWindowButton { "Open plug-in window", Icon::openWindow, "Open Plug-in Window" };
+    IconButton downloadButton { "Download the sound pack", std::nullopt, "Download Pack" };
     juce::Rectangle<int> detailsArea, cardArea;
 
     void refreshKnobText()
@@ -302,6 +324,11 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addChildComponent (effectViewport);
 
     soundPage = std::make_unique<SoundPage> (engine, selection);
+    soundPage->onDownloadPack = [this] (const juce::String& packId)
+    {
+        if (onDownloadPackRequested)
+            onDownloadPackRequested (packId);
+    };
     addAndMakeVisible (*soundPage);
     masterPage = std::make_unique<MasterPage> (engine);
     addChildComponent (*masterPage);
