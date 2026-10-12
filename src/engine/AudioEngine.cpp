@@ -2,6 +2,7 @@
 #include "engine/AudioPreview.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
+#include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
@@ -194,6 +195,10 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // Our own instrument for SFZ sounds, next to Tracktion's built-in
         // ones, so sessions can create it (and load it back) by type name.
         engine.getPluginManager().createBuiltInType<SfzPlugin>();
+
+        // The hidden plugins behind sampled instruments' Sound tab knobs.
+        engine.getPluginManager().createBuiltInType<SoundShaperPlugin>();
+        engine.getPluginManager().createBuiltInType<TransposePlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]

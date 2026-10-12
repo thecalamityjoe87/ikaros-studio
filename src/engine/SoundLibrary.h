@@ -51,7 +51,9 @@ namespace ikaros
         { "name": "Tone", "control": "tone", "default": 0.5 }
       where control is "tone", "room", "drive", "width", "tune", or (SFZ
       instruments) "cc" with "cc": <controller the SFZ maps, 0-127>.
-      Without valid knobs, the category's defaults are used.
+      Without valid knobs, the category's defaults are used (see
+      getDefaultKnobs). What each control does: see SoundShaperPlugin
+      ("tune" moves notes by up to 12 semitones either way).
 
       An instrument is identified by its pack's id and its folder name, so
       folder names stay the same from one pack version to the next.
@@ -149,6 +151,15 @@ public:
     };
 
     const SampledInstrument* findSampledInstrument (const juce::String& id) const;
+
+    /** The knobs an instrument's Sound tab shows: its own from
+        instrument.json, or else its category's defaults. */
+    static std::vector<KnobMapping> getKnobsFor (const SampledInstrument&);
+
+    /** A category's default knobs ("Drums", "Bass", ...; anything else gets
+        a general set). They only use controls every sampled instrument has,
+        never "cc". */
+    static std::vector<KnobMapping> getDefaultKnobs (const juce::String& category);
 
     /** Like findSampledInstrument, but also understands ids saved by older
         versions ("sampler:<pack folder name>/<instrument>"). */

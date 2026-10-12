@@ -150,6 +150,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
+    src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp

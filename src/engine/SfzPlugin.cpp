@@ -9,6 +9,11 @@ namespace ikaros
 const char* SfzPlugin::xmlTypeName = "ikarosSfz";
 const juce::Identifier SfzPlugin::sfzFileProp ("sfzFile");
 
+juce::Identifier SfzPlugin::ccProperty (int controllerNumber)
+{
+    return juce::Identifier ("cc" + juce::String (controllerNumber));
+}
+
 //==============================================================================
 // Loads SFZ files on a thread of its own, and deletes synths the audio thread
 // has finished with. It wakes up when asked to load, and every 50 ms anyway
@@ -89,6 +94,7 @@ private:
 //==============================================================================
 SfzPlugin::SfzPlugin (te::PluginCreationInfo info) : te::Plugin (info)
 {
+    readCcValues();
     loader = std::make_unique<Loader> (*this);
     requestLoad();
 }
@@ -120,6 +126,10 @@ void SfzPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identi
     if (v == state && id == sfzFileProp)
         requestLoad();
 
+    // A knob turned (or put back by an undo).
+    if (v == state && id.toString().startsWith ("cc"))
+        readCcValues();
+
     te::Plugin::valueTreePropertyChanged (v, id);
 }
 
@@ -127,6 +137,32 @@ void SfzPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v)
 {
     if (v.hasProperty (sfzFileProp))
         state.setProperty (sfzFileProp, v.getProperty (sfzFileProp), getUndoManager());
+
+    for (int cc = 0; cc < (int) ccValues.size(); ++cc)
+        if (v.hasProperty (ccProperty (cc)))
+            state.setProperty (ccProperty (cc), v.getProperty (ccProperty (cc)), getUndoManager());
+}
+
+void SfzPlugin::readCcValues()
+{
+    for (int cc = 0; cc < (int) ccValues.size(); ++cc)
+    {
+        const auto& value = state.getProperty (ccProperty (cc));
+        ccValues[(size_t) cc] = value.isVoid() ? -1.0f : juce::jlimit (0.0f, 1.0f, (float) value);
+    }
+
+    ccValuesChanged = true;
+}
+
+void SfzPlugin::sendCcValues()
+{
+    for (int cc = 0; cc < (int) ccValues.size(); ++cc)
+    {
+        const float value = ccValues[(size_t) cc].load();
+
+        if (value >= 0.0f)
+            active->hdcc (0, cc, value);    // "high definition" CC: 0..1 rather than 0..127
+    }
 }
 
 //==============================================================================
@@ -146,7 +182,8 @@ void SfzPlugin::initialise (const te::PluginInitialisationInfo& info)
         requestLoad();
     }
 
-    takeIncomingSynth();
+    if (takeIncomingSynth())
+        ccValuesChanged = true;    // the new synth gets the knobs' values on the first block
 }
 
 void SfzPlugin::deinitialise()
@@ -161,18 +198,21 @@ void SfzPlugin::reset()
         active->allSoundOff();
 }
 
-void SfzPlugin::takeIncomingSynth()
+bool SfzPlugin::takeIncomingSynth()
 {
     // Only swap when the loader has deleted the last synth we gave back, so
     // there's never more than one waiting to be deleted.
     if (outgoing.load() != nullptr)
-        return;
+        return false;
 
     if (auto* next = incoming.exchange (nullptr))
     {
         outgoing.store (active);   // the loader deletes it (nullptr the first time)
         active = next;
+        return true;
     }
+
+    return false;
 }
 
 //==============================================================================
@@ -181,7 +221,7 @@ void SfzPlugin::applyToBuffer (const te::PluginRenderContext& fc)
     if (fc.destBuffer == nullptr)
         return;
 
-    takeIncomingSynth();
+    const bool newSynth = takeIncomingSynth();
 
     auto& dest = *fc.destBuffer;
     const int start = fc.bufferStartSample;
@@ -193,6 +233,12 @@ void SfzPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 
     if (active == nullptr)
         return;
+
+    // The knobs' controller values: a new synth needs all of them; otherwise
+    // only send them when one has changed. (exchange reads the flag and
+    // clears it in one step, so a change made meanwhile isn't lost.)
+    if (ccValuesChanged.exchange (false) || newSynth)
+        sendCcValues();
 
     auto* midi = fc.bufferForMidiMessages;
 

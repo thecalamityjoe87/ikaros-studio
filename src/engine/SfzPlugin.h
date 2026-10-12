@@ -1,6 +1,7 @@
 #pragma once
 
 #include <tracktion_engine/tracktion_engine.h>
+#include <array>
 #include <atomic>
 
 // sfizz's synth class, declared here so this header doesn't pull in all of sfizz.
@@ -17,7 +18,9 @@ namespace ikaros
     simple instruments described by key zones.
 
     The SFZ file to play is a property of the plugin's state, so it's saved
-    with the session and undo can change it back.
+    with the session and undo can change it back. So are the values of the
+    MIDI controllers the Sound tab's "cc" knobs set (see ccProperty): they're
+    sent to sfizz whenever they change, and again to each newly loaded synth.
 
     Loading happens on a background thread so neither the UI nor the audio
     stops for it. sfizz can't load while it's playing, so a new sound is
@@ -34,6 +37,10 @@ public:
 
     static const char* xmlTypeName;               // "ikarosSfz", the type stored in sessions
     static const juce::Identifier sfzFileProp;    // the state property holding the .sfz file's path
+
+    /** The state property holding a MIDI controller's value (0..1), e.g.
+        "cc72". A controller without one is left at the SFZ file's default. */
+    static juce::Identifier ccProperty (int controllerNumber);
 
     /** The .sfz file this instrument plays. */
     juce::File getSfzFile() const;
@@ -91,8 +98,15 @@ private:
 
     juce::AudioBuffer<float> scratch;             // sfizz renders here, then it's added to the track
 
+    // The controller values from our state (-1 = not set), for the audio
+    // thread, and a flag that says they've changed since it last sent them.
+    std::array<std::atomic<float>, 128> ccValues;
+    std::atomic<bool> ccValuesChanged { false };
+
     void requestLoad();
-    void takeIncomingSynth();
+    bool takeIncomingSynth();     // true if a new synth was swapped in
+    void readCcValues();
+    void sendCcValues();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SfzPlugin)
 };

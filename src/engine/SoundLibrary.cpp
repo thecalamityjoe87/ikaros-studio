@@ -294,6 +294,39 @@ std::vector<SoundLibrary::KnobMapping> SoundLibrary::readKnobs (const juce::var&
     return knobs;
 }
 
+std::vector<SoundLibrary::KnobMapping> SoundLibrary::getKnobsFor (const SampledInstrument& instrument)
+{
+    return instrument.knobs.size() == numKnobs ? instrument.knobs : getDefaultKnobs (instrument.info.category);
+}
+
+std::vector<SoundLibrary::KnobMapping> SoundLibrary::getDefaultKnobs (const juce::String& category)
+{
+    // Every set uses each of the five controls once, in the order that
+    // matters most for that kind of instrument. The defaults are neutral
+    // (see SoundShaperPlugin), apart from a little room.
+    const KnobMapping tone  { "Tone",  "tone",  -1, 0.5f };
+    const KnobMapping drive { "Drive", "drive", -1, 0.0f };
+    const KnobMapping width { "Width", "width", -1, 0.5f };
+    const KnobMapping pitch { "Pitch", "tune",  -1, 0.5f };
+
+    auto room = [] (float amount) { return KnobMapping { "Room", "room", -1, amount }; };
+
+    if (category == "Drums")
+        return { pitch, tone, { "Crunch", "drive", -1, 0.0f }, width, room (0.1f) };
+
+    if (category == "Bass")
+        return { tone, drive, pitch, width, room (0.0f) };
+
+    if (category == "Guitar")
+        return { tone, drive, width, room (0.2f), pitch };
+
+    if (category == "Strings")
+        return { tone, width, room (0.3f), pitch, drive };
+
+    // Keyboards, and anything else.
+    return { tone, width, room (0.2f), drive, pitch };
+}
+
 void SoundLibrary::readPack (const juce::File& pack, bool bundled)
 {
     auto packInfo = readPackInfo (pack, bundled);

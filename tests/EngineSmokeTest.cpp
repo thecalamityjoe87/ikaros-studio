@@ -706,8 +706,9 @@ int main (int argc, char* argv[])
             pumpMessages();
             check (tracks.getTrack (t2)->name == "Electronic Kit" && tracks.getTrack (t2)->category == "Drums",
                    "a track with the app's name takes the sound's name");
-            check (effects.getInstrument (t2)->name == "Sampler" && effects.getSoundControls (t2).empty(),
-                   "sampled instruments have no synth knobs");
+            const auto kitKnobs = effects.getSoundControls (t2);
+            check (effects.getInstrument (t2)->name == "Sampler" && kitKnobs.size() == 5 && kitKnobs[0].name == "Pitch",
+                   "a sampled kit gets the Drums knobs (Pitch first)");
             check (engine.getUndoDescription() == "Change Sound", "it's one named undo step");
             engine.undo();
             pumpMessages();
@@ -1220,6 +1221,120 @@ int main (int argc, char* argv[])
 
             check (tracks.effects().getSoundId (st) == sfzSound && engine.renderPeak (0.0, 1.5) > 0.05f,
                    "an SFZ instrument survives save and reopen, and still plays");
+        }
+
+        std::cout << "Sound knobs for sampled instruments\n";
+        {
+            auto& effects = tracks.effects();
+            engine.newSession();
+            pumpMessages();
+            auto kt = tracks.getTracks().front().id;
+
+            // One short middle C (a quarter of a beat), then silence.
+            auto oneShortNote = [&] (TrackId track)
+            {
+                auto region = tracks.regions().createChordRegion (track, 0.0);
+                pumpMessages();
+                std::vector<NoteId> ids;
+
+                for (auto& n : tracks.regions().getRegion (region)->notes)
+                    ids.push_back (n.id);
+
+                tracks.notes().deleteNotes (region, ids);
+                tracks.notes().addNote (region, { 60, 0.0, 0.25, 100 });
+                pumpMessages();
+            };
+
+            check (effects.setSound (kt, "sampler:ikaros-studio.basics/Soft Piano"), "(a sampled piano)");
+            pumpMessages();
+            auto knobs = effects.getSoundControls (kt);
+            check (knobs.size() == 5 && knobs[0].name == "Tone" && knobs[2].name == "Room"
+                     && std::abs (knobs[2].value - 0.2f) < 0.001f && knobs[4].name == "Pitch" && knobs[4].valueText == "0",
+                   "a sampled instrument without knobs of its own gets its category's five, at their defaults");
+            check (effects.getEffectChain (kt).empty(), "the plugins behind the knobs aren't in the effects list");
+
+            oneShortNote (kt);
+            const int room = 2, pitch = 4;
+
+            engine.beginUndoStep ("Room");
+            effects.setSoundControl (kt, room, 0.0f);
+            pumpMessages();
+            // (renderPeak renders only the range it's given, after a short
+            // pre-roll, so the tail is measured close behind the note.)
+            const auto dryTail = engine.renderPeak (0.5, 1.0);
+            engine.beginUndoStep ("Room");
+            effects.setSoundControl (kt, room, 1.0f);
+            pumpMessages();
+            const auto wetTail = engine.renderPeak (0.5, 1.0);
+            std::cout << "  (tail after the note: dry " << dryTail << ", room " << wetTail << ")\n";
+            check (wetTail > juce::jmax (0.01f, dryTail * 4.0f), "Room adds a reverb tail to a sampled instrument");
+
+            engine.undo();
+            pumpMessages();
+            check (effects.getSoundControls (kt)[room].value == 0.0f, "undo puts a knob back");
+            engine.redo();
+            pumpMessages();
+
+            engine.beginUndoStep ("Pitch");
+            effects.setSoundControl (kt, pitch, 0.74f);
+            pumpMessages();
+            check (effects.getSoundControls (kt)[pitch].valueText == "+6", "Pitch moves in whole semitones");
+
+            // An SFZ instrument's "cc" knob: Release (cc72) lets a short note ring on.
+            auto st = tracks.addInstrumentTrack();
+            pumpMessages();
+            check (effects.setSound (st, "sampler:ikaros-studio.test/Test Keys"), "(the SFZ test instrument)");
+
+            for (int i = 0; i < 100 && ! effects.isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            auto sfzKnobs = effects.getSoundControls (st);
+            check (sfzKnobs.size() == 5 && sfzKnobs[1].name == "Attack" && sfzKnobs[2].name == "Release"
+                     && std::abs (sfzKnobs[2].value - 0.3f) < 0.001f,
+                   "an instrument's own knobs from instrument.json, at their defaults");
+
+            tracks.setMute (kt, true);    // only the SFZ track sounds from here on
+            oneShortNote (st);
+            engine.beginUndoStep ("Release");
+            effects.setSoundControl (st, 2, 0.0f);
+            pumpMessages();
+            const auto shortRelease = engine.renderPeak (0.6, 0.85);
+            engine.beginUndoStep ("Release");
+            effects.setSoundControl (st, 2, 0.9f);
+            pumpMessages();
+            const auto longRelease = engine.renderPeak (0.6, 0.85);
+            std::cout << "  (after the note: release 0 " << shortRelease << ", release 0.9 " << longRelease << ")\n";
+            check (longRelease > shortRelease * 3.0f, "a cc knob drives the SFZ file's controller");
+
+            // Everything is saved with the session.
+            auto knobSession = dir.getChildFile ("Knobs");
+            check (engine.saveSessionAs (knobSession), "(save)");
+            check (engine.openSession (AudioEngine::getSessionFileFor (knobSession)), "(reopen)");
+            pumpMessages();
+            kt = tracks.getTracks()[0].id;
+            st = tracks.getTracks()[1].id;
+            knobs = effects.getSoundControls (kt);
+            sfzKnobs = effects.getSoundControls (st);
+            check (knobs.size() == 5 && knobs[room].value == 1.0f && knobs[pitch].valueText == "+6"
+                     && sfzKnobs.size() == 5 && std::abs (sfzKnobs[2].value - 0.9f) < 0.001f,
+                   "sampled instruments' knobs survive save and reopen");
+
+            for (int i = 0; i < 100 && ! effects.isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            check (engine.renderPeak (0.6, 0.85) > shortRelease * 3.0f, "and still sound the same");
+
+            // A new sound takes its own knobs, and the old hidden plugins go.
+            check (effects.setSound (kt, "sampler:ikaros-studio.basics/Electronic Kit"), "(a kit instead)");
+            pumpMessages();
+            knobs = effects.getSoundControls (kt);
+            check (knobs[0].name == "Pitch" && knobs[0].valueText == "0" && knobs[4].name == "Room"
+                     && std::abs (knobs[4].value - 0.1f) < 0.001f, "a new sound starts from its own knob defaults");
+
+            check (effects.setSound (kt, SoundLibrary::defaultSoundId), "(back to the synth)");
+            pumpMessages();
+            check (effects.getSoundControls (kt).size() == 5 && effects.getSoundControls (kt)[0].name == "Brightness",
+                   "the synth keeps its own knobs");
         }
     }
 

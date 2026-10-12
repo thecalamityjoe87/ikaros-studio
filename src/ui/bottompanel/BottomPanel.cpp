@@ -70,8 +70,8 @@ public:
         instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
         soundName = track.has_value() ? track->soundName : juce::String();
 
-        // Only the built-in synth has the five knobs. Other instruments get a
-        // card explaining where their controls are.
+        // The built-in synth and sampled instruments have the five knobs.
+        // Plug-in instruments get a card with a button for their own window.
         hasKnobs = ! controls.empty();
 
         for (auto* k : knobs)
@@ -120,8 +120,8 @@ public:
             else if (instrument->isThirdParty)
                 message = "This plug-in has its own controls. Open its window to change the sound.";
             else
-                message = "A sampled instrument. Shape its sound with effects under Plug-ins on the left, "
-                          "or pick another sound in the library.";
+                message = "This instrument has no settings here. Shape its sound with effects under "
+                          "Plug-ins on the left, or pick another sound in the library.";
 
             g.drawFittedText (message, text.withTrimmedBottom (openWindowButton.isVisible() ? 40 : 0),
                               juce::Justification::topLeft, 3, 1.0f);

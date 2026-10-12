@@ -8,6 +8,7 @@
 // without multiple-definition link errors.
 
 #include "engine/EngineTypes.h"
+#include "engine/SoundShaper.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 
@@ -42,6 +43,13 @@ inline bool isAudioTrack (const te::AudioTrack& t)   { return t.state.getPropert
 inline bool isBusTrack (const te::Track& t)          { return t.state.hasProperty (busProp); }
 
 inline bool isInstrumentPlugin (te::Plugin& p)       { return p.isSynth() || (bool) p.state.getProperty (instrumentProp, false); }
+
+// The hidden plugins behind a sampled instrument's Sound tab knobs (see
+// SoundShaper.h). Like the EQ, they aren't among the user's effects.
+inline bool isSoundShapingPlugin (te::Plugin& p)
+{
+    return dynamic_cast<SoundShaperPlugin*> (&p) != nullptr || dynamic_cast<TransposePlugin*> (&p) != nullptr;
+}
 
 // The EQ tab's equaliser (see EqController). It's a plugin like any other,
 // but not one of the user's effects, so the effects list leaves it out.

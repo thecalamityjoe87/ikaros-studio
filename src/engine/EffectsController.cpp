@@ -4,6 +4,7 @@
 #include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
+#include <algorithm>
 #include <array>
 
 namespace te = tracktion;
@@ -49,12 +50,13 @@ namespace
 
     // Effects are every plugin on the track except the instrument, the
     // track's own volume/meter plugins (which Tracktion keeps at the end),
-    // the sends to the shared buses (see SendBuses) and the EQ tab's
-    // equaliser (see EqController).
+    // the sends to the shared buses (see SendBuses), the EQ tab's
+    // equaliser (see EqController) and the Sound tab's hidden plugins.
     bool isEffect (te::Plugin& p)
     {
         return ! isInstrumentPlugin (p)
             && ! isEqPlugin (p)
+            && ! isSoundShapingPlugin (p)
             && dynamic_cast<te::VolumeAndPanPlugin*> (&p) == nullptr
             && dynamic_cast<te::LevelMeterPlugin*> (&p) == nullptr
             && dynamic_cast<te::AuxSendPlugin*> (&p) == nullptr
@@ -79,6 +81,17 @@ namespace
 
         for (auto* p : t.pluginList)
             if (isInstrumentPlugin (*p))
+                result.push_back (p);
+
+        return result;
+    }
+
+    std::vector<te::Plugin*> soundShapingPluginsOn (te::AudioTrack& t)
+    {
+        std::vector<te::Plugin*> result;
+
+        for (auto* p : t.pluginList)
+            if (isSoundShapingPlugin (*p))
                 result.push_back (p);
 
         return result;
@@ -158,12 +171,19 @@ namespace
         return plugin;
     }
 
-    // Our sfizz instrument, playing an SFZ file (see SfzPlugin). It loads
-    // the file in the background, so this returns straight away.
-    te::Plugin::Ptr createSfzInstrument (te::Edit& edit, const juce::File& sfzFile)
+    // Our sfizz instrument, playing an SFZ file (see SfzPlugin), with the
+    // controllers its "cc" knobs set at their defaults. It loads the file in
+    // the background, so this returns straight away.
+    te::Plugin::Ptr createSfzInstrument (te::Edit& edit, const juce::File& sfzFile,
+                                         const std::vector<SoundLibrary::KnobMapping>& knobs)
     {
         auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, SfzPlugin::xmlTypeName);
         state.setProperty (SfzPlugin::sfzFileProp, sfzFile.getFullPathName(), nullptr);
+
+        for (auto& k : knobs)
+            if (k.control == "cc")
+                state.setProperty (SfzPlugin::ccProperty (k.cc), k.defaultValue, nullptr);
+
         return edit.getPluginCache().createNewPlugin (state);
     }
 
@@ -250,6 +270,162 @@ namespace
         { "Release",    "ampRelease" },
         { "Room",       "reverbMix" },
     }};
+
+    //==============================================================================
+    // Sampled instruments' knobs (see SoundLibrary::KnobMapping). They work
+    // three ways:
+    //   - "tone", "drive", "width", "room": parameters of a hidden
+    //     SoundShaperPlugin right after the instrument
+    //   - "tune": a hidden TransposePlugin just before it
+    //   - "cc": a MIDI controller the SFZ file maps, stored on the SfzPlugin
+    // Old sessions (and knobs nobody has turned) may not have the hidden
+    // plugins yet; they're added the first time a knob needs them.
+    using Knob = SoundLibrary::KnobMapping;
+
+    bool isShaperControl (const juce::String& control)    { return control != "tune" && control != "cc"; }
+
+    te::Plugin* sampledInstrumentOn (te::AudioTrack& t)
+    {
+        for (auto* p : t.pluginList)
+            if (dynamic_cast<te::SamplerPlugin*> (p) != nullptr || dynamic_cast<SfzPlugin*> (p) != nullptr)
+                return p;
+
+        return nullptr;
+    }
+
+    // The knobs a track's Sound tab shows, or none if it doesn't play a
+    // sampled instrument. An instrument that's no longer in the library
+    // (its pack was removed) gets its category's defaults.
+    std::vector<Knob> sampledKnobsFor (te::AudioTrack& t, const SoundLibrary& sounds)
+    {
+        if (sampledInstrumentOn (t) == nullptr)
+            return {};
+
+        if (auto* instrument = sounds.findSampledInstrument (t.state.getProperty (soundIdProp).toString()))
+            return SoundLibrary::getKnobsFor (*instrument);
+
+        return SoundLibrary::getDefaultKnobs (t.state.getProperty (categoryProp).toString());
+    }
+
+    // "tune" knobs move by whole semitones: 0..1 covers -12..+12, 0.5 = none.
+    float knobToSemitones (float v)
+    {
+        return (float) juce::roundToInt ((v - 0.5f) * 2.0f * TransposePlugin::maxSemitones);
+    }
+
+    float semitonesToKnob (float semitones)    { return 0.5f + semitones / (2.0f * TransposePlugin::maxSemitones); }
+
+    juce::String describeKnob (const Knob& knob, float v)
+    {
+        if (knob.control == "tune")
+        {
+            const auto semitones = juce::roundToInt (knobToSemitones (v));
+            return semitones > 0 ? "+" + juce::String (semitones) : juce::String (semitones);
+        }
+
+        if (knob.control == "width")
+            return percent (v * 2.0f);     // 100% = as recorded
+
+        return percent (v);
+    }
+
+    float getKnobValue (te::AudioTrack& t, const Knob& knob)
+    {
+        if (knob.control == "cc")
+        {
+            if (auto* sfz = t.pluginList.findFirstPluginOfType<SfzPlugin>())
+                return (float) sfz->state.getProperty (SfzPlugin::ccProperty (knob.cc), knob.defaultValue);
+
+            return knob.defaultValue;
+        }
+
+        if (knob.control == "tune")
+        {
+            if (auto* transpose = t.pluginList.findFirstPluginOfType<TransposePlugin>())
+                return semitonesToKnob (transpose->getSemitonesParameter()->getCurrentValue());
+
+            return 0.5f;
+        }
+
+        if (auto* shaper = t.pluginList.findFirstPluginOfType<SoundShaperPlugin>())
+            if (auto* param = shaper->getParameterFor (knob.control))
+                return param->getCurrentValue();
+
+        // No shaper yet: the sound is untouched, which is what the neutral value means.
+        return SoundShaperPlugin::neutralValueOf (knob.control);
+    }
+
+    // The hidden plugins a set of knobs needs, set to the knobs' defaults.
+    // The settings go into the state before the plugin is created, so they
+    // aren't separate undo steps.
+    te::Plugin::Ptr createShaper (te::Edit& edit, const std::vector<Knob>& knobs)
+    {
+        auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, SoundShaperPlugin::xmlTypeName);
+
+        for (auto& k : knobs)
+            if (isShaperControl (k.control))
+                state.setProperty (juce::Identifier (k.control), k.defaultValue, nullptr);
+
+        return edit.getPluginCache().createNewPlugin (state);
+    }
+
+    te::Plugin::Ptr createTranspose (te::Edit& edit, const std::vector<Knob>& knobs)
+    {
+        auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, TransposePlugin::xmlTypeName);
+
+        for (auto& k : knobs)
+            if (k.control == "tune")
+                state.setProperty (TransposePlugin::semitonesID, knobToSemitones (k.defaultValue), nullptr);
+
+        return edit.getPluginCache().createNewPlugin (state);
+    }
+
+    // Sets a knob, adding the hidden plugin it needs if it isn't there yet
+    // (inside the undo step the UI started).
+    void setKnobValue (te::AudioTrack& t, const Knob& knob, float v)
+    {
+        auto* instrument = sampledInstrumentOn (t);
+        auto& edit = t.edit;
+
+        if (instrument == nullptr)
+            return;
+
+        if (knob.control == "cc")
+        {
+            if (auto* sfz = dynamic_cast<SfzPlugin*> (instrument))
+                sfz->state.setProperty (SfzPlugin::ccProperty (knob.cc), v, &edit.getUndoManager());
+        }
+        else if (knob.control == "tune")
+        {
+            auto* transpose = t.pluginList.findFirstPluginOfType<TransposePlugin>();
+
+            if (transpose == nullptr)
+            {
+                auto created = createTranspose (edit, {});
+                t.pluginList.insertPlugin (created, t.pluginList.indexOf (instrument), nullptr);
+                transpose = dynamic_cast<TransposePlugin*> (created.get());
+            }
+
+            if (transpose != nullptr)
+                setParameterUndoably (*transpose, *transpose->getSemitonesParameter(),
+                                      TransposePlugin::semitonesID, knobToSemitones (v));
+        }
+        else
+        {
+            auto* shaper = t.pluginList.findFirstPluginOfType<SoundShaperPlugin>();
+
+            if (shaper == nullptr)
+            {
+                auto created = createShaper (edit, {});
+                t.pluginList.insertPlugin (created, t.pluginList.indexOf (instrument) + 1, nullptr);
+                shaper = dynamic_cast<SoundShaperPlugin*> (created.get());
+            }
+
+            if (shaper != nullptr)
+                if (auto* param = shaper->getParameterFor (knob.control))
+                    setParameterUndoably (*shaper, *param, juce::Identifier (knob.control), v);
+        }
+    }
 }
 
 //==============================================================================
@@ -264,10 +440,21 @@ std::vector<SoundControl> EffectsController::getSoundControls (TrackId id) const
     auto* t = findTrack (owner.getEdit(), id);
     auto* synth = t != nullptr ? findSynth (*t) : nullptr;
 
-    // The knobs control the built-in synth. Audio tracks, sampled instruments
-    // and plug-in instruments have none.
-    if (synth == nullptr)
+    if (t == nullptr)
         return result;
+
+    // A sampled instrument: the knobs its instrument.json (or its category) asks for.
+    if (synth == nullptr)
+    {
+        for (auto& knob : sampledKnobsFor (*t, owner.getSounds()))
+        {
+            const auto value = juce::jlimit (0.0f, 1.0f, getKnobValue (*t, knob));
+            result.push_back ({ knob.name, value, describeKnob (knob, value) });
+        }
+
+        // Audio tracks and plug-in instruments have none.
+        return result;
+    }
 
     for (auto& k : knobMappings)
     {
@@ -294,23 +481,38 @@ std::vector<SoundControl> EffectsController::getSoundControls (TrackId id) const
 
 void EffectsController::setSoundControl (TrackId id, int index, float value)
 {
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr)
+        return;
+
+    // A sampled instrument (or one with no knobs: then this does nothing).
+    if (findSynth (*t) == nullptr)
+    {
+        auto knobs = sampledKnobsFor (*t, owner.getSounds());
+
+        if (juce::isPositiveAndBelow (index, (int) knobs.size()))
+            setKnobValue (*t, knobs[(size_t) index], juce::jlimit (0.0f, 1.0f, value));
+
+        return;
+    }
+
     if (! juce::isPositiveAndBelow (index, (int) knobMappings.size()))
         return;
 
-    if (auto* t = findTrack (owner.getEdit(), id))
-        if (auto* synth = findSynth (*t))
-        {
-            if (auto param = synth->getAutomatableParameterByID (knobMappings[(size_t) index].paramID))
-            {
-                // valueRange maps 0..1 onto the parameter's own (possibly skewed) range.
-                auto raw = param->valueRange.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, value));
-                setParameterUndoably (*synth, *param, knobMappings[(size_t) index].paramID, raw);
+    // The built-in synth.
+    auto* synth = findSynth (*t);
 
-                // Some patches have the synth's reverb switched off; "Room" switches it on.
-                if (param == synth->reverbMix && raw > 0.0f && ! synth->reverbOnValue.get())
-                    synth->reverbOnValue = true;
-            }
-        }
+    if (auto param = synth->getAutomatableParameterByID (knobMappings[(size_t) index].paramID))
+    {
+        // valueRange maps 0..1 onto the parameter's own (possibly skewed) range.
+        auto raw = param->valueRange.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, value));
+        setParameterUndoably (*synth, *param, knobMappings[(size_t) index].paramID, raw);
+
+        // Some patches have the synth's reverb switched off; "Room" switches it on.
+        if (param == synth->reverbMix && raw > 0.0f && ! synth->reverbOnValue.get())
+            synth->reverbOnValue = true;
+    }
 }
 
 //==============================================================================
@@ -324,7 +526,7 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
         return false;
 
     // Make the new instrument first: if it can't be made, nothing changes.
-    te::Plugin::Ptr instrument;
+    te::Plugin::Ptr instrument, shaper, transpose;
     juce::String name, category, icon;
 
     if (auto* patch = SoundLibrary::findSynthPatch (soundId))
@@ -335,8 +537,17 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
     }
     else if (auto* sampled = owner.getSounds().findSampledInstrument (soundId))
     {
-        instrument = sampled->sfzFile.existsAsFile() ? createSfzInstrument (*edit, sampled->sfzFile)
+        const auto knobs = SoundLibrary::getKnobsFor (*sampled);
+        instrument = sampled->sfzFile.existsAsFile() ? createSfzInstrument (*edit, sampled->sfzFile, knobs)
                                                      : createSampler (*edit, *sampled);
+
+        // The Sound tab's knobs, starting at their defaults.
+        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return isShaperControl (k.control); }))
+            shaper = createShaper (*edit, knobs);
+
+        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return k.control == "tune"; }))
+            transpose = createTranspose (*edit, knobs);
+
         name = sampled->info.name;
         category = sampled->info.category;
         icon = sampled->info.icon;
@@ -371,10 +582,21 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
                                     : currentName == t->state.getProperty (soundNameProp).toString()
                                         || currentName.startsWith ("Instrument ");
 
+    // Out with the old instrument and its hidden knob plugins...
     for (auto* old : instrumentsOn (*t))
         old->removeFromParent();
 
+    for (auto* old : soundShapingPluginsOn (*t))
+        old->removeFromParent();
+
+    // ...and in with the new: [transpose] instrument [shaper], then the effects.
     t->pluginList.insertPlugin (instrument, 0, nullptr);
+
+    if (transpose != nullptr)
+        t->pluginList.insertPlugin (transpose, 0, nullptr);
+
+    if (shaper != nullptr)
+        t->pluginList.insertPlugin (shaper, t->pluginList.indexOf (instrument.get()) + 1, nullptr);
     t->state.setProperty (soundIdProp, soundId, um);
     t->state.setProperty (soundNameProp, name, um);
     t->state.setProperty (categoryProp, category, um);
