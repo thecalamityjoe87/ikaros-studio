@@ -20,9 +20,13 @@ class SoundLibrary;
                        "category": "Drums", "description": "...",
                        "author": "...", "license": "CC0-1.0",
                        "downloadSize": 52428800, "installedSize": 73400320,
-                       "url": "Drums-1.0.0.zip", "sha256": "<64 hex digits>" } ] }
+                       "url": "Drums-1.0.0.zip", "sha256": "<64 hex digits>" } ],
+          "collections": [ { "id": "starter", "name": "Starter Sounds", "description": "...",
+                             "packs": [ "ikaros-studio.drums", "..." ] } ] }
 
-    "url" may be relative to the index's own address. Each download is a zip
+    "url" may be relative to the index's own address. "collections" is
+    optional: sets of packs installed with one click. "starter" is the one a
+    new user is offered on first run (see starterCollectionId). Each download is a zip
     holding one pack folder (see SoundLibrary for what's in it).
     tools/make_pack.py makes the zip and its index entry.
 
@@ -81,6 +85,20 @@ public:
     /** True while a download is under way or waiting its turn. */
     bool isBusy() const;
 
+    //==============================================================================
+    // Collections
+
+    /** The collection offered on first run. */
+    static constexpr const char* starterCollectionId = "starter";
+
+    /** The index's collections (only packs it also lists). */
+    std::vector<StoreCollection> getCollections() const;
+    std::optional<StoreCollection> findCollection (const juce::String& id) const;
+
+    /** Downloads every pack in a collection that isn't installed or has an
+        update (several run at once, the rest wait their turn). */
+    void installCollection (const juce::String& id);
+
     /** Deletes an installed pack. Packs that come with the app can't be
         removed. Returns false if it couldn't. */
     bool remove (const juce::String& id);
@@ -93,6 +111,12 @@ private:
         juce::String sha256;       // lowercase hex
     };
 
+    struct CollectionListing
+    {
+        juce::String id, name, description;
+        std::vector<juce::String> packIds;
+    };
+
     class IndexJob;
     class InstallJob;
 
@@ -101,6 +125,7 @@ private:
     juce::File installFolder;
     IndexStatus indexStatus = IndexStatus::notLoaded;
     std::vector<Listing> listings;
+    std::vector<CollectionListing> collections;
 
     // Per-pack download state, keyed by pack id. Jobs update progress from
     // their thread, so it's guarded by the lock.
@@ -116,7 +141,7 @@ private:
     // reverse order), while what the jobs use still exists.
     juce::ThreadPool pool { juce::ThreadPoolOptions().withThreadName ("Pack store").withNumberOfThreads (3) };
 
-    void indexLoaded (std::vector<Listing>, bool ok);
+    void indexLoaded (std::vector<Listing>, std::vector<CollectionListing>, bool ok);
     void setDownload (const juce::String& id, StorePack::State, float progress, const juce::String& error = {});
     void downloadFinished (const juce::String& id, const juce::String& error);
     const Listing* findListing (const juce::String& id) const;

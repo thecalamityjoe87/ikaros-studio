@@ -262,6 +262,18 @@ struct StorePack
     juce::String error;            // why the last download failed, or empty
 };
 
+// A set of packs offered together (see PackStore), such as the starter
+// sounds a new user is offered on first run.
+struct StoreCollection
+{
+    juce::String id, name, description;
+    std::vector<juce::String> packIds;   // in the index's order
+    int packsToInstall = 0;              // not installed yet, or with an update
+    juce::int64 downloadSize = 0;        // what installing them all would download, in bytes
+    int packsDownloading = 0;            // downloading or installing right now
+    bool allInstalled = false;           // every pack installed and up to date
+};
+
 // A sound in the library: something an instrument track can play.
 struct SoundInfo
 {

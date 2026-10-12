@@ -207,6 +207,11 @@ public:
     /** The library's sounds and loops. */
     SoundLibrary& getSounds() noexcept          { return *sounds; }
 
+    /** Small app settings that aren't part of a session (e.g. whether the
+        starter sounds were offered), kept with the engine's own settings. */
+    juce::var getAppSetting (const juce::String& name, const juce::var& defaultValue = {}) const;
+    void setAppSetting (const juce::String& name, const juce::var& value);
+
     /** Downloadable sound packs (the "More Sounds" window). After a pack is
         installed or removed, the library is rescanned, tracks that were
         waiting for it start playing, and listeners hear about it. */

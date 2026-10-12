@@ -11,6 +11,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
+#include <cstdlib>                                    // setenv
 #include <iostream>
 
 using namespace ikaros;
@@ -77,6 +78,15 @@ int main (int argc, char* argv[])
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("IkarosSmokeTest");
     dir.deleteRecursively();
     dir.createDirectory();
+
+    // Never read or change the user's own sound packs: the library's user
+    // Sounds folder is one of the test's (see SoundLibrary::getUserSoundsFolder).
+    const auto userSounds = dir.getChildFile ("User Sounds").getFullPathName();
+   #if JUCE_WINDOWS
+    _putenv_s ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8());
+   #else
+    setenv ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8(), 1);
+   #endif
     auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke.iksession
 
     {
@@ -708,8 +718,9 @@ int main (int argc, char* argv[])
             check (tracks.getTrack (t2)->name == "Electronic Kit" && tracks.getTrack (t2)->category == "Drums",
                    "a track with the app's name takes the sound's name");
             const auto kitKnobs = effects.getSoundControls (t2);
-            check (effects.getInstrument (t2)->name == "Sampler" && kitKnobs.size() == 5 && kitKnobs[0].name == "Pitch",
-                   "a sampled kit gets the Drums knobs (Pitch first)");
+            check (effects.getInstrument (t2)->name == "Sampler" && kitKnobs.size() == 4 && kitKnobs[0].name == "Tone"
+                     && std::none_of (kitKnobs.begin(), kitKnobs.end(), [] (const SoundControl& k) { return k.name == "Pitch"; }),
+                   "a sampled kit gets the Drums knobs: four, without Pitch (it would swap drums)");
             check (engine.getUndoDescription() == "Change Sound", "it's one named undo step");
             engine.undo();
             pumpMessages();
@@ -1329,13 +1340,58 @@ int main (int argc, char* argv[])
             check (effects.setSound (kt, "sampler:ikaros-studio.basics/Electronic Kit"), "(a kit instead)");
             pumpMessages();
             knobs = effects.getSoundControls (kt);
-            check (knobs[0].name == "Pitch" && knobs[0].valueText == "0" && knobs[4].name == "Room"
-                     && std::abs (knobs[4].value - 0.1f) < 0.001f, "a new sound starts from its own knob defaults");
+            check (knobs.size() == 4 && knobs[0].name == "Tone" && knobs[3].name == "Room"
+                     && std::abs (knobs[3].value - 0.1f) < 0.001f, "a new sound starts from its own knob defaults");
 
             check (effects.setSound (kt, SoundLibrary::defaultSoundId), "(back to the synth)");
             pumpMessages();
             check (effects.getSoundControls (kt).size() == 5 && effects.getSoundControls (kt)[0].name == "Brightness",
                    "the synth keeps its own knobs");
+        }
+
+        // Optional: IKAROS_CHECK_PACKS=<folder of packs> plays every
+        // instrument in them (e.g. tools/packs/build_packs.py's build folder).
+        if (auto packsToCheck = juce::SystemStats::getEnvironmentVariable ("IKAROS_CHECK_PACKS", {}); packsToCheck.isNotEmpty())
+        {
+            std::cout << "Checking the packs in " << packsToCheck << "\n";
+            auto& sounds = engine.getSounds();
+            sounds.addPackFolder (juce::File (packsToCheck));
+
+            for (auto& sound : std::vector<SoundInfo> (sounds.getSounds()))
+            {
+                auto pack = sounds.findPack (sound.packId);
+
+                if (! pack.has_value() || ! pack->folder.isAChildOf (juce::File (packsToCheck)))
+                    continue;
+
+                engine.newSession();
+                pumpMessages();
+                auto t = tracks.getTracks().front().id;
+                const bool loaded = tracks.effects().setSound (t, sound.id);
+
+                for (int i = 0; i < 600 && ! tracks.effects().isInstrumentReady (t); ++i)
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+                // A kick and snare for kits, middle C (and a low and high note) otherwise.
+                auto r = tracks.regions().createChordRegion (t, 0.0);
+                pumpMessages();
+                std::vector<NoteId> chord;
+
+                for (auto& n : tracks.regions().getRegion (r)->notes)
+                    chord.push_back (n.id);
+
+                tracks.notes().deleteNotes (r, chord);
+
+                for (int note : sound.category == "Drums" ? std::vector<int> { 36, 38, 42 } : std::vector<int> { 36, 60, 84 })
+                    tracks.notes().addNote (r, { note, 0.0, 2.0, 100 });
+
+                pumpMessages();
+                const auto peak = engine.renderPeak (0.0, 2.0);
+                std::cout << "  " << sound.name << " (" << pack->name << "): peak " << peak
+                          << " (" << juce::Decibels::toString (juce::Decibels::gainToDecibels (peak)) << "), "
+                          << tracks.effects().getSoundControls (t).size() << " knobs\n";
+                check (loaded && peak > 0.01f && peak < 1.5f, "  plays at a sensible level");
+            }
         }
 
         std::cout << "Downloadable sound packs\n";
@@ -1452,6 +1508,22 @@ int main (int argc, char* argv[])
             slot = effects.getInstrument (pt);
             check (slot && ! slot->missing && effects.getSoundControls (pt).size() == 5 && engine.renderPeak (0.0, 1.0) > 0.05f,
                    "installing the pack brings the open session's track back");
+
+            // The starter collection: both test packs, installed with one click.
+            auto starter = store.findCollection (PackStore::starterCollectionId);
+            check (starter && starter->name == "Starter Sounds" && starter->packIds.size() == 2
+                     && starter->packsToInstall == 1 && starter->downloadSize > 0 && ! starter->allInstalled,
+                   "the index's starter collection lists its packs, and what's left to download");
+            store.installCollection (PackStore::starterCollectionId);
+            waitForStore();
+            starter = store.findCollection (PackStore::starterCollectionId);
+            check (starter && starter->allInstalled && starter->packsToInstall == 0
+                     && sounds.findPack ("ikaros-studio.store-bass").has_value(),
+                   "installing a collection installs the packs it's missing");
+
+            engine.setAppSetting ("smokeTestSetting", true);
+            check ((bool) engine.getAppSetting ("smokeTestSetting", false) && ! (bool) engine.getAppSetting ("noSuchSetting", false),
+                   "app settings are kept");
         }
     }
 

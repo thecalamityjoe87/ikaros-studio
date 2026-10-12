@@ -81,14 +81,34 @@ public:
             }
         }
 
+        // Collections, keeping only packs the index lists (and could install).
+        std::vector<CollectionListing> collections;
+
+        if (auto* list = json["collections"].getArray())
+        {
+            for (auto& c : *list)
+            {
+                CollectionListing collection { c["id"].toString(), c["name"].toString(), c["description"].toString(), {} };
+
+                if (auto* ids = c["packs"].getArray())
+                    for (auto& id : *ids)
+                        if (std::any_of (listings.begin(), listings.end(), [&] (const Listing& l) { return l.info.id == id.toString(); }))
+                            collection.packIds.push_back (id.toString());
+
+                if (collection.id.isNotEmpty() && collection.name.isNotEmpty() && ! collection.packIds.empty())
+                    collections.push_back (std::move (collection));
+            }
+        }
+
         const bool loaded = ok && json["packs"].isArray();
 
         // Back to the message thread with the result. The WeakReference
         // becomes null if the store has been deleted meanwhile.
-        juce::MessageManager::callAsync ([store = store, listings = std::move (listings), loaded]() mutable
+        juce::MessageManager::callAsync ([store = store, listings = std::move (listings),
+                                          collections = std::move (collections), loaded]() mutable
         {
             if (store != nullptr)
-                store->indexLoaded (std::move (listings), loaded);
+                store->indexLoaded (std::move (listings), std::move (collections), loaded);
         });
 
         return jobHasFinished;
@@ -140,7 +160,9 @@ private:
     // Returns an error to show the user, "cancelled", or empty on success.
     juce::String install()
     {
-        if (! installFolder.createDirectory())
+        // Two downloads can start together on a fresh install: if the other
+        // one created the folder first, that's fine too.
+        if (! installFolder.createDirectory() && ! installFolder.isDirectory())
             return "Couldn't create the Sounds folder (" + installFolder.getFullPathName() + ").";
 
         // Hidden names, so the library never mistakes these for packs.
@@ -322,11 +344,69 @@ void PackStore::refreshIndex()
     sendChangeMessage();
 }
 
-void PackStore::indexLoaded (std::vector<Listing> newListings, bool ok)
+void PackStore::indexLoaded (std::vector<Listing> newListings, std::vector<CollectionListing> newCollections, bool ok)
 {
     indexStatus = ok ? IndexStatus::loaded : IndexStatus::unavailable;
     listings = std::move (newListings);
+    collections = std::move (newCollections);
     sendChangeMessage();
+}
+
+//==============================================================================
+std::vector<StoreCollection> PackStore::getCollections() const
+{
+    std::vector<StoreCollection> result;
+    const auto packs = getPacks();
+
+    for (auto& c : collections)
+    {
+        StoreCollection info { c.id, c.name, c.description, c.packIds };
+
+        for (auto& id : c.packIds)
+        {
+            auto p = std::find_if (packs.begin(), packs.end(), [&] (const StorePack& sp) { return sp.id == id; });
+
+            if (p == packs.end())
+                continue;
+
+            if (p->state == StorePack::State::downloading || p->state == StorePack::State::installing)
+            {
+                ++info.packsDownloading;
+            }
+            else if (p->state == StorePack::State::notInstalled || p->state == StorePack::State::updateAvailable)
+            {
+                ++info.packsToInstall;
+                info.downloadSize += p->downloadSize;
+            }
+        }
+
+        info.allInstalled = info.packsToInstall == 0 && info.packsDownloading == 0;
+        result.push_back (std::move (info));
+    }
+
+    return result;
+}
+
+std::optional<StoreCollection> PackStore::findCollection (const juce::String& id) const
+{
+    for (auto& c : getCollections())
+        if (c.id == id)
+            return c;
+
+    return std::nullopt;
+}
+
+void PackStore::installCollection (const juce::String& id)
+{
+    auto collection = findCollection (id);
+
+    if (! collection.has_value())
+        return;
+
+    for (auto& packId : collection->packIds)
+        if (auto p = findPack (packId); p.has_value()
+             && (p->state == StorePack::State::notInstalled || p->state == StorePack::State::updateAvailable))
+            install (packId);
 }
 
 const PackStore::Listing* PackStore::findListing (const juce::String& id) const

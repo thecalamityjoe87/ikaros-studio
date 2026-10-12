@@ -103,7 +103,8 @@ public:
     /** The sound new instrument tracks start with. */
     static const juce::String defaultSoundId;
 
-    /** Where users can put their own sound packs: Documents/Ikaros Studio/Sounds. */
+    /** Where users can put their own sound packs, and where downloaded ones
+        go: Documents/Ikaros Studio/Sounds (or IKAROS_USER_SOUNDS_DIR, if set). */
     static juce::File getUserSoundsFolder();
 
     /** The packs installed with the app (may not exist in odd setups). */
@@ -157,8 +158,8 @@ public:
     static std::vector<KnobMapping> getKnobsFor (const SampledInstrument&);
 
     /** A category's default knobs ("Drums", "Bass", ...; anything else gets
-        a general set). They only use controls every sampled instrument has,
-        never "cc". */
+        a general set): five, or four for drum kits (no Pitch). They only use
+        controls every sampled instrument has, never "cc". */
     static std::vector<KnobMapping> getDefaultKnobs (const juce::String& category);
 
     /** Like findSampledInstrument, but also understands ids saved by older

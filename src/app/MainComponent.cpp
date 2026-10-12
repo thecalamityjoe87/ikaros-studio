@@ -1,5 +1,6 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
+#include "ui/dialogs/AboutDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/library/MoreSoundsDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
@@ -76,13 +77,24 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     setSize (1440, 900);
 
     // Like GarageBand, start with the session chooser: recent sessions if
-    // there are any, otherwise the templates. (Async: the window isn't on
-    // screen yet.)
+    // there are any, otherwise the templates. On first run, offer the
+    // starter sounds first. (Async: the window isn't on screen yet.)
     juce::MessageManager::callAsync ([safeThis = SafePointer<MainComponent> (this)]
     {
-        if (safeThis != nullptr)
-            safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
-                                                                                      : SessionChooser::Page::recent);
+        if (safeThis == nullptr)
+            return;
+
+        auto showChooser = [safeThis]
+        {
+            if (safeThis != nullptr)
+                safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                                                          : SessionChooser::Page::recent);
+        };
+
+        if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+            MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+        else
+            showChooser();
     });
 }
 
@@ -110,7 +122,8 @@ void MainComponent::resized()
     // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
-             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr)
+             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
+             || dynamic_cast<AboutDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -1043,14 +1056,7 @@ void MainComponent::showAudioSettings()
 
 void MainComponent::showAbout()
 {
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                      .withIconType (juce::MessageBoxIconType::InfoIcon)
-                                      .withTitle ("Ikaros Studio")
-                                      .withMessage ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion()
-                                                    + "\n\nAn easy-first music studio.\nBuilt with JUCE and Tracktion Engine.")
-                                      .withButton ("OK")
-                                      .withAssociatedComponent (this),
-                                  nullptr);
+    AboutDialog::show (*this, engine);
 }
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)

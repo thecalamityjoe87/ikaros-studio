@@ -6,7 +6,9 @@
 makes dist/<pack id>-<version>.zip (the pack folder, zipped) and adds or
 updates the pack's entry in dist/index.json, with its download size, the
 size it takes once installed, and the SHA-256 the app checks after
-downloading. Upload the zip and index.json together. If the zips live
+downloading. With --collection, the packs are also added to that collection
+(e.g. "starter", the set new users are offered on first run). Upload the zip
+and index.json together. If the zips live
 somewhere else than the index, pass --base-url (otherwise each entry's url is
 just the zip's name, relative to the index).
 
@@ -67,6 +69,9 @@ def main():
     parser.add_argument("--out", type=Path, required=True, help="folder for the zips and index.json")
     parser.add_argument("--category", default="", help="the category shown in the store (e.g. Drums)")
     parser.add_argument("--base-url", default="", help="where the zips will be, if not next to the index")
+    parser.add_argument("--collection", help="also add the packs to this collection (e.g. starter)")
+    parser.add_argument("--collection-name", help="the collection's name, if it's new (e.g. \"Starter Sounds\")")
+    parser.add_argument("--collection-description", default="", help="the collection's description, if it's new")
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -78,6 +83,18 @@ def main():
         entry = package(pack, args.out, args.category, base_url)
         index["packs"] = [p for p in index["packs"] if p["id"] != entry["id"]] + [entry]
         print(f"{entry['name']} {entry['version']}: {entry['url']} ({entry['downloadSize']} bytes)")
+
+        if args.collection:
+            collections = index.setdefault("collections", [])
+            collection = next((c for c in collections if c["id"] == args.collection), None)
+
+            if collection is None:
+                collection = {"id": args.collection, "name": args.collection_name or args.collection.title(),
+                              "description": args.collection_description, "packs": []}
+                collections.append(collection)
+
+            if entry["id"] not in collection["packs"]:
+                collection["packs"].append(entry["id"])
 
     index["packs"].sort(key=lambda p: p["name"].lower())
     index_path.write_text(json.dumps(index, indent=4) + "\n", encoding="utf-8")

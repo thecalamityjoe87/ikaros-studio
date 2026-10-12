@@ -81,3 +81,26 @@ Sounds
   Ikaros Basics, the sound pack that comes with the app, is made from scratch
   by tools/generate_sounds.py. It contains no third-party samples, and it's
   released under CC0 1.0 (public domain): use the sounds however you like.
+
+
+Downloadable sound packs
+  These aren't part of the app: they're downloaded from More Sounds. Each pack
+  keeps its own LICENSE.txt with the original license and what was changed
+  (only the samples its instruments play are kept, WAV samples are converted
+  to FLAC, and some MIDI controllers are added for the Sound tab's knobs).
+  They're built by tools/packs/build_packs.py.
+
+  Piano            Upright Piano KW, by Gonzalo and Roberto (FreePats)
+                   CC0 1.0. https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html
+  Grand Piano      Salamander Grand Piano, by Alexander Holm
+                   CC BY 3.0 (credit required). https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html
+  Electric Pianos  Yamaha CP80, Hohner Pianet T and Wurlitzer EP200 samples, by Greg Sullivan
+                   CC BY 3.0 (credit required). https://github.com/sfzinstruments/GregSullivan.E-Pianos
+  Drums            Big Rusty Drums, by Karoryfer Samples
+                   CC0 1.0. https://shop.karoryfer.com/pages/free-big-rusty-drums
+  Bass             Growlybass, by Karoryfer Samples
+                   CC0 1.0. https://github.com/sfzinstruments/karoryfer.growlybass
+  Guitar           Shinyguitar, by Karoryfer Samples (played and mapped by D. Smolken)
+                   CC0 1.0. https://github.com/sfzinstruments/karoryfer.shinyguitar
+  Strings          VSCO 2 Community Edition, by Versilian Studios (Sam Gossner)
+                   CC0 1.0. https://github.com/sgossner/VSCO-2-CE

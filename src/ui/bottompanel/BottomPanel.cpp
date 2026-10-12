@@ -86,8 +86,11 @@ public:
         // Plug-in instruments get a card with a button for their own window.
         hasKnobs = ! controls.empty();
 
-        for (auto* k : knobs)
-            k->setVisible (hasKnobs);
+        // Most sounds have five knobs; some (drum kits) have fewer.
+        for (int i = 0; i < knobs.size(); ++i)
+            knobs[i]->setVisible (hasKnobs && i < (int) controls.size());
+
+        shownKnobs = hasKnobs ? juce::jmin (knobs.size(), (int) controls.size()) : knobs.size();
 
         openWindowButton.setVisible (! hasKnobs && instrument.has_value() && instrument->isThirdParty && ! instrument->missing);
         downloadButton.setVisible (! hasKnobs && instrument.has_value() && instrument->missingPackId.isNotEmpty());
@@ -198,16 +201,19 @@ public:
         // tile stops growing.
         auto top = r.withHeight (juce::jlimit (Knob::preferredHeight, 160, r.getHeight()));
         const int rowWidth = top.getWidth() - (detailsVisible ? detailsWidth + 20 : 0);
-        const int tileWidth = juce::jlimit (Knob::preferredWidth, 260, (rowWidth - gap * (knobs.size() - 1)) / knobs.size());
+        const int tileWidth = juce::jlimit (Knob::preferredWidth, 260, (rowWidth - gap * (shownKnobs - 1)) / shownKnobs);
 
         // The instrument and audio-track cards take the knobs' place (but
         // don't stretch a few lines of text across the whole window).
-        cardArea = top.withWidth (juce::jmin (top.getWidth(), 640, tileWidth * knobs.size() + gap * (knobs.size() - 1)));
+        cardArea = top.withWidth (juce::jmin (top.getWidth(), 640, tileWidth * shownKnobs + gap * (shownKnobs - 1)));
         openWindowButton.setBounds (cardArea.reduced (20, 14).removeFromBottom (32).removeFromLeft (190));
         downloadButton.setBounds (cardArea.reduced (20, 14).removeFromTop (32).removeFromRight (150));
 
         for (auto* k : knobs)
         {
+            if (! k->isVisible())
+                continue;
+
             k->setBounds (top.removeFromLeft (tileWidth));
             top.removeFromLeft (gap);
         }
@@ -228,6 +234,7 @@ private:
     bool detailsVisible = false;
     bool isAudioTrack = false;
     bool hasKnobs = true;
+    int shownKnobs = 5;   // how many knob tiles are laid out (the card takes the same width)
     std::optional<PluginSlot> instrument;
     juce::String soundName;
     IconButton openWindowButton { "Open plug-in window", Icon::openWindow, "Open Plug-in Window" };

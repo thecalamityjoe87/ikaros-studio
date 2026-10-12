@@ -462,7 +462,7 @@ def write_manifest():
         "credits": [
             {
                 "what": "Every instrument and loop",
-                "who": "Synthesised for Ikaros Studio by tools/generate_sounds.py",
+                "who": "Synthesized for Ikaros Studio by tools/generate_sounds.py",
                 "license": "CC0-1.0",
                 "url": "https://github.com/thecalamityjoe87/ikaros-studio",
                 "attributionRequired": False,

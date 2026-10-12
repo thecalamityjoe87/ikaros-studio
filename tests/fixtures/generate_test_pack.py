@@ -24,7 +24,9 @@ until real packs are hosted (see src/engine/PackStore.h):
 
     ../store/index.json                       made by tools/make_pack.py
     ../store/ikaros-studio.store-test-1.0.0.zip   "Store Pack", one sine-wave instrument
-    ../store/index-damaged.json               the same pack with a wrong SHA-256
+    ../store/ikaros-studio.store-bass-1.0.0.zip   "Store Bass", another
+    ../store/index-damaged.json               the same packs with wrong SHA-256s
+  Both packs are in the "starter" collection.
 """
 
 import json
@@ -127,34 +129,48 @@ def main():
     make_store()
 
 
+def make_store_pack(folder, pack_id, name, instrument_name, category, level):
+    pack = folder / name
+    instrument = pack / "Instruments" / instrument_name
+    instrument.mkdir(parents=True)
+    write_sine(instrument / "tone.wav", level)
+    (instrument / "instrument.json").write_text(json.dumps({
+        "name": instrument_name,
+        "category": category,
+        "samples": [{"file": "tone.wav", "root": 60, "low": 0, "high": 127}],
+    }, indent=4) + "\n")
+    (pack / "pack.json").write_text(json.dumps({
+        "format": 2,
+        "id": pack_id,
+        "name": name,
+        "version": "1.0.0",
+        "description": f"A tiny pack for testing downloads: one sine-wave instrument ({category.lower()}).",
+        "author": "Ikaros Studio",
+        "license": "CC0-1.0",
+    }, indent=4) + "\n")
+    return pack
+
+
 def make_store():
-    """A downloadable pack, packaged the way real ones are."""
+    """Two downloadable packs, packaged the way real ones are, both in the
+    starter collection."""
     with tempfile.TemporaryDirectory() as tmp:
-        pack = Path(tmp) / "Store Pack"
-        instrument = pack / "Instruments" / "Store Keys"
-        instrument.mkdir(parents=True)
-        write_sine(instrument / "tone.wav", 0.7)
-        (instrument / "instrument.json").write_text(json.dumps({
-            "name": "Store Keys",
-            "category": "Keyboards",
-            "samples": [{"file": "tone.wav", "root": 60, "low": 0, "high": 127}],
-        }, indent=4) + "\n")
-        (pack / "pack.json").write_text(json.dumps({
-            "format": 2,
-            "id": "ikaros-studio.store-test",
-            "name": "Store Pack",
-            "version": "1.0.0",
-            "description": "A tiny pack for testing downloads: one sine-wave instrument.",
-            "author": "Ikaros Studio",
-            "license": "CC0-1.0",
-        }, indent=4) + "\n")
+        keys = make_store_pack(Path(tmp), "ikaros-studio.store-test", "Store Pack", "Store Keys", "Keyboards", 0.7)
+        bass = make_store_pack(Path(tmp), "ikaros-studio.store-bass", "Store Bass", "Store Bass", "Bass", 0.6)
 
         shutil.rmtree(STORE, ignore_errors=True)
-        subprocess.run([sys.executable, str(MAKE_PACK), str(pack), "--category", "Keyboards", "--out", str(STORE)],
-                       check=True)
+
+        for pack, category in ((keys, "Keyboards"), (bass, "Bass")):
+            subprocess.run([sys.executable, str(MAKE_PACK), str(pack), "--category", category, "--out", str(STORE),
+                            "--collection", "starter", "--collection-name", "Starter Sounds",
+                            "--collection-description", "The test store's starter set: both test packs."],
+                           check=True)
 
     index = json.loads((STORE / "index.json").read_text())
-    index["packs"][0]["sha256"] = "0" * 64
+
+    for p in index["packs"]:
+        p["sha256"] = "0" * 64
+
     (STORE / "index-damaged.json").write_text(json.dumps(index, indent=4) + "\n")
 
 

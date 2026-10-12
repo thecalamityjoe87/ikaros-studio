@@ -962,6 +962,19 @@ juce::File AudioEngine::getPreviewFile() const
     return impl->workFolder.getChildFile (SessionBundle::previewEntry);
 }
 
+juce::var AudioEngine::getAppSetting (const juce::String& name, const juce::var& defaultValue) const
+{
+    auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
+    return props.containsKey (name) ? juce::var (props.getValue (name)) : defaultValue;
+}
+
+void AudioEngine::setAppSetting (const juce::String& name, const juce::var& value)
+{
+    auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
+    props.setValue (name, value);
+    props.saveIfNeeded();
+}
+
 std::vector<RecentSession> AudioEngine::getRecentSessions() const
 {
     std::vector<RecentSession> result;

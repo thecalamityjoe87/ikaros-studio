@@ -10,34 +10,137 @@ using namespace tokens;
 
 namespace
 {
+    // Remembered once the user has answered the first-run offer.
+    const juce::String starterOfferedSetting ("starterSoundsOffered");
+
     juce::String sizeText (juce::int64 bytes)
     {
         return bytes > 0 ? juce::File::descriptionOfSizeInBytes (bytes) : juce::String();
     }
+
+    juce::String joinFacts (juce::StringArray facts)
+    {
+        facts.removeEmptyStrings();
+        return facts.joinIntoString (juce::String::fromUTF8 (" \xc2\xb7 "));   // " · "
+    }
+
+    // What one row shows. Packs and collections both become one of these,
+    // so they're laid out by the same code.
+    struct RowView
+    {
+        enum class Status { none, installed, text, progress };
+
+        juce::String key;              // "pack:<id>" or "collection:<id>"
+        juce::String title, facts, description, error;
+        Status status = Status::none;
+        juce::String statusText;       // for text and progress
+        float progress = 0.0f;
+        juce::String mainAction;       // the main button's text, or empty for none
+        bool mainIsCancel = false;     // a grey Cancel rather than an amber action
+        bool canRemove = false;
+        bool highlighted = false;      // collections stand out from the packs
+    };
+
+    RowView viewOf (const StorePack& p)
+    {
+        using State = StorePack::State;
+        RowView v;
+        v.key = "pack:" + p.id;
+        v.title = p.name;
+        v.facts = joinFacts ({ p.category,
+                               p.state == State::notInstalled ? sizeText (p.downloadSize) + (p.downloadSize > 0 ? " download" : "")
+                                                              : sizeText (p.installedSize),
+                               p.license });
+        v.description = p.description;
+        v.error = p.error;
+
+        if (p.state == State::downloading || p.state == State::installing)
+        {
+            v.status = RowView::Status::progress;
+            v.progress = p.state == State::installing ? 1.0f : p.progress;
+            v.statusText = p.state == State::installing ? juce::String ("Installing...")
+                                                        : "Downloading " + juce::String (juce::roundToInt (p.progress * 100.0f)) + "%";
+        }
+        else if (p.state == State::installed && p.bundled)
+        {
+            v.status = RowView::Status::text;
+            v.statusText = "Comes with the app";
+        }
+        else if (p.state == State::installed)
+        {
+            v.status = RowView::Status::installed;
+        }
+
+        if (p.state == State::downloading)              { v.mainAction = "Cancel"; v.mainIsCancel = true; }
+        else if (p.state == State::notInstalled)        v.mainAction = "Download";
+        else if (p.state == State::updateAvailable)     v.mainAction = "Update";
+
+        v.canRemove = (p.state == State::installed || p.state == State::updateAvailable) && ! p.bundled;
+        return v;
+    }
+
+    RowView viewOf (const StoreCollection& c, const std::vector<StorePack>& packs)
+    {
+        RowView v;
+        v.key = "collection:" + c.id;
+        v.title = c.name;
+        v.highlighted = true;
+
+        const auto count = (int) c.packIds.size();
+        v.facts = joinFacts ({ juce::String (count) + (count == 1 ? " pack" : " packs"),
+                               c.packsToInstall > 0 ? sizeText (c.downloadSize) + " download" : juce::String() });
+
+        // A short list of what's in it, by name.
+        juce::StringArray names;
+
+        for (auto& id : c.packIds)
+            for (auto& p : packs)
+                if (p.id == id)
+                    names.add (p.name);
+
+        v.description = c.description.isNotEmpty() ? c.description : names.joinIntoString (", ");
+
+        if (c.packsDownloading > 0)
+        {
+            // Overall progress: installed packs count as done, downloading ones as far as they've got.
+            float done = 0.0f;
+
+            for (auto& id : c.packIds)
+                for (auto& p : packs)
+                    if (p.id == id)
+                        done += p.state == StorePack::State::installed   ? 1.0f
+                              : p.state == StorePack::State::downloading ? p.progress
+                              : p.state == StorePack::State::installing  ? 1.0f : 0.0f;
+
+            v.status = RowView::Status::progress;
+            v.progress = count > 0 ? done / (float) count : 0.0f;
+            v.statusText = "Downloading " + juce::String (count - c.packsToInstall - c.packsDownloading + 1)
+                           + " of " + juce::String (count);
+        }
+        else if (c.allInstalled)
+        {
+            v.status = RowView::Status::installed;
+        }
+
+        if (c.packsToInstall > 0)
+            v.mainAction = "Download All";
+
+        return v;
+    }
 }
 
 //==============================================================================
-// One pack: what it is on the left, what can be done with it on the right.
-class MoreSoundsDialog::PackRow  : public juce::Component
+// One row: what it is on the left; its state at the top right; its buttons
+// at the bottom right, right-aligned with the state above them.
+class MoreSoundsDialog::Row  : public juce::Component
 {
 public:
-    std::function<void()> onDownload, onCancel, onRemove;
+    std::function<void()> onMain, onRemove;
 
-    PackRow()
+    Row()
     {
-        mainButton.setColours (IconButton::accentColours());
         mainButton.setFont (fonts::uiSemiBold (13.0f));
-        mainButton.onClick = [this]
-        {
-            if (pack.state == StorePack::State::downloading)
-            {
-                if (onCancel) onCancel();
-            }
-            else if (onDownload)
-            {
-                onDownload();
-            }
-        };
+        mainButton.onClick = [this] { if (onMain) onMain(); };
         addChildComponent (mainButton);
 
         greyColours.border = colour::border;
@@ -47,129 +150,99 @@ public:
         addChildComponent (removeButton);
     }
 
-    void setPack (const StorePack& p)
+    const juce::String& getKey() const noexcept    { return view.key; }
+
+    void setView (const RowView& v)
     {
-        pack = p;
-        using State = StorePack::State;
-        const bool downloading = p.state == State::downloading;
+        view = v;
 
-        // The main button: Download, Update, or Cancel while downloading.
-        mainButton.setVisible (p.state == State::notInstalled || p.state == State::updateAvailable || downloading);
-        const juce::String action (downloading ? "Cancel" : p.state == State::updateAvailable ? "Update" : "Download");
-        mainButton.setText (action);
-        mainButton.setColours (downloading ? greyColours : IconButton::accentColours());
-        mainButton.setTitle (action + " " + p.name);
+        mainButton.setVisible (v.mainAction.isNotEmpty());
+        mainButton.setText (v.mainAction);
+        mainButton.setColours (v.mainIsCancel ? greyColours : IconButton::accentColours());
+        mainButton.setTitle (v.mainAction + " " + v.title);
 
-        // Remove: installed packs, but never the ones that come with the app.
-        removeButton.setVisible ((p.state == State::installed || p.state == State::updateAvailable) && ! p.bundled);
-        removeButton.setTitle ("Remove " + p.name);
+        removeButton.setVisible (v.canRemove);
+        removeButton.setTitle ("Remove " + v.title);
 
-        setTitle (p.name);
-        setDescription (p.description);
+        setTitle (v.title);
+        setDescription (v.description);
         resized();
         repaint();
     }
 
-    const StorePack& getPack() const noexcept    { return pack; }
-
     void paint (juce::Graphics& g) override
     {
-        using State = StorePack::State;
-        auto r = getLocalBounds().reduced (0, 4);
-        g.setColour (colour::cardBg);
-        g.fillRoundedRectangle (r.toFloat(), 10.0f);
+        auto card = getLocalBounds().reduced (0, 4).toFloat();
+        g.setColour (view.highlighted ? colour::selectedRow : colour::cardBg);
+        g.fillRoundedRectangle (card, 10.0f);
 
+        if (view.highlighted)
+        {
+            g.setColour (colour::accent.withAlpha (0.6f));
+            g.drawRoundedRectangle (card.reduced (0.5f), 10.0f, 1.0f);
+        }
+
+        // Left: name, facts, then the description (or why a download failed).
         auto text = contentArea().withTrimmedRight (actionsWidth + 16);
-
-        // Name, then category and size.
         g.setColour (colour::text);
         g.setFont (fonts::uiBold (15.0f));
-        g.drawText (pack.name, text.removeFromTop (20), juce::Justification::centredLeft, true);
+        g.drawText (view.title, text.removeFromTop (20), juce::Justification::centredLeft, true);
 
-        juce::StringArray facts;
-        facts.add (pack.category);
-
-        if (pack.state == State::notInstalled)
-            facts.add (sizeText (pack.downloadSize) + (pack.downloadSize > 0 ? " download" : ""));
-        else
-            facts.add (sizeText (pack.installedSize));
-
-        if (pack.license.isNotEmpty())
-            facts.add (pack.license);
-
-        facts.removeEmptyStrings();
         g.setColour (colour::textSecondary);
         g.setFont (fonts::ui (12.0f));
-        g.drawText (facts.joinIntoString (juce::String::fromUTF8 (" \xc2\xb7 ")), text.removeFromTop (18),
-                    juce::Justification::centredLeft, true);
+        g.drawText (view.facts, text.removeFromTop (18), juce::Justification::centredLeft, true);
 
-        // The description, or why the last download failed.
         text.removeFromTop (4);
-        g.setColour (pack.error.isNotEmpty() ? colour::record : colour::textSecondary);
+        g.setColour (view.error.isNotEmpty() ? colour::record : colour::textSecondary);
         g.setFont (fonts::ui (13.0f));
-        g.drawFittedText (pack.error.isNotEmpty() ? pack.error : pack.description, text,
+        g.drawFittedText (view.error.isNotEmpty() ? view.error : view.description, text,
                           juce::Justification::topLeft, 2, 1.0f);
 
-        // Top right: the pack's state. Its right edge lines up with the buttons'.
+        // Top right: the state. Its right edge lines up with the buttons'.
         // (Trimmed by a pixel: a button's last column is its faint border, so
         // its visible edge is one pixel in from its bounds.)
         auto status = contentArea().removeFromRight (actionsWidth).removeFromTop (statusHeight).withTrimmedRight (1);
 
-        if (pack.state == State::downloading || pack.state == State::installing)
+        switch (view.status)
         {
-            g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (12.0f));
-            g.drawText (pack.state == State::installing ? juce::String ("Installing...")
-                                                        : "Downloading " + juce::String (juce::roundToInt (pack.progress * 100.0f)) + "%",
-                        status.removeFromTop (16), juce::Justification::centredRight);
+            case RowView::Status::progress:
+            {
+                g.setColour (colour::textSecondary);
+                g.setFont (fonts::ui (12.0f));
+                g.drawText (view.statusText, status.removeFromTop (16), juce::Justification::centredRight);
 
-            auto bar = status.withSizeKeepingCentre (status.getWidth(), 6).toFloat();
-            g.setColour (colour::controlFill);
-            g.fillRoundedRectangle (bar, 3.0f);
-            g.setColour (colour::accent);
-            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (pack.state == State::installing ? 1.0f : pack.progress)), 3.0f);
-        }
-        else if (pack.state == State::installed && pack.bundled)
-        {
-            g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (13.0f));
-            g.drawText ("Comes with the app", status, juce::Justification::centredRight);
-        }
-        else if (pack.state == State::installed)
-        {
-            // A green tick in a circle, then "Installed".
-            const juce::String word ("Installed");
-            auto font = fonts::uiSemiBold (13.0f);
-            const float textWidth = juce::GlyphArrangement::getStringWidth (font, word);
-            const float tickSize = 16.0f, gap = 6.0f;
+                auto bar = status.withSizeKeepingCentre (status.getWidth(), 6).toFloat();
+                g.setColour (colour::controlFill);
+                g.fillRoundedRectangle (bar, 3.0f);
+                g.setColour (colour::accent);
+                g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, view.progress)), 3.0f);
+                break;
+            }
 
-            g.setColour (colour::effectOn);
-            g.setFont (font);
-            g.drawText (word, status, juce::Justification::centredRight);
+            case RowView::Status::text:
+                g.setColour (colour::textSecondary);
+                g.setFont (fonts::ui (13.0f));
+                g.drawText (view.statusText, status, juce::Justification::centredRight);
+                break;
 
-            auto circle = juce::Rectangle<float> (tickSize, tickSize)
-                              .withCentre ({ (float) status.getRight() - textWidth - gap - tickSize * 0.5f,
-                                             (float) status.getCentreY() });
-            g.fillEllipse (circle);
+            case RowView::Status::installed:
+                drawInstalled (g, status);
+                break;
 
-            juce::Path tick;
-            tick.startNewSubPath (circle.getX() + tickSize * 0.28f, circle.getCentreY());
-            tick.lineTo (circle.getX() + tickSize * 0.44f, circle.getY() + tickSize * 0.66f);
-            tick.lineTo (circle.getX() + tickSize * 0.72f, circle.getY() + tickSize * 0.34f);
-            g.setColour (colour::textOnAccent);
-            g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            case RowView::Status::none:
+                break;
         }
     }
 
     void resized() override
     {
-        // Every button sits at the bottom right of the row, the main one
-        // (Download, Update or Cancel) rightmost, Remove to its left.
+        // The main button (Download, Update, Cancel) rightmost, Remove to its left.
         auto buttons = contentArea().removeFromBottom (buttonHeight);
+        const int mainWidth = juce::jmax (buttonWidth, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (13.0f), view.mainAction)) + 32);
 
         if (mainButton.isVisible())
         {
-            mainButton.setBounds (buttons.removeFromRight (buttonWidth));
+            mainButton.setBounds (buttons.removeFromRight (mainWidth));
             buttons.removeFromRight (8);
         }
 
@@ -177,30 +250,68 @@ public:
     }
 
 private:
-    StorePack pack;
+    RowView view;
     IconButton mainButton { "Download", std::nullopt, "Download" };
     IconButton removeButton { "Remove", std::nullopt, "Remove" };
     IconButton::Colours greyColours = IconButton::raisedColours();
     static constexpr int actionsWidth = 200, buttonWidth = 96, buttonHeight = 28, statusHeight = 22;
 
-    // Inside the row's card, where the text, status and buttons go.
+    // Inside the row's card, where the text, state and buttons go.
     juce::Rectangle<int> contentArea() const    { return getLocalBounds().reduced (0, 4).reduced (16, 12); }
+
+    // A green tick in a circle, then "Installed", right-aligned in the area.
+    static void drawInstalled (juce::Graphics& g, juce::Rectangle<int> area)
+    {
+        const juce::String word ("Installed");
+        auto font = fonts::uiSemiBold (13.0f);
+        const float textWidth = juce::GlyphArrangement::getStringWidth (font, word);
+        const float tickSize = 16.0f, gap = 6.0f;
+
+        g.setColour (colour::effectOn);
+        g.setFont (font);
+        g.drawText (word, area, juce::Justification::centredRight);
+
+        auto circle = juce::Rectangle<float> (tickSize, tickSize)
+                          .withCentre ({ (float) area.getRight() - textWidth - gap - tickSize * 0.5f, (float) area.getCentreY() });
+        g.fillEllipse (circle);
+
+        juce::Path tick;
+        tick.startNewSubPath (circle.getX() + tickSize * 0.28f, circle.getCentreY());
+        tick.lineTo (circle.getX() + tickSize * 0.44f, circle.getY() + tickSize * 0.66f);
+        tick.lineTo (circle.getX() + tickSize * 0.72f, circle.getY() + tickSize * 0.34f);
+        g.setColour (colour::textOnAccent);
+        g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
 };
 
 //==============================================================================
 void MoreSoundsDialog::show (juce::Component& parent, AudioEngine& engine, const juce::String& downloadPackId)
 {
     // Owned by its parent from here on; it deletes itself in close().
-    auto* dialog = new MoreSoundsDialog (engine, downloadPackId);
+    auto* dialog = new MoreSoundsDialog (engine, false, downloadPackId, {});
     parent.addAndMakeVisible (dialog);
     dialog->setBounds (parent.getLocalBounds());
     dialog->grabKeyboardFocus();
 }
 
-MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, const juce::String& downloadPackId)
-    : engine (e), pendingDownload (downloadPackId)
+void MoreSoundsDialog::showWelcome (juce::Component& parent, AudioEngine& engine, std::function<void()> onClosed)
 {
-    setTitle ("More Sounds");
+    auto* dialog = new MoreSoundsDialog (engine, true, {}, std::move (onClosed));
+    parent.addAndMakeVisible (dialog);
+    dialog->setBounds (parent.getLocalBounds());
+    dialog->grabKeyboardFocus();
+}
+
+bool MoreSoundsDialog::shouldOfferStarterSounds (AudioEngine& engine)
+{
+    return ! (bool) engine.getAppSetting (starterOfferedSetting, false);
+}
+
+MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, bool isWelcome, const juce::String& downloadPackId,
+                                    std::function<void()> closed)
+    : engine (e), welcome (isWelcome), pendingDownload (downloadPackId), onClosed (std::move (closed))
+{
+    setTitle (welcome ? "Welcome" : "More Sounds");
     setWantsKeyboardFocus (true);
     setAlwaysOnTop (true);
 
@@ -208,14 +319,43 @@ MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, const juce::String& download
     listViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (listViewport);
 
-    auto colours = IconButton::raisedColours();
-    colours.border = colour::border;
-    retryButton.setColours (colours);
+    auto grey = IconButton::raisedColours();
+    grey.border = colour::border;
+
+    retryButton.setColours (grey);
     retryButton.onClick = [this] { engine.getPackStore().refreshIndex(); };
     addChildComponent (retryButton);
 
+    // Welcome: "Not Now" says no for now (asked again next time only if the
+    // offer never got shown, e.g. offline).
+    notNowButton.setColours (grey);
+    notNowButton.onClick = [this]
+    {
+        if (engine.getPackStore().getIndexStatus() == PackStore::IndexStatus::loaded)
+            markStarterOffered();
+
+        close();
+    };
+    addChildComponent (notNowButton);
+
     doneButton.setColours (IconButton::accentColours());
-    doneButton.onClick = [this] { close(); };
+    doneButton.onClick = [this]
+    {
+        // Welcome, before choosing: the big button downloads the starter sounds.
+        if (welcome && ! starterRequested)
+        {
+            if (auto starter = engine.getPackStore().findCollection (PackStore::starterCollectionId))
+            {
+                engine.getPackStore().installCollection (starter->id);
+                starterRequested = true;
+                markStarterOffered();
+                refresh();
+                return;
+            }
+        }
+
+        close();
+    };
     addAndMakeVisible (doneButton);
 
     auto& store = engine.getPackStore();
@@ -238,10 +378,18 @@ void MoreSoundsDialog::changeListenerCallback (juce::ChangeBroadcaster*)
     refresh();
 }
 
+void MoreSoundsDialog::markStarterOffered()
+{
+    engine.setAppSetting (starterOfferedSetting, true);
+}
+
 void MoreSoundsDialog::refresh()
 {
     auto& store = engine.getPackStore();
     const auto status = store.getIndexStatus();
+    const auto packs = store.getPacks();
+    const auto collections = store.getCollections();
+    const auto starter = store.findCollection (PackStore::starterCollectionId);
 
     // The Sound tab's Download button: start it as soon as the index lists it.
     if (pendingDownload.isNotEmpty() && status == PackStore::IndexStatus::loaded)
@@ -254,51 +402,118 @@ void MoreSoundsDialog::refresh()
         pendingDownload.clear();
     }
 
-    statusText = status == PackStore::IndexStatus::loading     ? "Looking for sound packs..."
-               : status == PackStore::IndexStatus::unavailable ? "Couldn't reach the sound library. Check your internet "
-                                                                 "connection and try again. Your installed packs are below."
-                                                               : requestedPackUnavailable
-                                                                    ? "The sound pack that track needs isn't available to download. "
-                                                                      "Ask whoever shared the session with you for it."
-                                                                    : juce::String();
-    retryButton.setVisible (status == PackStore::IndexStatus::unavailable);
+    // Welcome, with nothing to offer (no starter set, or it's all installed):
+    // don't ask, just carry on.
+    if (welcome && ! starterRequested && status == PackStore::IndexStatus::loaded
+         && (! starter.has_value() || starter->allInstalled))
+    {
+        markStarterOffered();
+        close();
+        return;
+    }
 
-    auto packs = store.getPacks();
+    const bool offline = status == PackStore::IndexStatus::unavailable;
 
-    // Rows are kept (not rebuilt) while the same packs are listed, so a
+    statusText = status == PackStore::IndexStatus::loading ? "Looking for sound packs..."
+               : offline && welcome ? "Couldn't reach the sound library. Check your internet connection and try again, "
+                                      "or start with the sounds that come with the app. We'll offer these again next time."
+               : offline ? "Couldn't reach the sound library. Check your internet connection and try again. "
+                           "Your installed packs are below."
+               : requestedPackUnavailable ? "The sound pack that track needs isn't available to download. "
+                                            "Ask whoever shared the session with you for it."
+               : juce::String();
+    retryButton.setVisible (offline);
+
+    // What's listed: collections first, then packs. The welcome shows just
+    // the starter set and what's in it.
+    std::vector<RowView> views;
+
+    for (auto& c : collections)
+    {
+        if (welcome && c.id != PackStore::starterCollectionId)
+            continue;
+
+        auto v = viewOf (c, packs);
+
+        if (welcome)
+            v.mainAction.clear();   // the big button at the bottom does that
+
+        views.push_back (v);
+    }
+
+    for (auto& p : packs)
+    {
+        if (welcome && ! (starter.has_value() && std::find (starter->packIds.begin(), starter->packIds.end(), p.id) != starter->packIds.end()))
+            continue;
+
+        auto v = viewOf (p);
+        v.canRemove = v.canRemove && ! welcome;
+        views.push_back (v);
+    }
+
+    // Rows are kept (not rebuilt) while the same things are listed, so a
     // button being clicked isn't deleted under the mouse.
-    bool samePacks = (int) packs.size() == rows.size();
+    bool sameRows = (int) views.size() == rows.size();
 
-    for (int i = 0; samePacks && i < rows.size(); ++i)
-        samePacks = rows[i]->getPack().id == packs[(size_t) i].id;
+    for (int i = 0; sameRows && i < rows.size(); ++i)
+        sameRows = rows[i]->getKey() == views[(size_t) i].key;
 
-    if (! samePacks)
+    if (! sameRows)
     {
         rows.clear();
 
-        for (auto& p : packs)
+        for (auto& v : views)
         {
-            auto* row = rows.add (new PackRow());
-            const auto id = p.id;
-            row->onDownload = [this, id] { engine.getPackStore().install (id); };
-            row->onCancel = [this, id] { engine.getPackStore().cancel (id); };
-            row->onRemove = [this, row] { confirmRemove (row->getPack()); };
+            auto* row = rows.add (new Row());
             listHolder.addAndMakeVisible (row);
+            const auto id = v.key.fromFirstOccurrenceOf (":", false, false);
+
+            if (v.key.startsWith ("collection:"))
+            {
+                row->onMain = [this, id] { engine.getPackStore().installCollection (id); };
+            }
+            else
+            {
+                row->onMain = [this, id]
+                {
+                    auto& s = engine.getPackStore();
+                    auto p = s.findPack (id);
+
+                    if (p.has_value() && p->state == StorePack::State::downloading)
+                        s.cancel (id);
+                    else
+                        s.install (id);
+                };
+
+                row->onRemove = [this, id, name = v.title] { confirmRemove (id, name); };
+            }
         }
     }
 
     for (int i = 0; i < rows.size(); ++i)
-        rows[i]->setPack (packs[(size_t) i]);
+        rows[i]->setView (views[(size_t) i]);
+
+    // The buttons at the bottom.
+    if (welcome && ! starterRequested && starter.has_value())
+        doneText = "Download Starter Sounds" + (starter->downloadSize > 0 ? " (" + sizeText (starter->downloadSize) + ")"
+                                                                          : juce::String());
+    else
+        doneText = "Done";
+
+    doneButton.setText (doneText);
+    doneButton.setTitle (doneText);
+
+    notNowButton.setVisible (welcome && ! starterRequested);
 
     resized();
     repaint();
 }
 
-void MoreSoundsDialog::confirmRemove (const StorePack& pack)
+void MoreSoundsDialog::confirmRemove (const juce::String& packId, const juce::String& name)
 {
     auto options = juce::MessageBoxOptions()
                        .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                       .withTitle ("Remove \"" + pack.name + "\"?")
+                       .withTitle ("Remove \"" + name + "\"?")
                        .withMessage ("Its sounds and loops are deleted from this computer. Tracks that use them stay in "
                                      "your sessions and play again once you download the pack again.")
                        .withButton ("Remove")
@@ -306,12 +521,12 @@ void MoreSoundsDialog::confirmRemove (const StorePack& pack)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<MoreSoundsDialog> (this), id = pack.id] (int result)
+    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<MoreSoundsDialog> (this), packId] (int result)
     {
         if (safeThis == nullptr || result != 1)
             return;
 
-        if (! safeThis->engine.getPackStore().remove (id))
+        if (! safeThis->engine.getPackStore().remove (packId))
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::WarningIcon)
                                               .withTitle ("Couldn't remove the pack")
@@ -324,22 +539,41 @@ void MoreSoundsDialog::confirmRemove (const StorePack& pack)
 
 void MoreSoundsDialog::close()
 {
+    if (! isVisible())
+        return;   // already closing
+
     // Downloads carry on in the background after the window closes.
     setVisible (false);
     juce::Component::unfocusAllComponents();
 
     juce::MessageManager::callAsync ([safeThis = SafePointer<MoreSoundsDialog> (this)]
     {
-        if (safeThis != nullptr)
-            delete safeThis.getComponent();
+        if (safeThis == nullptr)
+            return;
+
+        auto closed = std::move (safeThis->onClosed);
+        delete safeThis.getComponent();
+
+        if (closed)
+            closed();
     });
 }
 
 bool MoreSoundsDialog::keyPressed (const juce::KeyPress& key)
 {
-    if (key == juce::KeyPress::escapeKey || key == juce::KeyPress::returnKey)
+    if (key == juce::KeyPress::escapeKey)
     {
-        close();
+        if (notNowButton.isVisible())
+            notNowButton.triggerClick();
+        else
+            close();
+
+        return true;
+    }
+
+    if (key == juce::KeyPress::returnKey)
+    {
+        doneButton.triggerClick();
         return true;
     }
 
@@ -348,7 +582,8 @@ bool MoreSoundsDialog::keyPressed (const juce::KeyPress& key)
 
 void MoreSoundsDialog::mouseDown (const juce::MouseEvent& e)
 {
-    if (! panel.contains (e.getPosition()))
+    // The welcome asks a question, so a stray click outside doesn't dismiss it.
+    if (! welcome && ! panel.contains (e.getPosition()))
         close();
 }
 
@@ -365,17 +600,21 @@ void MoreSoundsDialog::paint (juce::Graphics& g)
     auto r = panel.reduced (28, 24);
     g.setColour (colour::text);
     g.setFont (fonts::uiBold (18.0f));
-    g.drawText ("More Sounds", r.removeFromTop (26), juce::Justification::centredLeft);
+    g.drawText (welcome ? "Welcome to Ikaros Studio" : "More Sounds", r.removeFromTop (26), juce::Justification::centredLeft);
 
+    const juce::String subtitle = ! welcome ? "Download instruments and loops. They appear in the library as soon as they're installed."
+                                : starterRequested ? "The starter sounds are downloading. You can start making music now: "
+                                                     "each pack appears in the library as soon as it's installed."
+                                                   : "Start with the starter sounds: real instruments and loops to play and build "
+                                                     "songs with. You can download more any time from More Sounds.";
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (13.0f));
-    g.drawText ("Download instruments and loops. They appear in the library as soon as they're installed.",
-                r.removeFromTop (22), juce::Justification::centredLeft, true);
+    g.drawFittedText (subtitle, r.removeFromTop (welcome ? 40 : 22), juce::Justification::topLeft, 2, 1.0f);
 
     if (statusText.isNotEmpty())
     {
         g.setColour (colour::text);
-        g.drawFittedText (statusText, statusArea, juce::Justification::centredLeft, 2, 1.0f);
+        g.drawFittedText (statusText, statusArea, juce::Justification::centredLeft, 3, 1.0f);
     }
 }
 
@@ -384,15 +623,19 @@ void MoreSoundsDialog::resized()
     panel = getLocalBounds().withSizeKeepingCentre (juce::jmin (panelWidth, getWidth() - 32),
                                                     juce::jmin (panelHeight, getHeight() - 32));
     auto r = panel.reduced (28, 24);
-    r.removeFromTop (26 + 22 + 12);
+    r.removeFromTop (26 + (welcome ? 40 : 22) + 12);
 
+    // Bottom right: the main button, with Not Now to its left.
     auto bottom = r.removeFromBottom (36);
-    doneButton.setBounds (bottom.removeFromRight (96));
+    const int doneWidth = juce::jmax (96, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (14.0f), doneText)) + 40);
+    doneButton.setBounds (bottom.removeFromRight (doneWidth));
+    bottom.removeFromRight (8);
+    notNowButton.setBounds (bottom.removeFromRight (96));
     r.removeFromBottom (12);
 
     if (statusText.isNotEmpty())
     {
-        statusArea = r.removeFromTop (40);
+        statusArea = r.removeFromTop (48);
 
         if (retryButton.isVisible())
             retryButton.setBounds (statusArea.removeFromRight (100).withSizeKeepingCentre (100, 30));

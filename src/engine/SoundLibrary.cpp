@@ -121,6 +121,14 @@ SoundLibrary::SoundLibrary()
 
 juce::File SoundLibrary::getUserSoundsFolder()
 {
+    // The smoke test points this at a folder of its own, so it never reads
+    // (or changes) the user's packs. Handy for trying the app with an empty
+    // Sounds folder too.
+    auto overridePath = juce::SystemStats::getEnvironmentVariable ("IKAROS_USER_SOUNDS_DIR", {});
+
+    if (overridePath.isNotEmpty())
+        return juce::File (overridePath);
+
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
                .getChildFile ("Ikaros Studio").getChildFile ("Sounds");
 }
@@ -302,9 +310,9 @@ std::vector<SoundLibrary::KnobMapping> SoundLibrary::getKnobsFor (const SampledI
 
 std::vector<SoundLibrary::KnobMapping> SoundLibrary::getDefaultKnobs (const juce::String& category)
 {
-    // Every set uses each of the five controls once, in the order that
-    // matters most for that kind of instrument. The defaults are neutral
-    // (see SoundShaperPlugin), apart from a little room.
+    // Each set uses the controls once, in the order that matters most for
+    // that kind of instrument. The defaults are neutral (see
+    // SoundShaperPlugin), apart from a little room.
     const KnobMapping tone  { "Tone",  "tone",  -1, 0.5f };
     const KnobMapping drive { "Drive", "drive", -1, 0.0f };
     const KnobMapping width { "Width", "width", -1, 0.5f };
@@ -312,8 +320,10 @@ std::vector<SoundLibrary::KnobMapping> SoundLibrary::getDefaultKnobs (const juce
 
     auto room = [] (float amount) { return KnobMapping { "Room", "room", -1, amount }; };
 
+    // No Pitch for drum kits: it moves notes, and on a kit each note is a
+    // different drum, so it would swap drums instead of tuning them.
     if (category == "Drums")
-        return { pitch, tone, { "Crunch", "drive", -1, 0.0f }, width, room (0.1f) };
+        return { tone, { "Crunch", "drive", -1, 0.0f }, width, room (0.1f) };
 
     if (category == "Bass")
         return { tone, drive, pitch, width, room (0.0f) };
