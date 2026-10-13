@@ -12,11 +12,32 @@
 
 #include <tracktion_engine/tracktion_engine.h>
 
+#include <regex>
+
 namespace te = tracktion;   // the conventional short alias used in Tracktion's own examples
 using namespace std::literals;
 
 namespace ikaros
 {
+
+namespace
+{
+    // Sessions saved by 0.1.0 can hold effect settings written under their
+    // parameter IDs (mix proportion="0.3", 12="0.5"), which aren't valid XML
+    // attribute names, so the whole file failed to load. Nothing ever read
+    // those attributes back, so dropping them loses nothing. Returns true if
+    // the file needed (and got) the repair.
+    bool removeInvalidAttributes (const juce::File& sessionFile)
+    {
+        // An attribute whose "name" is several words, or starts with a digit.
+        static const std::regex invalid (R"(\s+(?:[A-Za-z_][\w.\-]*\s+)+[A-Za-z_][\w.\-]*="[^"]*"|\s+\d[\w.\-]*="[^"]*")");
+
+        const auto text = sessionFile.loadFileAsString().toStdString();
+        const auto fixed = std::regex_replace (text, invalid, "");
+
+        return fixed != text && sessionFile.replaceWithText (juce::String::fromUTF8 (fixed.c_str()));
+    }
+}
 
 //==============================================================================
 // EngineBehaviour lets an app customise Tracktion's defaults by overriding
@@ -863,6 +884,9 @@ bool AudioEngine::openSession (const juce::File& file)
                                    : file.copyFileTo (workSession);
 
     auto state = unpacked ? te::loadEditFromFile (impl->engine, workSession, te::ProjectItemID()) : juce::ValueTree();
+
+    if (unpacked && ! state.isValid() && removeInvalidAttributes (workSession))
+        state = te::loadEditFromFile (impl->engine, workSession, te::ProjectItemID());
 
     if (! state.isValid())
     {

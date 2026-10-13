@@ -940,7 +940,16 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
 
             if (auto* param = params[index])
             {
-                setParameterUndoably (*p, *param, param->paramID, param->valueRange.convertFrom0to1 (value));
+                // Like setParameterUndoably, but we don't know which state
+                // property backs an arbitrary effect's parameter: the ID isn't
+                // it (the Delay's "mix proportion" lives in "mix", plug-in IDs
+                // are numbers), and writing the ID as a property made saved
+                // sessions invalid XML. Instead, setting the parameter to its
+                // current value makes Tracktion store it in the right property,
+                // outside the undo history (it writes its attached CachedValue
+                // with no UndoManager on every notifying set).
+                param->setParameter (param->getCurrentValue(), juce::sendNotification);
+                param->setParameter (param->valueRange.convertFrom0to1 (value), juce::sendNotification);
             }
             else
             {

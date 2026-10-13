@@ -849,10 +849,44 @@ int main (int argc, char* argv[])
                    "Phaser has Depth, Rate and Feedback knobs");
             pumpMessages();
 
+            // The Delay's mix parameter ("mix proportion") is stored as "mix":
+            // its ID must never end up as a property (invalid XML).
+            auto echo = tracks.effects().addEffect (t1, "delay");
+            pumpMessages();
+            const auto echoMix = tracks.effects().getEffectParameters (t1, echo)[1].value;
+            engine.beginUndoStep ("Mix");
+            tracks.effects().setEffectParameter (t1, echo, 1, 0.9f);
+            pumpMessages();
+            engine.undo();
+            pumpMessages();
+            check (std::abs (tracks.effects().getEffectParameters (t1, echo)[1].value - echoMix) < 0.01f,
+                   "undoing the first change to an effect knob restores it");
+            engine.beginUndoStep ("Mix");
+            tracks.effects().setEffectParameter (t1, echo, 1, 0.9f);
+            pumpMessages();
+
             auto eqSession = dir.getChildFile ("EQ");
             check (engine.saveSessionAs (eqSession), "(save)");
+            const auto savedEdit = SessionBundle::readEntry (AudioEngine::getSessionFileFor (eqSession),
+                                                             SessionBundle::sessionEntry).toString();
+            check (juce::parseXML (savedEdit) != nullptr && ! savedEdit.contains ("mix proportion"),
+                   "effect settings save as valid XML");
             check (engine.openSession (AudioEngine::getSessionFileFor (eqSession)), "(reopen)");
             pumpMessages();
+            check (std::abs (tracks.effects().getEffectParameters (t1, tracks.effects().getEffectChain (t1).back().id)[1].value - 0.9f) < 0.01f,
+                   "and survive reopening");
+
+            // Sessions saved before the fix have those invalid attributes;
+            // they still open.
+            {
+                auto broken = dir.getChildFile ("Broken Echo.iksession");
+                auto brokenEdit = dir.getChildFile ("Broken Echo.tracktionedit");
+                brokenEdit.replaceWithText (savedEdit.replace ("<PLUGIN type=\"delay\"",
+                                                               "<PLUGIN type=\"delay\" mix proportion=\"0.3\" 12=\"0.5\""));
+                SessionBundle::pack (broken, { { SessionBundle::sessionEntry, brokenEdit, true } }, {});
+                check (engine.openSession (broken) && tracks.effects().getEffectChain (t1).back().name == "Echo",
+                       "a session saved with invalid effect attributes still opens");
+            }
             check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f
                      && std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f,
                    "track and master EQ survive save and reopen");
