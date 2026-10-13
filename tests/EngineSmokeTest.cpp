@@ -13,6 +13,8 @@
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
 #include <cstdlib>                                    // setenv
+#include <functional>                                  // std::function
+#include <map>
 #include <iostream>
 
 using namespace ikaros;
@@ -48,6 +50,149 @@ static void waitForPluginScan (AudioEngine& engine)
         juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
 
     pumpMessages();
+}
+
+// Checks two session snapshots (AudioEngine::getStateSnapshot) are the same,
+// and if not prints the first line that differs, to make it easy to track down.
+// A session snapshot as one line per attribute, e.g.
+// "EDIT/TRACK[1007]/PLUGIN[1008]@volume=0.3", sorted, so attribute and
+// element order don't matter and a difference is easy to read.
+static void flatten (const juce::XmlElement& e, const juce::String& path, juce::StringArray& lines)
+{
+    // Not part of the song: Tracktion stamps the time of the last edit, a
+    // reopened session gets a new project ID, and recording arms whichever
+    // track is selected. "parameters" is written by saving only (each
+    // automated setting's hand-set value, which the live session already
+    // knows), so it's in a reopened session but not the one that was saved.
+    if (e.hasTagName ("INPUTDEVICEDESTINATION"))
+        return;
+
+    static const juce::StringArray ignored { "lastSignificantChange", "projectID", "base64:parameters" };
+
+    for (int i = 0; i < e.getNumAttributes(); ++i)
+        if (! ignored.contains (e.getAttributeName (i)))
+            lines.add (path + "@" + e.getAttributeName (i) + "=" + e.getAttributeValue (i));
+
+    // Children are named by their id, or numbered per tag name.
+    std::map<juce::String, int> counts;
+
+    for (auto* child : e.getChildIterator())
+    {
+        const auto n = counts[child->getTagName()]++;
+        flatten (*child, path + "/" + child->getTagName()
+                           + (child->hasAttribute ("id") ? "[" + child->getStringAttribute ("id") + "]" : "#" + juce::String (n)),
+                 lines);
+    }
+}
+
+static juce::StringArray flatten (const juce::String& xml)
+{
+    juce::StringArray lines;
+
+    if (auto parsed = juce::parseXML (xml))
+        flatten (*parsed, parsed->getTagName(), lines);
+
+    lines.sort (false);
+    return lines;
+}
+
+// Checks a session snapshot (AudioEngine::getStateSnapshot) is the same as
+// the expected one, and if not prints what differs. After an undo, a
+// plug-in setting that wasn't stored before may now be stored,
+// at its old value: Ikaros stores a setting's value before the first change
+// to it (see setParameterUndoably) so undo has a value to go back to. It must
+// not still have the edited value, though (pass the edited snapshot as
+// "edited" to check that).
+static void checkSameState (const juce::String& expected, const juce::String& actual, const juce::String& what,
+                            const juce::String& edited = {})
+{
+    const auto want = flatten (expected), got = flatten (actual), editedLines = flatten (edited);
+    juce::StringArray missing, extra;
+
+    auto attributeOf = [] (const juce::String& line) { return line.upToFirstOccurrenceOf ("=", true, false); };
+
+    for (auto& line : want)
+        if (! got.contains (line))
+            missing.add (line);
+
+    for (auto& line : got)
+    {
+        if (want.contains (line))
+            continue;
+
+        const auto element = line.upToFirstOccurrenceOf ("@", false, false).fromLastOccurrenceOf ("/", false, false);
+        const bool storedNow = element.startsWith ("PLUGIN");
+        const bool wasStored = std::any_of (want.begin(), want.end(),
+                                            [&] (const juce::String& w) { return attributeOf (w) == attributeOf (line); });
+
+        // The transport (loop range, playhead) is never undoable in Tracktion,
+        // and a tempo change stores its defaults.
+        const bool transport = element.startsWith ("TRANSPORT");
+
+        if (! (edited.isNotEmpty() && (transport || (storedNow && ! wasStored && ! editedLines.contains (line)))))
+            extra.add (line);
+    }
+
+    check (missing.isEmpty() && extra.isEmpty(), what.toRawUTF8());
+
+    for (int i = 0; i < juce::jmin (3, missing.size()); ++i)
+        std::cout << "         missing: " << missing[i].substring (0, 240) << "\n";
+
+    for (int i = 0; i < juce::jmin (3, extra.size()); ++i)
+        std::cout << "         extra:   " << extra[i].substring (0, 240) << "\n";
+}
+
+// Does one edit and checks it's a single undo step with the given name, that
+// undo puts the session back exactly as it was and redo exactly as the edit
+// left it (twice, since a second round is where stale state shows up).
+static void checkUndoRoundTrip (AudioEngine& engine, const juce::String& stepName, const std::function<void()>& edit)
+{
+    std::cout << stepName << "\n";
+    pumpMessages();
+    const auto before = engine.getStateSnapshot();
+
+    edit();
+    pumpMessages();
+    const auto after = engine.getStateSnapshot();
+    check (after != before, "changes the session");
+    check (engine.getUndoDescription() == stepName, "is one named undo step");
+
+    if (engine.getUndoDescription() != stepName)
+        std::cout << "         got: \"" << engine.getUndoDescription() << "\"\n";
+
+    for (int round = 0; round < 2; ++round)
+    {
+        engine.undo();
+        pumpMessages();
+        checkSameState (before, engine.getStateSnapshot(), "undo restores the session exactly", after);
+
+        engine.redo();
+        pumpMessages();
+        checkSameState (after, engine.getStateSnapshot(), "redo restores the edit exactly");
+    }
+}
+
+// Saves, reopens, and checks the session reads back exactly as it was.
+static void checkSaveAndReopen (AudioEngine& engine, const juce::File& file)
+{
+    // Undo the last edit first, so there's something to redo.
+    engine.undo();
+    pumpMessages();
+    const auto undoName = engine.getUndoDescription(), redoName = engine.getRedoDescription();
+    check (engine.saveSessionAs (file), "(save)");
+    pumpMessages();
+    check (engine.getUndoDescription() == undoName && engine.getRedoDescription() == redoName,
+           "saving leaves undo and redo as they were");
+    engine.redo();
+    pumpMessages();
+
+    // Saving copies outside audio files into the session (and points the
+    // regions at the copies), so compare with the session as saved.
+    check (engine.saveSession(), "(save again)");
+    const auto saved = engine.getStateSnapshot();
+    check (engine.openSession (AudioEngine::getSessionFileFor (file)), "(reopen)");
+    pumpMessages();
+    checkSameState (saved, engine.getStateSnapshot(), "the reopened session is the same");
 }
 
 int main (int argc, char* argv[])
@@ -87,9 +232,12 @@ int main (int argc, char* argv[])
         args.remove (i);
     }
 
+    // "--skip=export,undo" skips several.
+    const auto skipped = juce::StringArray::fromTokens (skip, ",", {});
+
     auto runs = [&] (const juce::String& section)
     {
-        return (only.isEmpty() || only == section) && skip != section;
+        return (only.isEmpty() || only == section) && ! skipped.contains (section);
     };
 
     // The test plug-ins (built with -DIKAROS_BUILD_TEST_PLUGINS=ON), if any.
@@ -2124,6 +2272,127 @@ int main (int argc, char* argv[])
     else if (runs ("main"))
     {
         std::cout << "(Third-party plug-in checks skipped: build with -DIKAROS_BUILD_TEST_PLUGINS=ON)\n";
+    }
+
+    if (runs ("undo"))
+    {
+        // Every edit the app can make, through the same calls the UI uses:
+        // one named undo step each, and undo/redo/save/reopen give back
+        // exactly the same session.
+        AudioEngine engine { testSettings };
+        auto& tracks = engine.getTracks();
+        auto& regions = tracks.regions();
+        auto& notes = tracks.notes();
+        auto& effects = tracks.effects();
+        const auto undoSession = dir.getChildFile ("Undo");
+        engine.newSession();
+        pumpMessages();
+
+        auto t1 = tracks.getTracks().front().id;
+        TrackId t2 = 0, audio = 0;
+
+        std::cout << "-- Tracks\n";
+        checkUndoRoundTrip (engine, "Add Track", [&] { t2 = tracks.addInstrumentTrack(); });
+        checkUndoRoundTrip (engine, "Add Audio Track", [&] { audio = tracks.addAudioTrack(); });
+        checkUndoRoundTrip (engine, "Rename Track", [&] { tracks.renameTrack (t1, "Lead"); });
+        checkUndoRoundTrip (engine, "Track Color", [&] { tracks.setTrackColour (t1, juce::Colours::orange); });
+        checkUndoRoundTrip (engine, "Track Icon", [&] { tracks.setTrackIcon (t1, "guitar"); });
+        checkUndoRoundTrip (engine, "Move Track Down", [&] { tracks.moveTrack (t1, 1); });
+        TrackId copy = 0;
+        checkUndoRoundTrip (engine, "New Track with Duplicate Settings", [&] { copy = tracks.duplicateTrack (t2, false); });
+        checkUndoRoundTrip (engine, "Delete Track", [&] { tracks.deleteTrack (copy); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Mixer and inputs\n";
+        checkUndoRoundTrip (engine, "Volume", [&] { engine.beginUndoStep ("Volume"); tracks.setVolume (t1, 0.3f); });
+        checkUndoRoundTrip (engine, "Pan", [&] { engine.beginUndoStep ("Pan"); tracks.setPan (t1, -0.5f); });
+        checkUndoRoundTrip (engine, "Master Volume", [&] { engine.beginUndoStep ("Master Volume"); tracks.setMasterVolume (0.4f); });
+        checkUndoRoundTrip (engine, "Reverb Send", [&] { engine.beginUndoStep ("Reverb Send"); tracks.sends().setSendLevel (t1, 0, 0.6f); });
+        checkUndoRoundTrip (engine, "Monitoring On", [&] { tracks.inputs().setMonitoring (audio, true); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Regions\n";
+        RegionId r = 0;
+        checkUndoRoundTrip (engine, "Add Region", [&] { r = regions.createChordRegion (t1, 0.0); });
+        checkUndoRoundTrip (engine, "Move Region", [&] { regions.moveRegions ({ { r, t1, 8.0 } }); });
+        checkUndoRoundTrip (engine, "Trim Region", [&] { regions.trimRegion (r, 8.0, 20.0); });
+        checkUndoRoundTrip (engine, "Loop Region", [&] { regions.loopRegion (r, 32.0); });
+        checkUndoRoundTrip (engine, "Split Region", [&] { regions.splitRegions ({ r }, 12.0); });
+        checkUndoRoundTrip (engine, "Duplicate Region", [&] { regions.duplicateRegions ({ r }); });
+        checkUndoRoundTrip (engine, "Rename Region", [&] { regions.renameRegion (r, "Verse"); });
+        regions.copyRegions ({ r });
+        checkUndoRoundTrip (engine, "Paste", [&] { regions.pasteRegions (t2, 64.0); });
+        checkUndoRoundTrip (engine, "Delete Region", [&] { regions.deleteRegion (regions.getRegions (t2).front().id); });
+
+        const auto wavFile = dir.getChildFile ("Undo Tone.wav");
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream (wavFile.createOutputStream().release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                        .withNumChannels (1)
+                                                                                        .withBitsPerSample (16));
+            juce::AudioBuffer<float> buffer (1, 44100);
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                buffer.setSample (0, i, 0.5f * std::sin ((float) i * 0.05f));
+
+            check (writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()), "(test audio written)");
+        }
+        checkUndoRoundTrip (engine, "Import Audio File", [&] { regions.importAudioFiles (audio, { wavFile.getFullPathName() }, 0.0); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Notes\n";
+        checkUndoRoundTrip (engine, "Add Note", [&] { notes.addNote (r, { 72, 0.5, 0.25, 90 }); });
+        checkUndoRoundTrip (engine, "Move Note", [&]
+        {
+            auto moved = regions.getRegion (r)->notes.front();
+            moved.startBeat += 0.5;
+            moved.pitch += 2;
+            notes.changeNotes (r, { moved }, "Move Note");
+        });
+        checkUndoRoundTrip (engine, "Quantize", [&]
+        {
+            std::vector<NoteId> ids;
+
+            for (auto& n : regions.getRegion (r)->notes)
+                ids.push_back (n.id);
+
+            notes.quantiseNotes (r, ids, 1.0);
+        });
+        checkUndoRoundTrip (engine, "Delete Note", [&] { notes.deleteNotes (r, { regions.getRegion (r)->notes.front().id }); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Sounds, effects and EQ\n";
+        PluginId fx = 0, fx2 = 0;
+        checkUndoRoundTrip (engine, "Change Sound", [&] { effects.setSound (t1, "synth:Warm Pad"); });
+        checkUndoRoundTrip (engine, "Tone", [&] { engine.beginUndoStep ("Tone"); effects.setSoundControl (t1, 0, 0.8f); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx = effects.addEffect (t1, "reverb"); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx2 = effects.addEffect (t1, "compressor"); });
+        checkUndoRoundTrip (engine, "Replace Effect", [&] { fx2 = effects.replaceEffect (t1, fx2, "delay"); });
+        checkUndoRoundTrip (engine, "Move Effect", [&] { effects.moveEffect (t1, fx2, 0); });
+        checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t1, fx, false); });
+        checkUndoRoundTrip (engine, "Reverb Mix", [&] { engine.beginUndoStep ("Reverb Mix"); effects.setEffectParameter (t1, fx, 0, 0.9f); });
+        checkUndoRoundTrip (engine, "Remove Effect", [&] { effects.removeEffect (t1, fx2); });
+        checkUndoRoundTrip (engine, "EQ", [&] { engine.beginUndoStep ("EQ"); tracks.eq().setBand (t1, 1, 800.0f, 6.0f, 1.0f); });
+        checkUndoRoundTrip (engine, "Turn EQ Off", [&] { tracks.eq().setEnabled (t1, false); });
+        checkUndoRoundTrip (engine, "Reset EQ", [&] { tracks.eq().reset (t1); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Automation, tempo and key\n";
+        checkUndoRoundTrip (engine, "Add Automation Point", [&]
+        {
+            engine.beginUndoStep ("Add Automation Point");
+            tracks.automation().setPoints (t1, automationTargets::volume, { { 4.0, 0.2f }, { 8.0, 0.9f } });
+        });
+        engine.undo();
+        pumpMessages();
+        check (std::abs (tracks.getTrack (t1)->volume - 0.3f) < 0.01f,
+               "undoing the automation puts the fader back where it was (not where the curve left it)");
+        engine.redo();
+        checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (96.0); });
+        checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignature (3, 4); });
+        checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, true); });
+        checkSaveAndReopen (engine, undoSession);
     }
 
     dir.deleteRecursively();

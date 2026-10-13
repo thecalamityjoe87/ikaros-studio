@@ -122,8 +122,8 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
         r.isMidi = true;
         auto contentOffset = contentOffsetBeats (clip);
 
-        // Recorded notes (and ones from older sessions) get their IDs the
-        // first time anyone looks at them.
+        // Notes get their IDs when they're made, recorded or loaded (see
+        // AudioEngine::assignAllNoteIds); this only catches anything missed.
         assignNoteIds (*midi);
 
         for (auto* n : midi->getSequence().getNotes())
@@ -232,6 +232,9 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
                              te::BeatDuration::fromBeats (half - 0.15), hit == 0.0 ? 92 : 76, 0, um);
     }
 
+    // IDs now, as part of the new region (so undo and redo keep them), rather
+    // than the first time someone reads the region.
+    assignNoteIds (*clip);
     return clip->itemID.getRawID();
 }
 

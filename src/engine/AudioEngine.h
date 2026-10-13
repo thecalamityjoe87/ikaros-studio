@@ -188,6 +188,11 @@ public:
         The name appears in the Edit menu, e.g. "Undo Add Track". */
     void beginUndoStep (const juce::String& name = {});
 
+    /** The whole session as XML, the way it would be saved. The smoke test
+        compares these to check undo, redo and save/reopen restore a session
+        exactly. */
+    juce::String getStateSnapshot() const;
+
     /** Renders part of the session offline (not through the speakers) and
         returns its loudest sample, 0..1. The smoke test uses it to check
         that instruments really play (exporting is getExporter()'s job). */

@@ -19,6 +19,7 @@ struct SoundControlParameter
 {
     juce::String name;                                  // the knob's label, e.g. "Brightness"
     te::AutomatableParameter* parameter = nullptr;      // nullptr if the hidden plugin it needs isn't there yet
+    juce::Identifier stateProperty;                     // where its plugin stores the value (see AutomationEditor)
     std::function<float (float)> toParameter;           // knob 0..1 -> the parameter's value
     std::function<float (float)> fromParameter;         // and back
     std::function<juce::String (float)> describe;       // knob 0..1 -> what the knob shows, e.g. "62%"

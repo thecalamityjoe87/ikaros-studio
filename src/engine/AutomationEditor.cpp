@@ -122,6 +122,7 @@ struct AutomationEditor::Resolved
     std::function<float (float)> fromParameter = [] (float v) { return v; };
     std::function<juce::String (float)> describe = percent;
     float valueWithoutParameter = 0.0f;   // what the control shows while there's no parameter yet
+    juce::Identifier stateProperty;       // where the parameter's plugin stores its value (empty if unknown)
 };
 
 AutomationEditor::AutomationEditor (AudioEngine& o, SendBuses& s) : owner (o), sends (s)
@@ -151,6 +152,7 @@ std::optional<AutomationEditor::Resolved> AutomationEditor::resolve (TrackId tra
         {
             r.target.name = "Volume";
             r.parameter = vol->volParam.get();
+            r.stateProperty = te::IDs::volume;
             r.describe = [] (float v) { return juce::String (te::volumeFaderPositionToDB (v), 1) + " dB"; };
         }
         else
@@ -158,6 +160,7 @@ std::optional<AutomationEditor::Resolved> AutomationEditor::resolve (TrackId tra
             // The pan knob goes -1..1; the lane goes 0..1 with the centre in the middle.
             r.target.name = "Pan";
             r.parameter = vol->panParam.get();
+            r.stateProperty = te::IDs::pan;
             r.toParameter = [] (float v) { return v * 2.0f - 1.0f; };
             r.fromParameter = [] (float pan) { return (pan + 1.0f) * 0.5f; };
             r.describe = [] (float v)
@@ -182,6 +185,8 @@ std::optional<AutomationEditor::Resolved> AutomationEditor::resolve (TrackId tra
         if (auto* send = findSend (*t, bus))
             r.parameter = send->gain.get();
 
+        r.stateProperty = te::IDs::auxSendSliderPos;
+
         // A send level of 1 is 0 dB, a little below the top of the send's fader.
         const float full = SendBuses::getFullLevelPosition();
         r.toParameter = [full] (float v) { return v * full; };
@@ -203,6 +208,7 @@ std::optional<AutomationEditor::Resolved> AutomationEditor::resolve (TrackId tra
         r.fromParameter = knob.fromParameter;
         r.describe = knob.describe;
         r.valueWithoutParameter = knob.valueWithoutParameter;
+        r.stateProperty = knob.stateProperty;
     }
     else
     {
@@ -524,6 +530,37 @@ void AutomationEditor::keepUnloadedCurvesOnBeats (const std::function<void()>& c
     // Into the tempo change's undo step, so undo puts them back too.
     for (auto& s : stored)
         s.point.setProperty (te::IDs::t, beatToTime (*edit, s.beat).inSeconds(), &edit->getUndoManager());
+}
+
+void AutomationEditor::keepValuesWhenAutomationGoes (const std::function<void()>& undoOrRedo)
+{
+    // What's automated now, and the value each setting was given by hand.
+    // (Following a curve doesn't change the "explicit" value, only the
+    // stored one.)
+    struct Automated { TrackId track; juce::String id; float value; };
+    std::vector<Automated> automated;
+
+    if (auto* edit = owner.getEdit())
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto& id : getAutomatedTargets (t->itemID.getRawID()))
+                if (auto r = resolve (t->itemID.getRawID(), id, false); r && r->parameter != nullptr)
+                    automated.push_back ({ t->itemID.getRawID(), id, r->parameter->getCurrentExplicitValue() });
+
+    undoOrRedo();
+
+    for (auto& a : automated)
+    {
+        auto r = resolve (a.track, a.id, false);
+
+        if (! r || r->parameter == nullptr || r->parameter->getCurve().getNumPoints() > 0
+             || ! r->stateProperty.isValid() || r->parameter->getPlugin() == nullptr)
+            continue;
+
+        // Written straight to the state with no UndoManager: anything recorded
+        // now would start a new undo step and throw away Redo. The parameter
+        // listens to its stored value and follows.
+        r->parameter->getPlugin()->state.setProperty (r->stateProperty, a.value, nullptr);
+    }
 }
 
 } // namespace ikaros

@@ -922,6 +922,17 @@ bool AudioEngine::openSession (const juce::File& file)
     return true;
 }
 
+// Recorded notes, and notes in sessions from before note IDs existed, get
+// their IDs here, so that reading a region never has to change the session.
+// Not an undo step: an ID is bookkeeping, not an edit.
+static void assignAllNoteIds (te::Edit& edit)
+{
+    for (auto* track : te::getAudioTracks (edit))
+        for (auto* clip : track->getClips())
+            if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+                detail::assignNoteIds (*midi);
+}
+
 void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
                             const juce::File& bundle, const juce::File& legacySessionFile)
 {
@@ -948,6 +959,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->legacySessionFile = legacySessionFile;
     impl->untitled = bundle == juce::File();
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
+    assignAllNoteIds (*impl->edit);
 
     // ...so the old session's working copy isn't needed any more.
     if (oldWorkFolder != workFolder)
@@ -1137,7 +1149,19 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
         source.clip->state.setProperty (te::IDs::source, path, nullptr);
     }
 
-    if (! te::EditFileOperations (edit).writeToFile (impl->sessionFile, false))
+    // Writing the file first flushes every plug-in's settings into the state,
+    // and some plug-ins (4OSC) do that through the undo manager. Left alone,
+    // that would be an invisible "undo step" that also throws away Redo. So
+    // the flush gets a transaction of its own, which we take straight back off
+    // the history: undoCurrentTransactionOnly() also puts back the redo steps
+    // JUCE set aside. (Undoing it changes nothing: the flush only rewrote
+    // settings with the values they already had.)
+    auto& undoManager = edit.getUndoManager();
+    undoManager.beginNewTransaction();
+    const bool written = te::EditFileOperations (edit).writeToFile (impl->sessionFile, false);
+    undoManager.undoCurrentTransactionOnly();   // does nothing if the flush recorded nothing
+
+    if (! written)
     {
         // Point everything back at the files it used before. (Copies made in
         // the Audio folder do no harm.)
@@ -1256,6 +1280,9 @@ void AudioEngine::stop()
         beginUndoStep ("Record");   // the new region is added as one undo step
 
     transport.stop (false, false);   // false = keep the recording
+
+    if (wasRecording)
+        assignAllNoteIds (*impl->edit);
 
     if (wasRecording && impl->autoArmedTrack != 0)
         trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
@@ -1438,13 +1465,13 @@ static void syncParametersFromState (te::Edit& edit)
 
 void AudioEngine::undo()
 {
-    impl->edit->undo();
+    trackController->automation().keepValuesWhenAutomationGoes ([this] { impl->edit->undo(); });
     syncParametersFromState (*impl->edit);
 }
 
 void AudioEngine::redo()
 {
-    impl->edit->redo();
+    trackController->automation().keepValuesWhenAutomationGoes ([this] { impl->edit->redo(); });
     syncParametersFromState (*impl->edit);
 }
 bool AudioEngine::canUndo() const   { return impl->edit->getUndoManager().canUndo(); }
@@ -1457,6 +1484,13 @@ void AudioEngine::beginUndoStep (const juce::String& name)
 {
     impl->userHasMadeChanges = true;
     impl->edit->getUndoManager().beginNewTransaction (name);
+}
+
+juce::String AudioEngine::getStateSnapshot() const
+{
+    // No flushState() here: it records undo actions (see saveSession), and the
+    // built-in plug-ins keep their settings in the state tree anyway.
+    return impl->edit->state.toXmlString();
 }
 
 //==============================================================================

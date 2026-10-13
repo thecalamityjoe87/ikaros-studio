@@ -466,6 +466,7 @@ std::vector<SoundControlParameter> getSoundControlParameters (te::AudioTrack& t,
             SoundControlParameter c;
             c.name = k.label;
             c.parameter = synth->getAutomatableParameterByID (k.paramID).get();
+            c.stateProperty = k.paramID;
 
             if (auto* param = c.parameter)
             {
@@ -500,6 +501,8 @@ std::vector<SoundControlParameter> getSoundControlParameters (te::AudioTrack& t,
         {
             if (auto* sfz = dynamic_cast<SfzPlugin*> (instrument))
                 c.parameter = sfz->getCcParameter (knob.cc);
+
+            c.stateProperty = SfzPlugin::ccProperty (knob.cc);
         }
         else if (knob.control == "tune")
         {
@@ -509,6 +512,7 @@ std::vector<SoundControlParameter> getSoundControlParameters (te::AudioTrack& t,
             if (transpose != nullptr)
                 c.parameter = transpose->getSemitonesParameter();
 
+            c.stateProperty = TransposePlugin::semitonesID;
             c.toParameter = knobToSemitones;
             c.fromParameter = semitonesToKnob;
         }
@@ -519,6 +523,8 @@ std::vector<SoundControlParameter> getSoundControlParameters (te::AudioTrack& t,
 
             if (shaper != nullptr)
                 c.parameter = shaper->getParameterFor (knob.control);
+
+            c.stateProperty = juce::Identifier (knob.control);
         }
 
         result.push_back (std::move (c));

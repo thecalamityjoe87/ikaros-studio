@@ -407,10 +407,12 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
+    add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     set_tests_properties(EngineSmokeTest PROPERTIES LABELS "engine")
     set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
+    set_tests_properties(EngineSmokeTest.Undo PROPERTIES LABELS "undo")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

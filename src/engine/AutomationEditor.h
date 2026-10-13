@@ -90,6 +90,12 @@ public:
         can't move itself (on missing plug-ins) on the same beat. */
     void keepUnloadedCurvesOnBeats (const std::function<void()>& changeTempo);
 
+    /** @internal Runs an undo or redo. While a setting is automated, its stored
+        value follows the curve (Tracktion writes it outside the undo history),
+        so a setting that loses its automation would keep whatever value the
+        curve last gave it. This puts it back to the value it had before. */
+    void keepValuesWhenAutomationGoes (const std::function<void()>& undoOrRedo);
+
 private:
     struct Resolved;
     std::optional<Resolved> resolve (TrackId, const juce::String& targetId, bool createIfNeeded) const;
