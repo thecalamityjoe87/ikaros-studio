@@ -3,6 +3,7 @@
 // Internal to ArrangementView: only its own .cpp files include this.
 
 #include "ui/arrangement/ArrangementLane.h"       // Content owns its Lanes...
+#include "ui/arrangement/ArrangementAutomation.h" // ...and the automation drawn over them
 #include "ui/arrangement/ArrangementOverlays.h"   // ...and holds a DropZone by value
 
 namespace ikaros
@@ -28,6 +29,9 @@ public:
     bool syncRegion (const RegionInfo&);
 
     TrackHeader* findHeader (TrackId) const;
+
+    /** Feeds each header's volume slider its track's level (on the ~30 Hz timer). */
+    void updateMeters();
     RegionComponent* findRegion (RegionId) const;
 
     /** Where the last region on any track ends. */
@@ -47,6 +51,12 @@ private:
     ArrangementView& owner;
     std::map<TrackId, std::unique_ptr<TrackHeader>> headers;
     std::map<TrackId, std::unique_ptr<Lane>> lanes;
+
+    // Every track has an automation lane, over its own lane (on top, so it
+    // gets the clicks). It's only visible while the track's automation is shown.
+    std::map<TrackId, std::unique_ptr<AutomationLane>> automationLanes;
+
+    void updateAutomation (const TrackInfo&);
     std::vector<TrackId> order;
     DropZone dropZone;
 };

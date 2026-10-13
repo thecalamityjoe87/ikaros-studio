@@ -110,7 +110,46 @@ struct TrackInfo
     float pan = 0.0f;              // -1 (left) .. 0 (centre) .. 1 (right)
     float reverbSend = 0.0f;       // sends to the shared buses, 0..1 (see SendBuses)
     float delaySend = 0.0f;
+
+    // Automation (see AutomationEditor)
+    bool automationShown = false;  // the automation lane under the track is open
+    juce::String automationTarget; // what that lane shows (an AutomationTarget id)
+    juce::StringArray automated;   // the targets that have automation, e.g. "volume"
+                                   // (their controls follow it and can't be set by hand)
 };
+
+//==============================================================================
+// Automation: a curve of points that moves one of a track's settings as the
+// song plays. A lane under the track shows one curve at a time.
+
+/** One point of an automation curve. */
+struct AutomationPoint
+{
+    double beat = 0.0;     // on the timeline (not relative to a region: automation belongs to the track)
+    float value = 0.0f;    // 0..1, as the setting's own control shows it (e.g. the fader position)
+
+    bool operator== (const AutomationPoint&) const = default;
+};
+
+/** Something on a track that can be automated. */
+struct AutomationTarget
+{
+    juce::String id;       // see automationTargets below
+    juce::String name;     // e.g. "Volume", "Brightness" or "Cutoff"
+    juce::String group;    // for the picker: "Mixer", "Sound", or a plug-in's name
+    bool automated = false;   // it has points
+    bool editable = true;     // false for a missing plug-in's: kept, but can't change until it's back
+};
+
+/** The ids of the targets every track has. A plug-in parameter's id is
+    "param:<PluginId>:<parameter id>". */
+namespace automationTargets
+{
+    inline const juce::String volume ("volume");
+    inline const juce::String pan ("pan");
+    inline juce::String send (int bus)            { return "send:" + juce::String (bus); }       // see SendBuses
+    inline juce::String soundControl (int index)  { return "sound:" + juce::String (index); }    // the Sound tab's knobs
+}
 
 // What changed in the session since the UI last heard, so it only re-reads
 // what it needs: turning a knob shouldn't rebuild every region's waveform.
@@ -123,6 +162,7 @@ struct ModelChanges
     bool notes = false;        // notes inside MIDI regions (see changedRegions for which)
     bool mixer = false;        // volume, pan, sends and plug-in settings (knobs)
     bool transport = false;    // tempo, time signature or key, which move regions on the beat grid
+    bool automation = false;   // automation points added, moved or removed
     bool session = false;      // the session was replaced or saved, or something unknown: re-read everything
 
     // Regions whose own settings (position, length, name) or notes changed.
@@ -135,7 +175,7 @@ struct ModelChanges
     /** True if anything at all changed. */
     bool any() const
     {
-        return tracks || regions || notes || mixer || transport || session || ! changedRegions.empty();
+        return tracks || regions || notes || mixer || transport || automation || session || ! changedRegions.empty();
     }
 
     /** True if anything about this region (or the whole region list) changed. */
@@ -152,6 +192,7 @@ struct ModelChanges
         notes |= other.notes;
         mixer |= other.mixer;
         transport |= other.transport;
+        automation |= other.automation;
         session |= other.session;
         changedRegions.insert (other.changedRegions.begin(), other.changedRegions.end());
     }

@@ -94,6 +94,22 @@ private:
 //==============================================================================
 SfzPlugin::SfzPlugin (te::PluginCreationInfo info) : te::Plugin (info)
 {
+    // A parameter for each controller the instrument's knobs use, so they
+    // can be automated. (Which controllers those are was stored in the
+    // state when the instrument was picked: see createSfzInstrument.)
+    for (int cc = 0; cc < (int) ccValues.size(); ++cc)
+    {
+        if (! state.hasProperty (ccProperty (cc)))
+            continue;
+
+        CcParameter p;
+        p.cc = cc;
+        p.value = std::make_unique<juce::CachedValue<float>> (state, ccProperty (cc), getUndoManager(), 0.5f);
+        p.parameter = addParam (ccProperty (cc).toString(), "CC " + juce::String (cc), { 0.0f, 1.0f });
+        p.parameter->attachToCurrentValue (*p.value);
+        ccParameters.push_back (std::move (p));
+    }
+
     readCcValues();
     loader = std::make_unique<Loader> (*this);
     requestLoad();
@@ -103,11 +119,23 @@ SfzPlugin::~SfzPlugin()
 {
     notifyListenersOfDeletion();
 
+    for (auto& p : ccParameters)
+        p.parameter->detachFromCurrentValue();
+
     // Stop the loader first, so nothing hands over a synth while we tidy up.
     loader.reset();
     delete active;
     delete incoming.exchange (nullptr);
     delete outgoing.exchange (nullptr);
+}
+
+te::AutomatableParameter* SfzPlugin::getCcParameter (int controllerNumber) const
+{
+    for (auto& p : ccParameters)
+        if (p.cc == controllerNumber)
+            return p.parameter.get();
+
+    return nullptr;
 }
 
 juce::File SfzPlugin::getSfzFile() const

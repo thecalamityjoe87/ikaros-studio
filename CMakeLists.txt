@@ -147,6 +147,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
+    src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
+    src/engine/SoundControls.h
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
@@ -175,6 +177,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
     src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
+    src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
@@ -203,6 +206,7 @@ set(IKAROS_UI_SOURCES
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
     src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
+    src/ui/arrangement/ArrangementAutomation.h src/ui/arrangement/ArrangementAutomation.cpp
     src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
     src/ui/arrangement/ArrangementOverlays.h    src/ui/arrangement/ArrangementOverlays.cpp
     src/ui/arrangement/ArrangementRegionDrag.h  src/ui/arrangement/ArrangementRegionDrag.cpp

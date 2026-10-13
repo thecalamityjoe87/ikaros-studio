@@ -36,7 +36,8 @@ void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
     colour = t.colour;
     selected = isSelected;
     isAudio = t.kind == TrackKind::audio;
-    setAlpha (t.silencedBySolo || t.muted ? 0.4f : 1.0f);
+    // Quieter when muted; fainter still under automation, so the curve stands out.
+    setAlpha ((t.silencedBySolo || t.muted ? 0.4f : 1.0f) * (t.automationShown ? 0.45f : 1.0f));
     setTooltip (isAudio ? "Drop an audio file here, or press R to record"
                         : "Double-click to add a 4-bar chord region");
 }

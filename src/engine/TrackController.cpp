@@ -29,6 +29,12 @@ struct MeterTap
 
     te::Plugin::Ptr plugin;          // ref-counted pointer keeps the plugin alive while we're attached
     te::LevelMeasurer::Client client;
+
+    // Reading the client clears it, so a second reader on the same UI tick
+    // (the track header and the Mixer both show a track's level) would get
+    // nothing. Readings within a few milliseconds share the first one.
+    StereoLevel lastLevel;
+    juce::uint32 lastReadMs = 0;
 };
 
 struct TrackController::Impl
@@ -46,7 +52,8 @@ TrackController::TrackController (AudioEngine& o)
       noteEditor (std::make_unique<NoteEditor> (o)),
       effectsController (std::make_unique<EffectsController> (o)),
       sendBuses (std::make_unique<SendBuses> (o)),
-      eqController (std::make_unique<EqController> (o))
+      eqController (std::make_unique<EqController> (o)),
+      automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses))
 {
 }
 
@@ -115,6 +122,10 @@ std::vector<TrackInfo> TrackController::getTracks() const
             info.volumeDb = vol->getVolumeDb();
             info.pan = vol->getPan();
         }
+
+        info.automationShown = automationEditor->isLaneShown (info.id);
+        info.automationTarget = automationEditor->getLaneTarget (info.id);
+        info.automated = automationEditor->getAutomatedTargets (info.id);
 
         result.push_back (info);
     }
@@ -413,8 +424,15 @@ StereoLevel TrackController::getTrackLevel (TrackId id)
             return {};
     }
 
-    return { tap->client.getAndClearAudioLevel (0).dB,
-             tap->client.getAndClearAudioLevel (1).dB };
+    const auto now = juce::Time::getMillisecondCounter();
+
+    if (now - tap->lastReadMs > 10)
+    {
+        tap->lastLevel = { tap->client.getAndClearAudioLevel (0).dB, tap->client.getAndClearAudioLevel (1).dB };
+        tap->lastReadMs = now;
+    }
+
+    return tap->lastLevel;
 }
 
 TrackDetails TrackController::getDetails (TrackId id) const

@@ -1,4 +1,5 @@
 #include "ui/bottompanel/BottomPanel.h"
+#include "ui/widgets/AutomationHint.h"
 #include "ui/widgets/Knob.h"
 #include "ui/bottompanel/PianoKeyboard.h"
 #include "ui/widgets/LevelMeter.h"
@@ -36,6 +37,12 @@ public:
                 engine.getTracks().effects().setSoundControl (selection.getTrack(), i, v);
                 refreshKnobText();
             };
+
+            // Automated, it moves with the automation, and a grab only moves
+            // it until it's let go (see followAutomation).
+            const auto target = automationTargets::soundControl (i);
+            followAutomation (knob->getSlider(), [this, target] { return automated.contains (target); },
+                              [this, knob, target] { showAutomationHint (engine, *knob, selection.getTrack(), target); });
             addAndMakeVisible (knob);
         }
 
@@ -79,6 +86,7 @@ public:
         keyboard.setVisible (! isAudioTrack);
 
         auto controls = tc.effects().getSoundControls (id);
+        automated = track.has_value() ? track->automated : juce::StringArray();
         instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
         soundName = track.has_value() ? track->soundName : juce::String();
 
@@ -101,6 +109,7 @@ public:
             knobs[i]->setValue (controls[(size_t) i].value, controls[(size_t) i].valueText);
             knobs[i]->setArcColour (arc);
             knobs[i]->setEnabled (track.has_value());
+            setAutomatedLook (knobs[i]->getSlider(), automated.contains (automationTargets::soundControl (i)));
         }
 
         details = tc.getDetails (id);
@@ -237,6 +246,7 @@ private:
     int shownKnobs = 5;   // how many knob tiles are laid out (the card takes the same width)
     std::optional<PluginSlot> instrument;
     juce::String soundName;
+    juce::StringArray automated;   // the knobs the track's automation moves (TrackInfo::automated)
     IconButton openWindowButton { "Open plug-in window", Icon::openWindow, "Open Plug-in Window" };
     IconButton downloadButton { "Download the sound pack", std::nullopt, "Download Pack" };
     juce::Rectangle<int> detailsArea, cardArea;

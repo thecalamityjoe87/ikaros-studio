@@ -70,6 +70,22 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     snapButton.onClick = [this] { showSnapMenu(); };
     addAndMakeVisible (snapButton);
 
+    // Show Automation: every track's automation at once (amber while it shows).
+    auto automationColours = snapColours;   // like the snap button, amber when on
+    automationColours.foreground = colour::textSecondary;
+    automationColours.backgroundOn = colour::accent;
+    automationColours.foregroundOn = colour::textOnAccent;
+    automationButton.setColours (automationColours);
+    automationButton.setCornerRadius (size::radiusSmall);
+    automationButton.setIconSize (16.0f);
+    automationButton.setTooltip ("Show automation on every track");
+    automationButton.onClick = [this]
+    {
+        auto& automation = engine.getTracks().automation();
+        automation.setAllLanesShown (! automation.areAllLanesShown());
+    };
+    addAndMakeVisible (automationButton);
+
     zoomSlider.setTitle ("Zoom");
     zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
     zoomSlider.setRange (0.0, 1.0);
@@ -101,15 +117,25 @@ void ArrangementView::refresh()
         regions[t.id] = tc.regions().getRegions (t.id);
 
     geometry.beatsPerBar = engine.beatsPerBar();
+    updateAutomationButton();
     content->sync (tracks, regions);
     contentEndBeat = content->getEndBeat();
     layoutContent();
     timelineChanged();
 }
 
+void ArrangementView::updateAutomationButton()
+{
+    const bool allShown = ! tracks.empty()
+                           && std::all_of (tracks.begin(), tracks.end(), [] (const TrackInfo& t) { return t.automationShown; });
+    automationButton.setToggleState (allShown, juce::dontSendNotification);
+    automationButton.setTooltip (allShown ? "Hide automation" : "Show automation on every track");
+}
+
 void ArrangementView::refreshTracks()
 {
     tracks = engine.getTracks().getTracks();
+    updateAutomationButton();
 
     if (! content->syncTracks (tracks))
         refresh();
@@ -319,6 +345,8 @@ void ArrangementView::showSnapMenu()
 //==============================================================================
 void ArrangementView::updateTransport()
 {
+    content->updateMeters();
+
     auto state = engine.getTransportState();
     ruler->setLoop (state.looping, state.loopStartBeats, state.loopEndBeats);
 
@@ -371,9 +399,10 @@ void ArrangementView::resized()
     ruler->setBounds (top);
 
     // Controls in the ruler's header part: "TRACKS" | snap | zoom.
-    snapButton.setBounds (68, top.getY() + 4, 90, top.getHeight() - 9);
-    zoomIconArea = { 166, top.getY() + 8, 14, 14 };
-    zoomSlider.setBounds (182, top.getY() + 4, headerWidth - 182 - 10, top.getHeight() - 9);
+    snapButton.setBounds (66, top.getY() + 4, 78, top.getHeight() - 9);
+    automationButton.setBounds (150, top.getY() + 4, 28, top.getHeight() - 9);
+    zoomIconArea = { 184, top.getY() + 8, 14, 14 };
+    zoomSlider.setBounds (200, top.getY() + 4, headerWidth - 200 - 10, top.getHeight() - 9);
 
     timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
     viewport.setBounds (r);
@@ -414,15 +443,46 @@ int ArrangementView::rowOf (TrackId id) const
     return -1;
 }
 
+int ArrangementView::rowTop (int row) const
+{
+    int y = 0;
+
+    for (int i = 0; i < row && i < (int) tracks.size(); ++i)
+        y += rowHeightOf (i);
+
+    return y;
+}
+
+int ArrangementView::rowHeightOf (int row) const
+{
+    const bool automationShown = juce::isPositiveAndBelow (row, (int) tracks.size()) && tracks[(size_t) row].automationShown;
+    return geometry.rowHeight + (automationShown ? automationPickerHeight : 0);
+}
+
+int ArrangementView::getTracksHeight() const
+{
+    return rowTop ((int) tracks.size());
+}
+
 int ArrangementView::rowAt (int y) const
 {
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
-    return juce::jlimit (0, juce::jmax (0, (int) tracks.size() - 1), contentY / geometry.rowHeight);
+    int bottom = 0;
+
+    for (int row = 0; row < (int) tracks.size(); ++row)
+    {
+        bottom += rowHeightOf (row);
+
+        if (contentY < bottom)
+            return row;
+    }
+
+    return juce::jmax (0, (int) tracks.size() - 1);
 }
 
 juce::Rectangle<float> ArrangementView::rowAreaInOverlay (int row) const
 {
-    return { 0.0f, (float) (row * geometry.rowHeight - viewport.getViewPositionY()), (float) getLaneWidth(), (float) geometry.rowHeight };
+    return { 0.0f, (float) (rowTop (row) - viewport.getViewPositionY()), (float) getLaneWidth(), (float) rowHeightOf (row) };
 }
 
 void ArrangementView::regionMouseDown (RegionComponent& comp, const juce::MouseEvent& e)   { regionDrag->regionMouseDown (comp, e); }
@@ -499,9 +559,9 @@ void ArrangementView::startRenamingTrack (TrackId id)
 
 void ArrangementView::scrollRowIntoView (int row)
 {
-    const int rowY = row * geometry.rowHeight;
+    const int rowY = rowTop (row);
 
-    if (rowY < viewport.getViewPositionY() || rowY + geometry.rowHeight > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
+    if (rowY < viewport.getViewPositionY() || rowY + rowHeightOf (row) > viewport.getViewPositionY() + viewport.getMaximumVisibleHeight())
         viewport.setViewPosition (0, rowY);
 }
 
@@ -640,7 +700,7 @@ ArrangementView::DropTarget ArrangementView::findDropTarget (int x, int y) const
 
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
 
-    if (y >= viewport.getY() && contentY < (int) tracks.size() * geometry.rowHeight)
+    if (y >= viewport.getY() && contentY < getTracksHeight())
     {
         target.row = rowAt (y);
 
@@ -685,7 +745,7 @@ void ArrangementView::fileDragMove (const juce::StringArray&, int x, int y)
     else
     {
         // Below the tracks: the drop zone.
-        area = { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+        area = { (float) dropZoneMargin, (float) (getTracksHeight() + dropZoneMargin - viewport.getViewPositionY()),
                  (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
         text = "Add on a new audio track";
     }
@@ -751,7 +811,7 @@ int ArrangementView::findSoundDropRow (int y) const
 {
     const int contentY = y - viewport.getY() + viewport.getViewPositionY();
 
-    if (y < viewport.getY() || contentY >= (int) tracks.size() * geometry.rowHeight)
+    if (y < viewport.getY() || contentY >= getTracksHeight())
         return -1;
 
     const int row = rowAt (y);
@@ -783,7 +843,7 @@ void ArrangementView::itemDragMove (const SourceDetails& details)
     else
     {
         // The drop zone below the tracks.
-        juce::Rectangle<float> area { (float) dropZoneMargin, (float) ((int) tracks.size() * geometry.rowHeight + dropZoneMargin - viewport.getViewPositionY()),
+        juce::Rectangle<float> area { (float) dropZoneMargin, (float) (getTracksHeight() + dropZoneMargin - viewport.getViewPositionY()),
                                       (float) (getLaneWidth() - dropZoneMargin * 2), (float) dropZoneHeight };
         overlay->setDropTarget (area, -1.0f, "New instrument track with " + name);
     }

@@ -333,7 +333,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
-                                   CommandIDs::showMixerTab, CommandIDs::toggleDetails,
+                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
@@ -565,6 +565,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
+        case CommandIDs::toggleAutomation:
+            // No shortcut: plain A (GarageBand's) plays a note on the computer keyboard here.
+            info.setInfo ("Show Automation", "Show every track's automation", "View", 0);
+            info.setTicked (engine.getTracks().automation().areAllLanesShown());
+            break;
         case CommandIDs::showMixerTab:
             info.setInfo ("Mixer", "Show every track's fader at once", "View", 0);
             info.setTicked (bottomPanel.isMixerShown());
@@ -730,6 +735,12 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
+        case CommandIDs::toggleAutomation:
+        {
+            auto& automation = engine.getTracks().automation();
+            automation.setAllLanesShown (! automation.areAllLanesShown());
+            break;
+        }
         case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
         case CommandIDs::toggleDetails:

@@ -2,6 +2,8 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/AutomationHint.h"
+#include <map>
 #include <tuple>
 
 namespace ikaros
@@ -51,12 +53,22 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.onClick = [this] { engine.getTracks().inputs().setMonitoring (info.id, ! info.monitoring); };
     addChildComponent (monitorButton);
 
+    // Automation: opens the lane under the track (amber while it's open).
+    automationButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
+    automationButton.setCornerRadius (size::radiusSmall);
+    automationButton.setIconSize (15.0f);
+    automationButton.onClick = [this]
+    {
+        selection.selectTrack (info.id);
+        engine.getTracks().automation().setLaneShown (info.id, ! info.automationShown);
+    };
+    addAndMakeVisible (automationButton);
+
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };
     soloButton.onClick = [this] { engine.getTracks().setSolo (info.id, ! info.solo); };
 
-    volume.setRange (0.0, 1.0);
     volume.setVelocityModeParameters (1.0, 1, 0.0, false);
-    volume.setColour (juce::Slider::trackColourId, colour::accent);
+    volume.setDoubleClickReturnValue (true, TrackController::getFaderPositionForDb (0.0f));
     // One undo step per drag: start a transaction when the mouse goes down.
     volume.onDragStart = [this] { engine.beginUndoStep ("Volume"); selection.selectTrack (info.id); };
     volume.onValueChange = [this] { engine.getTracks().setVolume (info.id, (float) volume.getValue()); };
@@ -69,6 +81,13 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     pan.onDragStart = [this] { engine.beginUndoStep ("Pan"); selection.selectTrack (info.id); };
     pan.onValueChange = [this] { engine.getTracks().setPan (info.id, (float) pan.getValue()); };
     addAndMakeVisible (pan);
+
+    // Automated, they move with the automation, and a grab only moves them
+    // until they're let go (see followAutomation).
+    followAutomation (volume, [this] { return info.automated.contains (automationTargets::volume); },
+                      [this] { showAutomationHint (engine, volume, info.id, automationTargets::volume); });
+    followAutomation (pan, [this] { return info.automated.contains (automationTargets::pan); },
+                      [this] { showAutomationHint (engine, pan, info.id, automationTargets::pan); });
 
     // The rename field: hidden until startRenaming(). Return keeps the new
     // name, Escape cancels, clicking elsewhere keeps it.
@@ -92,6 +111,8 @@ void TrackHeader::updateAccessibleNames()
     soloButton.setTooltip ("Solo " + info.name);
     armButton.setTitle ((info.armed ? "Disarm " : "Arm ") + info.name + " for recording");
     armButton.setTooltip (info.armed ? "Armed: Record records here" : "Arm for recording");
+    automationButton.setTitle ((info.automationShown ? "Hide automation for " : "Show automation for ") + info.name);
+    automationButton.setTooltip (info.automationShown ? "Hide automation" : "Show automation: draw how volume, pan and other settings change over time");
     monitorButton.setTitle ((info.monitoring ? "Stop monitoring " : "Monitor ") + info.name);
     monitorButton.setTooltip (info.monitoring ? "Monitoring: you hear the input live"
                                               : "Monitor: hear the input live (use headphones to avoid feedback)");
@@ -106,8 +127,19 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     // buttons and knobs redraw themselves when their own values change.
     // (std::tie bundles references to the members, so the two sets compare
     // in one go.)
-    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.colour, i.muted, i.silencedBySolo); };
-    const bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.colour, i.muted, i.silencedBySolo,
+                                                            i.automationShown, i.automationTarget); };
+    bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
+
+    if (t.automationShown)
+    {
+        const auto target = engine.getTracks().automation().getTarget (t.id, t.automationTarget);
+        const auto name = target ? target->name : juce::String ("Volume");
+        const bool isAutomated = target && target->automated;
+        needsRepaint |= name != automationName || isAutomated != automationTargetAutomated;
+        automationName = name;
+        automationTargetAutomated = isAutomated;
+    }
 
     info = t;
     selected = isSelected;
@@ -115,13 +147,15 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     muteButton.setToggleState (t.muted, juce::dontSendNotification);
     soloButton.setToggleState (t.solo, juce::dontSendNotification);
     armButton.setToggleState (t.armed, juce::dontSendNotification);
+    automationButton.setToggleState (t.automationShown, juce::dontSendNotification);
+    setAutomatedLook (volume, t.automated.contains (automationTargets::volume));
+    setAutomatedLook (pan, t.automated.contains (automationTargets::pan));
 
     // Don't fight the user: only move the slider if they aren't dragging it.
     if (! volume.isMouseButtonDown())
         volume.setValue (t.volume, juce::dontSendNotification);
 
     volume.setTooltip (juce::String (t.volumeDb, 1) + " dB");
-    volume.setColour (juce::Slider::trackColourId, t.colour);
 
     if (! pan.isMouseButtonDown())
         pan.setValue (t.pan, juce::dontSendNotification);
@@ -156,13 +190,17 @@ void TrackHeader::mouseDown (const juce::MouseEvent& e)
     {
         showIconMenu();
     }
+    else if (info.automationShown && pickerArea.contains (e.getPosition()))
+    {
+        showAutomationMenu();
+    }
 }
 
 void TrackHeader::mouseMove (const juce::MouseEvent& e)
 {
     // The icon tile is a button: show it.
-    setMouseCursor (iconArea.contains (e.getPosition()) ? juce::MouseCursor::PointingHandCursor
-                                                        : juce::MouseCursor::NormalCursor);
+    const bool onButton = iconArea.contains (e.getPosition()) || (info.automationShown && pickerArea.contains (e.getPosition()));
+    setMouseCursor (onButton ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
 
 void TrackHeader::showIconMenu()
@@ -197,6 +235,74 @@ juce::PopupMenu TrackHeader::createIconMenu (AudioEngine& engine, TrackId id)
     }
 
     return menu;
+}
+
+void TrackHeader::showAutomationMenu()
+{
+    // The menu's actions run after it closes, when this header may be gone
+    // (the track deleted, say), so they only capture the engine and the id.
+    auto& eng = engine;
+    const auto id = info.id;
+    auto& automation = engine.getTracks().automation();
+    const auto current = info.automationTarget;
+
+    auto makeItem = [&] (const AutomationTarget& a)
+    {
+        juce::PopupMenu::Item item (a.name);
+        item.setTicked (a.id == current);
+
+        // Settings with automation stand out in amber, like their controls.
+        if (a.automated)
+            item.setColour (colour::accent);
+
+        item.setAction ([&eng, id, targetId = a.id] { eng.getTracks().automation().setLaneTarget (id, targetId); });
+        return item;
+    };
+
+    juce::PopupMenu menu;
+    std::map<juce::String, juce::PopupMenu> pluginMenus;   // a submenu per plug-in (they can have hundreds)
+    juce::StringArray pluginOrder;
+    juce::String lastGroup;
+
+    for (auto& a : automation.getTargets (id))
+    {
+        if (a.group == "Mixer" || a.group == "Sound")
+        {
+            if (a.group != lastGroup)
+                menu.addSectionHeader (a.group);
+
+            lastGroup = a.group;
+            menu.addItem (makeItem (a));
+        }
+        else
+        {
+            pluginOrder.addIfNotAlreadyThere (a.group);
+            pluginMenus[a.group].addItem (makeItem (a));
+        }
+    }
+
+    if (! pluginOrder.isEmpty())
+    {
+        menu.addSectionHeader ("Plug-ins");
+
+        for (auto& name : pluginOrder)
+            menu.addSubMenu (name, pluginMenus[name]);
+    }
+
+    const auto target = automation.getTarget (id, current);
+    menu.addSeparator();
+    menu.addItem (juce::PopupMenu::Item ("Delete All " + automationName + " Points")
+                      .setEnabled (target && target->automated && target->editable)
+                      .setAction ([&eng, id, current]
+                      {
+                          eng.beginUndoStep ("Delete Automation");
+                          eng.getTracks().automation().setPoints (id, current, {});
+                      }));
+    menu.addItem (juce::PopupMenu::Item ("Hide Automation")
+                      .setAction ([&eng, id] { eng.getTracks().automation().setLaneShown (id, false); }));
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
+                                                  .withTargetScreenArea (localAreaToGlobal (pickerArea)));
 }
 
 void TrackHeader::mouseDoubleClick (const juce::MouseEvent& e)
@@ -256,20 +362,39 @@ void TrackHeader::paint (juce::Graphics& g)
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (12.0f));
     g.drawText (info.soundName, soundArea, juce::Justification::centredLeft, true);
+
+    if (info.automationShown)
+    {
+        // The automation picker: the setting's name (amber if it has
+        // automation, like its control) and a chevron.
+        const auto pill = pickerArea.toFloat();
+        g.setColour (colour::controlFill);
+        g.fillRoundedRectangle (pill, size::radiusSmall);
+        auto text = pill.reduced (8.0f, 0.0f);
+        icons::draw (g, Icon::chevronDown, text.removeFromRight (12.0f), colour::textSecondary, 12.0f);
+
+        // A dot in the curve's colour, so it's clear which curve this is.
+        g.setColour (getAutomationColour (info.automationTarget));
+        g.fillEllipse (text.removeFromLeft (8.0f).withSizeKeepingCentre (8.0f, 8.0f));
+        text.removeFromLeft (6.0f);
+        g.setColour (automationTargetAutomated ? colour::accent : colour::text);
+        g.setFont (fonts::uiBold (12.0f));
+        g.drawText (automationName, text, juce::Justification::centredLeft, true);
+    }
 }
 
 void TrackHeader::resized()
 {
     // Laid out from the top: when zooming makes the row taller, the
     // controls stay together and the lane gets the extra room.
-    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (12, 10);
+    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (12, 6);
 
     iconArea = r.removeFromLeft (44).removeFromTop (44);
     r.removeFromLeft (12);
 
     auto top = r.removeFromTop (26);
 
-    for (auto* b : { &armButton, &monitorButton, &soloButton, &muteButton })
+    for (auto* b : { &armButton, &monitorButton, &soloButton, &muteButton, &automationButton })
     {
         if (b->isVisible())
         {
@@ -283,15 +408,21 @@ void TrackHeader::resized()
 
     r.removeFromTop (4);
     soundArea = r.removeFromTop (18).withTrimmedRight (panSize);
-    r.removeFromTop (8);
+    r.removeFromTop (6);
 
     // Pan knob at the end of the volume slider's row, centred on it. Its
     // bounds are taller than the row: the knob is drawn inset, and the extra
     // space is empty.
     auto volumeRow = r.removeFromTop (22);
+    const auto volumeAndPan = volumeRow;
     pan.setBounds (volumeRow.removeFromRight (panSize).withSizeKeepingCentre (panSize, panSize));
     volumeRow.removeFromRight (6);
     volume.setBounds (volumeRow);
+
+    // Under them, as wide as both: the automation picker (while it shows).
+    // The pan knob reaches a little below its row, hence the bigger gap.
+    r.removeFromTop (10);
+    pickerArea = r.removeFromTop (18).withX (volumeAndPan.getX()).withWidth (volumeAndPan.getWidth());
 }
 
 } // namespace ikaros

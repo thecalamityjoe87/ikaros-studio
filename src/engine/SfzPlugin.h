@@ -42,6 +42,11 @@ public:
         "cc72". A controller without one is left at the SFZ file's default. */
     static juce::Identifier ccProperty (int controllerNumber);
 
+    /** The automatable parameter for a controller the Sound tab has a knob
+        for (one that had a value in the state when the plugin was made), or
+        nullptr. Its ID is the property's name, e.g. "cc72". */
+    tracktion::AutomatableParameter* getCcParameter (int controllerNumber) const;
+
     /** The .sfz file this instrument plays. */
     juce::File getSfzFile() const;
 
@@ -102,6 +107,18 @@ private:
     // thread, and a flag that says they've changed since it last sent them.
     std::array<std::atomic<float>, 128> ccValues;
     std::atomic<bool> ccValuesChanged { false };
+
+    // The controllers with a knob, as automatable parameters. Each is backed
+    // by its state property through a CachedValue, so automation playing
+    // back writes the property, which readCcValues() then passes on.
+    // (unique_ptr: a CachedValue can't be moved once something refers to it.)
+    struct CcParameter
+    {
+        int cc = 0;
+        std::unique_ptr<juce::CachedValue<float>> value;
+        tracktion::AutomatableParameter::Ptr parameter;
+    };
+    std::vector<CcParameter> ccParameters;
 
     void requestLoad();
     bool takeIncomingSynth();     // true if a new synth was swapped in

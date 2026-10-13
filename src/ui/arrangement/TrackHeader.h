@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/widgets/IconButton.h"
+#include "ui/widgets/MeterSlider.h"
 #include "ui/state/Selection.h"
 
 namespace ikaros
@@ -8,9 +9,11 @@ namespace ikaros
 
 //==============================================================================
 /**
-    One row in the track headers column (240 × 76): colour edge, icon tile,
-    name, Mute/Solo/(Monitor)/Arm, the sound name, a volume slider and a pan
-    knob. The Monitor button only shows on audio tracks: instrument tracks
+    One row in the track headers column (320 × 118): colour edge, icon tile,
+    name, Mute/Solo/(Monitor)/Arm, the sound name, a volume slider (with the
+    track's level meter in it) and a pan knob, and next to Mute a button that shows the track's automation.
+    While it shows, a picker under the volume row says which setting's
+    automation is drawn over the track's lane. The Monitor button only shows on audio tracks: instrument tracks
     always play what you play.
 
     Right-click shows the track menu (via onShowMenu); double-click the name
@@ -23,6 +26,9 @@ public:
 
     void update (const TrackInfo&, bool isSelected);
     TrackId getTrackId() const noexcept     { return info.id; }
+
+    /** The track's level, for the meter in its volume slider (the ~30 Hz timer calls this). */
+    void setLevel (StereoLevel level)       { volume.setLevel (level); }
 
     /** Shows the rename field over the name. */
     void startRenaming();
@@ -50,14 +56,20 @@ private:
     IconButton soloButton { "Solo", Icon::headphones };          // headphones = solo, as in GarageBand
     IconButton monitorButton { "Monitor input", Icon::waveform };
     IconButton armButton  { "Arm for recording", Icon::record };
-    juce::Slider volume { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    IconButton automationButton { "Show automation", Icon::automation };
+    MeterSlider volume;   // the track's level and volume in one, like the master's
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::TextEditor nameEditor;
     bool renaming = false;
 
-    juce::Rectangle<int> iconArea, nameArea, soundArea;
+    juce::Rectangle<int> iconArea, nameArea, soundArea, pickerArea;
 
     void showIconMenu();
+    void showAutomationMenu();
+
+    // While the automation shows: the setting it's for (see showAutomationMenu).
+    juce::String automationName;
+    bool automationTargetAutomated = false;
 
     void updateAccessibleNames();
     void finishRenaming (bool keepNewName);

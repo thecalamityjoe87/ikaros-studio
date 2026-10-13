@@ -84,6 +84,9 @@ namespace
             case Icon::stop:           return "M7 7h10v10H7z";
             case Icon::warning:        return "M12 3.5l9.5 17h-19z M12 10v5 M12 18h.01";
             case Icon::openWindow:     return "M14 4h6v6 M20 4l-9 9 M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5";   // box with an arrow out
+            // A ramp between two points: low, up, high.
+            case Icon::automation:     return "M2 17h1.5 M8.5 17a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0 M7.8 15.2l6.4-6.4 "
+                                              "M18.5 7a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0 M20.5 7H22";
             case Icon::download:       return "M12 4v11 M7 10l5 5l5-5 M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2";   // arrow down into a tray
         }
 

@@ -91,39 +91,47 @@ float SendBuses::getSendLevel (TrackId id, int bus) const
 
 void SendBuses::setSendLevel (TrackId id, int bus, float level)
 {
-    auto* edit = owner.getEdit();
-    auto* t = findTrack (edit, id);
+    auto* t = findTrack (owner.getEdit(), id);
 
     if (t == nullptr || ! juce::isPositiveAndBelow (bus, numBuses))
         return;
 
     level = juce::jlimit (0.0f, 1.0f, level);
-    auto* send = findSend (*t, bus);
 
-    if (send == nullptr)
-    {
-        if (level <= 0.0f)
-            return;
+    if (findSend (*t, bus) == nullptr && level <= 0.0f)
+        return;
 
-        if (findBusTrack (*edit, bus) == nullptr)
-            createBusTrack (*edit, bus);
+    createSend (id, bus);
 
-        // Created silent, then turned up below, so undo has a value to go back to.
-        auto plugin = edit->getPluginCache().createNewPlugin (te::createValueTree (te::IDs::PLUGIN,
-                                                                                   te::IDs::type, te::AuxSendPlugin::xmlTypeName,
-                                                                                   te::IDs::busNum, bus,
-                                                                                   te::IDs::auxSendSliderPos, 0.0f));
-        send = dynamic_cast<te::AuxSendPlugin*> (plugin.get());
+    if (auto* send = findSend (*t, bus))
+        setParameterUndoably (*send, *send->gain, te::IDs::auxSendSliderPos, level * fullLevelPosition());
+}
 
-        if (send == nullptr)
-            return;
+void SendBuses::createSend (TrackId id, int bus)
+{
+    auto* edit = owner.getEdit();
+    auto* t = findTrack (edit, id);
 
-        // After the volume plugin: post-fader.
-        auto* vol = t->getVolumePlugin();
-        t->pluginList.insertPlugin (plugin, vol != nullptr ? t->pluginList.indexOf (vol) + 1 : -1, nullptr);
-    }
+    if (t == nullptr || ! juce::isPositiveAndBelow (bus, numBuses) || findSend (*t, bus) != nullptr)
+        return;
 
-    setParameterUndoably (*send, *send->gain, te::IDs::auxSendSliderPos, level * fullLevelPosition());
+    if (findBusTrack (*edit, bus) == nullptr)
+        createBusTrack (*edit, bus);
+
+    // Created silent (and turned up by the caller), so undo has a value to go back to.
+    auto plugin = edit->getPluginCache().createNewPlugin (te::createValueTree (te::IDs::PLUGIN,
+                                                                               te::IDs::type, te::AuxSendPlugin::xmlTypeName,
+                                                                               te::IDs::busNum, bus,
+                                                                               te::IDs::auxSendSliderPos, 0.0f));
+
+    // After the volume plugin: post-fader.
+    auto* vol = t->getVolumePlugin();
+    t->pluginList.insertPlugin (plugin, vol != nullptr ? t->pluginList.indexOf (vol) + 1 : -1, nullptr);
+}
+
+float SendBuses::getFullLevelPosition()
+{
+    return fullLevelPosition();
 }
 
 } // namespace ikaros

@@ -88,6 +88,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::toggleCountIn);
         m.addSeparator();
         add (CommandIDs::showMixerTab);
+        add (CommandIDs::toggleAutomation);
     }
     else if (name == "View")
     {

@@ -1548,11 +1548,158 @@ int main (int argc, char* argv[])
         check (std::abs (first.reverbSend - 0.5f) < 0.01f && std::abs (first.delaySend - 0.25f) < 0.01f, "sends round-trip");
     }
 
+    std::cout << "Automation\n";
+    {
+        auto automationSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Automation"));
+        const std::vector<AutomationPoint> ramp { { 4.0, 0.2f }, { 8.0, 0.9f } };
+
+        auto samePoints = [] (const std::vector<AutomationPoint>& a, const std::vector<AutomationPoint>& b)
+        {
+            if (a.size() != b.size())
+                return false;
+
+            for (size_t i = 0; i < a.size(); ++i)
+                if (std::abs (a[i].beat - b[i].beat) > 1.0e-6 || std::abs (a[i].value - b[i].value) > 1.0e-3f)
+                    return false;
+
+            return true;
+        };
+
+        {
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            auto& tracks = engine.getTracks();
+            auto& automation = tracks.automation();
+            auto t = tracks.getTracks().front().id;
+
+            auto targets = automation.getTargets (t);
+            auto hasTarget = [&] (const juce::String& id)
+            {
+                return std::any_of (targets.begin(), targets.end(), [&] (const AutomationTarget& a) { return a.id == id; });
+            };
+            check (hasTarget (automationTargets::volume) && hasTarget (automationTargets::pan)
+                     && hasTarget (automationTargets::send (SendBuses::reverb)) && hasTarget (automationTargets::send (SendBuses::delay))
+                     && hasTarget (automationTargets::soundControl (0)) && hasTarget (automationTargets::soundControl (4)),
+                   "volume, pan, both sends and the Sound knobs can be automated");
+
+            const bool couldUndo = engine.canUndo();
+            automation.setLaneShown (t, true);
+            pumpMessages();
+            check (tracks.getTrack (t)->automationShown && tracks.getTrack (t)->automationTarget == automationTargets::volume,
+                   "a track's lane can be shown, and starts on volume");
+            check (engine.canUndo() == couldUndo, "(showing it isn't an undo step)");
+
+            engine.beginUndoStep ("Add Automation Point");
+            check (automation.setPoints (t, automationTargets::volume, ramp), "points can be added");
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "and read back in beats");
+            check (tracks.getTrack (t)->automated.contains (automationTargets::volume), "the track says its volume is automated");
+
+            // A drag: many small moves, one undo step.
+            engine.beginUndoStep ("Move Automation Points");
+
+            for (int i = 1; i <= 10; ++i)
+                automation.setPoints (t, automationTargets::volume, { { 4.0 + i * 0.25, 0.2f + i * 0.02f }, { 8.0 + i * 0.25, 0.9f } });
+
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), { { 6.5, 0.4f }, { 10.5, 0.9f } }), "points can be moved");
+            check (engine.getUndoDescription() == "Move Automation Points", "(the move is a named undo step)");
+            engine.undo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "undo puts a whole drag back in one step");
+            engine.undo();
+            pumpMessages();
+            check (automation.getPoints (t, automationTargets::volume).empty() && ! tracks.getTrack (t)->automated.contains (automationTargets::volume),
+                   "undo removes added points");
+            engine.redo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "redo adds them back");
+
+            // Points are sorted, and kept within 0..1 and after the start.
+            engine.beginUndoStep ("Pan Automation");
+            automation.setPoints (t, automationTargets::pan, { { 6.0, 1.5f }, { -2.0, 0.25f } });
+            check (samePoints (automation.getPoints (t, automationTargets::pan), { { 0.0, 0.25f }, { 6.0, 1.0f } }), "points are sorted and kept in range");
+            check (automation.describeValue (t, automationTargets::pan, 0.25f) == "L 50", "pan values read like the pan knob");
+
+            // A send and a Sound knob.
+            const auto reverb = automationTargets::send (SendBuses::reverb);
+            automation.setPoints (t, reverb, { { 0.0, 0.5f } });
+            automation.setPoints (t, automationTargets::soundControl (0), { { 0.0, 0.3f }, { 4.0, 0.7f } });
+            pumpMessages();
+            check (automation.getPoints (t, reverb).size() == 1, "a send can be automated (it's made if needed)");
+            check (tracks.getTrack (t)->automated.contains (automationTargets::soundControl (0)), "and a Sound knob");
+
+            // Automation belongs to the track, not its regions.
+            auto region = tracks.regions().createChordRegion (t, 0.0);
+            pumpMessages();
+            engine.beginUndoStep ("Move Region");
+            tracks.regions().moveRegions ({ { region, t, 8.0 } });
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "moving a region leaves the automation where it is");
+
+            // It plays: silence where the volume curve is at the bottom.
+            engine.beginUndoStep ("Volume Automation");
+            automation.setPoints (t, automationTargets::volume, { { 0.0, 0.0f }, { 16.0, 0.0f } });
+            const float silent = engine.renderPeak (8.0, 12.0);
+            automation.setPoints (t, automationTargets::volume, { { 0.0, 0.8f }, { 16.0, 0.8f } });
+            const float loud = engine.renderPeak (8.0, 12.0);
+            std::cout << "  (peak with volume automation at the bottom " << silent << ", at 0.8 " << loud << ")\n";
+            check (silent < 0.001f && loud > 0.01f, "the volume follows its automation when the song plays");
+            automation.setPoints (t, automationTargets::volume, ramp);
+
+            // Tempo: Tracktion stores points in seconds and moves them with the tempo.
+            engine.setBpm (60.0);
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "a tempo change keeps points on their beats");
+            engine.undo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp) && engine.getTransportState().bpm == 120.0,
+                   "and so does undoing it");
+            engine.setBpm (90.0);
+
+            // Show all: every track's lane opens, on a setting that has automation.
+            auto other = tracks.addInstrumentTrack();
+            engine.beginUndoStep ("Pan Automation");
+            automation.setPoints (other, automationTargets::pan, { { 0.0, 0.2f } });
+            automation.setLaneShown (t, false);
+            automation.setAllLanesShown (true);
+            pumpMessages();
+            check (automation.areAllLanesShown() && automation.getLaneTarget (other) == automationTargets::pan
+                     && automation.getLaneTarget (t) == automationTargets::volume,
+                   "showing all automation opens every lane on what's automated");
+            automation.setAllLanesShown (false);
+            check (! automation.isLaneShown (t) && ! automation.isLaneShown (other), "and hides them all again");
+            automation.setLaneShown (t, true);
+
+            automation.setLaneTarget (t, automationTargets::pan);
+            check (engine.saveSessionAs (automationSession), "(save)");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (automationSession), "(reopen)");
+            pumpMessages();
+            auto& automation = engine.getTracks().automation();
+            auto info = engine.getTracks().getTracks().front();
+            check (samePoints (automation.getPoints (info.id, automationTargets::volume), ramp), "automation round-trips (at a new tempo)");
+            check (automation.getPoints (info.id, automationTargets::soundControl (0)).size() == 2, "Sound knob automation round-trips");
+            check (info.automationShown && info.automationTarget == automationTargets::pan, "so does the lane");
+        }
+    }
+
     if (testPlugins.getChildFile ("Good").isDirectory())
     {
         std::cout << "Third-party plug-ins\n";
         auto pluginSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Plugins"));
         juce::String gainName ("Ikaros Test Gain");
+        juce::String gainTarget;   // the gain parameter's automation target
+        const std::vector<AutomationPoint> gainPoints { { 2.0, 0.25f }, { 6.0, 0.75f } };
+
+        auto sameGainPoints = [&] (const std::vector<AutomationPoint>& p)
+        {
+            return p.size() == 2 && std::abs (p[0].beat - 2.0) < 1.0e-6 && std::abs (p[1].beat - 6.0) < 1.0e-6
+                    && std::abs (p[0].value - 0.25f) < 1.0e-3f && std::abs (p[1].value - 0.75f) < 1.0e-3f;
+        };
 
         {
             AudioEngine engine { testSettings };
@@ -1612,6 +1759,18 @@ int main (int argc, char* argv[])
                        "a plug-in effect can be added");
                 check (effects.getEffectParameters (t1, added).empty(), "(it has its own window instead of knobs)");
 
+                auto gainTargets = tracks.automation().getTargets (t1);
+                auto gainParam = std::find_if (gainTargets.begin(), gainTargets.end(),
+                                               [&] (const AutomationTarget& a) { return a.group == gainName && a.name == "Gain"; });
+                check (gainParam != gainTargets.end(), "a plug-in's parameters can be automated");
+
+                if (gainParam != gainTargets.end())
+                {
+                    gainTarget = gainParam->id;
+                    engine.beginUndoStep ("Gain Automation");
+                    tracks.automation().setPoints (t1, gainTarget, { { 2.0, 0.25f }, { 6.0, 0.75f } });
+                }
+
                 check (effects.setSound (t1, "plugin:" + synth->id), "a plug-in instrument can be picked");
                 pumpMessages();
                 auto instrument = effects.getInstrument (t1);
@@ -1630,6 +1789,7 @@ int main (int argc, char* argv[])
             auto instrument = engine.getTracks().effects().getInstrument (t1);
             check (chain.size() == 1 && chain[0].isThirdParty && ! chain[0].missing, "the plug-in effect comes back");
             check (instrument && instrument->isThirdParty && ! instrument->missing, "and the plug-in instrument");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)), "and the plug-in's automation");
         }
 
         // Pretend the gain plug-in was uninstalled: rename it in the saved
@@ -1667,6 +1827,25 @@ int main (int argc, char* argv[])
             check (engine.saveSession(), "it can be saved");
             check (SessionBundle::readEntry (pluginSession, SessionBundle::sessionEntry).toString().contains ("Ikaros Gone Gain"),
                    "and keeps the missing plug-in's settings");
+
+            auto& automation = engine.getTracks().automation();
+            auto target = automation.getTarget (t1, gainTarget);
+            check (target && ! target->editable && target->name == "Gain" && sameGainPoints (automation.getPoints (t1, gainTarget)),
+                   "the missing plug-in's automation is kept, read-only");
+            check (! automation.setPoints (t1, gainTarget, {}), "(and can't be changed)");
+            engine.setBpm (60.0);
+            pumpMessages();
+            check (sameGainPoints (automation.getPoints (t1, gainTarget)), "a tempo change keeps it on its beats");
+            check (engine.saveSession(), "(save again)");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "(reopen again)");
+            pumpMessages();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "the missing plug-in's automation survives saving again");
         }
     }
     else

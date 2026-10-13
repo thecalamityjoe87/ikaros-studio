@@ -241,6 +241,7 @@ private:
     friend class EffectsController;
     friend class EqController;
     friend class SendBuses;
+    friend class AutomationEditor;
     friend class PluginLibrary;
 
     tracktion::Engine& getTeEngine() noexcept;

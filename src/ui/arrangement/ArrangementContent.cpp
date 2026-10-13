@@ -17,6 +17,7 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
 {
     std::map<TrackId, std::unique_ptr<TrackHeader>> nextHeaders;
     std::map<TrackId, std::unique_ptr<Lane>> nextLanes;
+    std::map<TrackId, std::unique_ptr<AutomationLane>> nextAutomationLanes;
     order.clear();
 
     auto selectedTrack = owner.selection.getTrack();
@@ -43,6 +44,9 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
         auto it = regions.find (t.id);
         lane->update (t, it != regions.end() ? it->second : std::vector<RegionInfo> {}, t.id == selectedTrack);
 
+        // Moved across first (if there are any), so updateAutomation finds them.
+        nextAutomationLanes[t.id] = std::move (automationLanes[t.id]);
+
         order.push_back (t.id);
         nextHeaders[t.id] = std::move (header);
         nextLanes[t.id] = std::move (lane);
@@ -50,6 +54,30 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
 
     headers = std::move (nextHeaders);
     lanes = std::move (nextLanes);
+    automationLanes = std::move (nextAutomationLanes);
+
+    for (auto& t : tracks)
+        updateAutomation (t);
+}
+
+void ArrangementView::Content::updateAutomation (const TrackInfo& t)
+{
+    auto& lane = automationLanes[t.id];
+
+    if (lane == nullptr)
+    {
+        lane = std::make_unique<AutomationLane> (owner, t.id);
+        addChildComponent (*lane);
+    }
+
+    if (t.automationShown)
+    {
+        lane->setBounds (lanes[t.id]->getBounds());
+        lane->toFront (false);   // above the track's lane (false: without taking focus)
+        lane->update (t);
+    }
+
+    lane->setVisible (t.automationShown);
 }
 
 bool ArrangementView::Content::syncTracks (const std::vector<TrackInfo>& tracks)
@@ -63,11 +91,19 @@ bool ArrangementView::Content::syncTracks (const std::vector<TrackInfo>& tracks)
 
     auto selectedTrack = owner.selection.getTrack();
 
+    bool rowHeightsChanged = false;
+
     for (auto& t : tracks)
     {
+        rowHeightsChanged |= automationLanes[t.id]->isVisible() != t.automationShown;
         headers[t.id]->update (t, t.id == selectedTrack);
         lanes[t.id]->updateTrack (t, t.id == selectedTrack);
+        updateAutomation (t);
     }
+
+    // Automation opened or closed: that row's height changed, and the rows below move.
+    if (rowHeightsChanged)
+        owner.layoutContent();
 
     return true;
 }
@@ -93,6 +129,12 @@ double ArrangementView::Content::getEndBeat() const
     return end;
 }
 
+void ArrangementView::Content::updateMeters()
+{
+    for (auto& [id, header] : headers)
+        header->setLevel (owner.engine.getTracks().getTrackLevel (id));
+}
+
 TrackHeader* ArrangementView::Content::findHeader (TrackId id) const
 {
     auto it = headers.find (id);
@@ -115,6 +157,10 @@ void ArrangementView::Content::timelineChanged()
         lane->resized();
         lane->repaint();
     }
+
+    for (auto& [id, lane] : automationLanes)
+        if (lane->isVisible())
+            lane->repaint();
 }
 
 void ArrangementView::Content::setRecording (TrackId track, double startBeat, double endBeat)
@@ -130,7 +176,7 @@ void ArrangementView::Content::setRecording (TrackId track, double startBeat, do
 
 int ArrangementView::Content::getIdealHeight() const
 {
-    return (int) order.size() * owner.geometry.rowHeight + dropZoneHeight + dropZoneMargin * 2;
+    return owner.getTracksHeight() + dropZoneHeight + dropZoneMargin * 2;
 }
 
 void ArrangementView::Content::paint (juce::Graphics& g)
@@ -146,11 +192,14 @@ void ArrangementView::Content::resized()
 {
     int y = 0;
 
-    for (auto id : order)
+    for (size_t row = 0; row < order.size(); ++row)
     {
-        headers[id]->setBounds (0, y, headerWidth - 1, owner.geometry.rowHeight);
-        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, owner.geometry.rowHeight);
-        y += owner.geometry.rowHeight;
+        const auto id = order[row];
+        const int height = owner.rowHeightOf ((int) row);
+        headers[id]->setBounds (0, y, headerWidth - 1, height);
+        lanes[id]->setBounds (headerWidth, y, getWidth() - headerWidth, height);
+        automationLanes[id]->setBounds (lanes[id]->getBounds());
+        y += height;
     }
 
     dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,

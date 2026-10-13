@@ -487,7 +487,7 @@ private:
         // ancestors on the way. (A clip's notes sit inside its SEQUENCE, so
         // e.g. a NOTE property change passes SEQUENCE, then the clip.)
         juce::ValueTree clip, plugin;
-        bool inSequence = false;
+        bool inSequence = false, inCurve = false;
 
         for (auto t = tree; t.isValid(); t = t.getParent())
         {
@@ -516,6 +516,9 @@ private:
 
             if (t.hasType (te::IDs::SEQUENCE))
                 inSequence = true;
+
+            if (t.hasType (te::IDs::AUTOMATIONCURVE))
+                inCurve = true;
 
             if (! clip.isValid() && te::Clip::isClipState (t))
                 clip = t;
@@ -552,8 +555,11 @@ private:
         {
             // Inside a plug-in: a knob turned (volume, pan, a send, an
             // effect's setting) or its automation. (Adding or removing a
-            // plug-in happens on the track, below.)
+            // plug-in happens on the track, below.) Automation changes the
+            // mixer too: a control that gains or loses its automation looks
+            // different.
             c.mixer = true;
+            c.automation = inCurve;
             return c;
         }
 
@@ -1301,7 +1307,13 @@ void AudioEngine::setBpm (double bpm)
 {
     // CachedValue / ValueTree writes inside Tracktion record undo automatically.
     beginUndoStep ("Tempo");
-    impl->edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (20.0, 300.0, bpm));
+
+    // Tracktion moves automation points so they stay on the same beat, except
+    // on missing plug-ins; the automation editor looks after those.
+    trackController->automation().keepUnloadedCurvesOnBeats ([&]
+    {
+        impl->edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (20.0, 300.0, bpm));
+    });
 }
 
 void AudioEngine::setTimeSignature (int numerator, int denominator)
@@ -1386,9 +1398,12 @@ juce::String AudioEngine::getKeyName() const
 // same for every plugin after an undo or redo.
 static void syncParametersFromState (te::Edit& edit)
 {
+    // Automated parameters are skipped: their curve sets them. (Worse,
+    // Tracktion moves a one-point curve's point to a value set by hand.)
     for (auto* plugin : te::getAllPlugins (edit, true))
         for (auto* param : plugin->getAutomatableParameters())
-            param->updateFromAttachedValue();
+            if (! param->hasAutomationPoints())
+                param->updateFromAttachedValue();
 }
 
 void AudioEngine::undo()

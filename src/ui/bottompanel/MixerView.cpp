@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/AutomationHint.h"
 #include <array>
 #include <tuple>
 
@@ -74,6 +75,20 @@ public:
             };
             addAndMakeVisible (knob);
         }
+
+        // Automated, the controls move with the automation, and a grab only
+        // moves them until they're let go (see followAutomation).
+        auto guard = [this] (juce::Slider& s, juce::String target)
+        {
+            followAutomation (s, [this, target] { return automated.contains (target); },
+                              [this, &s, target] { showAutomationHint (engine, s, trackId, target); });
+        };
+
+        guard (fader, automationTargets::volume);
+        guard (pan, automationTargets::pan);
+
+        for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+            guard (sendKnobs[(size_t) bus], automationTargets::send (bus));
     }
 
     // "C", or how far left/right, e.g. "L 30".
@@ -101,6 +116,13 @@ public:
     void update (const TrackInfo& t, bool isSelected)
     {
         const auto before = drawnState();
+        automated = t.automated;
+        setAutomatedLook (fader, automated.contains (automationTargets::volume));
+        setAutomatedLook (pan, automated.contains (automationTargets::pan));
+
+        for (int bus = 0; bus < SendBuses::numBuses; ++bus)
+            setAutomatedLook (sendKnobs[(size_t) bus], automated.contains (automationTargets::send (bus)));
+
         name = t.name;
         colour = t.colour;
         selected = isSelected;
@@ -250,6 +272,7 @@ private:
     std::array<juce::String, SendBuses::numBuses> sendTexts { "0%", "0%" };
     juce::Colour colour;
     bool selected = false;
+    juce::StringArray automated;                        // what the track's automation moves (TrackInfo::automated)
 };
 
 //==============================================================================

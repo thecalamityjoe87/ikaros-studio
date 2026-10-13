@@ -35,6 +35,13 @@ public:
     float getSendLevel (TrackId, int bus) const;
     void setSendLevel (TrackId, int bus, float level0to1);
 
+    /** Adds the track's send to a bus, silent, if it has none yet (automating
+        a send needs it to be there). Part of the caller's undo step. */
+    void createSend (TrackId, int bus);
+
+    /** The send plugin's fader position that a send level of 1 stands for. */
+    static float getFullLevelPosition();
+
 private:
     AudioEngine& owner;
 

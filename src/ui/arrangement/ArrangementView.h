@@ -16,11 +16,11 @@ namespace ikaros
     regions, the dashed drop zone, and the playhead.
 
     Layout:
-        ┌─────────── 260 ───────────┬──────────── lanes ────────────┐
-        │ TRACKS  [Snap: Beat] ⌕──○ │ ruler  1   2   3   4 ...      │  30px
+        ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
+        │ TRACKS [Snap: Beat] ⟋ ⌕─○ │ ruler  1   2   3   4 ...      │  30px
         ├───────────────────────────┼───────────────────────────────┤
-        │ TrackHeader               │ lane  [region] [region]       │  76px
-        │ TrackHeader               │ lane                          │  each
+        │ TrackHeader               │ lane  [region] [region]       │ 100px
+        │ TrackHeader               │ lane                          │ (118 w/ automation)
         │                           │ ┌ drop zone ┐                 │
         │                           │ ◀═══════ scroll bar ═══════▶  │  12px
         └───────────────────────────┴───────────────────────────────┘
@@ -32,6 +32,10 @@ namespace ikaros
     move (to another track of the same kind too), drag an edge to trim,
     double-click the name to rename. Audio files can be dropped on a lane or
     the drop zone.
+
+    Each track can show its automation over its lane (the button under its
+    icon, or "Show Automation" above the headers for every track): see
+    AutomationLane.
 
     Right-click a track header for the track menu (duplicate, rename, colour,
     reorder, delete...), or an empty part of a lane for the lane menu (add or
@@ -135,6 +139,7 @@ private:
     class Overlay;
     class Content;
     class RegionDrag;
+    class AutomationLane;
 
     AudioEngine& engine;
     Selection& selection;
@@ -150,6 +155,7 @@ private:
     juce::ScrollBar timeScrollBar { false };   // false = horizontal
 
     IconButton snapButton { "Snap to grid", std::nullopt, "Snap: Beat" };
+    IconButton automationButton { "Show automation", Icon::automation };
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Rectangle<int> zoomIconArea;
 
@@ -171,6 +177,7 @@ private:
     void updateScrollBar();
     void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
     void showSnapMenu();
+    void updateAutomationButton();   // on while every track's automation shows
 
     /** Mouse wheel over the timeline: Ctrl/Cmd zooms, Shift (or a sideways
         swipe) scrolls in time. Returns false to let the wheel scroll vertically. */
@@ -205,6 +212,12 @@ private:
     int rowOf (TrackId) const;
     int rowAt (int y) const;   // y in this component's coordinates
     juce::Rectangle<float> rowAreaInOverlay (int row) const;
+
+    // A row is taller while its track's automation shows (room for the
+    // picker in its header), so rows can differ in height.
+    int rowTop (int row) const;          // in the content's coordinates
+    int rowHeightOf (int row) const;
+    int getTracksHeight() const;         // all the rows
 
     // Audio file drops
     struct DropTarget { TrackId track = 0; int row = -1; double beat = 0.0; };
