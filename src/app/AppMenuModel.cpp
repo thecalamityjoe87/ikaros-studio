@@ -32,8 +32,6 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::saveSessionAs);
         add (CommandIDs::closeSession);
         m.addSeparator();
-        add (CommandIDs::audioSettings);
-        m.addSeparator();
 
         juce::PopupMenu exportMenu;
         exportMenu.addCommandItem (&commands, CommandIDs::exportSong);
@@ -51,6 +49,11 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::redo);
         m.addSeparator();
         add (CommandIDs::deleteSelection);
+
+       #if ! JUCE_MAC   // macOS has Settings in the app menu (see MainComponent)
+        m.addSeparator();
+        add (CommandIDs::preferences);
+       #endif
     }
     else if (name == "Track")
     {

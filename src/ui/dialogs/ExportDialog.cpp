@@ -13,12 +13,9 @@ namespace
     const ExportFormat formats[] { ExportFormat::wav, ExportFormat::mp3, ExportFormat::flac, ExportFormat::ogg };
     const char* const formatNames[] { "WAV", "MP3 (small, plays everywhere)", "FLAC (lossless, smaller)", "OGG Vorbis (small)" };
 
-    // Remembered choices (app settings, not part of a session).
-    const juce::String formatSetting ("exportFormat");
-    const juce::String qualitySetting ("exportQuality.");      // + the file extension
-    const juce::String normalizeSetting ("exportNormalize");
+    // Whether to export just the cycle range isn't a preference (it depends
+    // on the session), but it's remembered too: app state, not part of a session.
     const juce::String cycleSetting ("exportCycle");
-    const juce::String folderSetting ("exportFolder");
 
     constexpr int labelWidth = 64, rowHeight = 30, rowGap = 12;
 
@@ -63,7 +60,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     for (int i = 0; i < juce::numElementsInArray (formatNames); ++i)
         formatBox.addItem (formatNames[i], i + 1);
 
-    const auto savedFormat = engine.getAppSetting (formatSetting, "wav").toString();
+    const auto savedFormat = engine.getPreferences().get (settings::exportFormat);
     formatBox.setSelectedItemIndex (0, juce::dontSendNotification);
 
     for (int i = 0; i < juce::numElementsInArray (formats); ++i)
@@ -75,7 +72,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     qualityBox.setTitle ("Quality");
     updateQualityChoices();
 
-    normalizeToggle.setToggleState ((bool) engine.getAppSetting (normalizeSetting, false), juce::dontSendNotification);
+    normalizeToggle.setToggleState (engine.getPreferences().get (settings::exportNormalize), juce::dontSendNotification);
     stemsToggle.setToggleState (stems, juce::dontSendNotification);
     stemsToggle.setTooltip ("Each track in its own file, all the same length, for mixing somewhere else. "
                             "Muted tracks are left out.");
@@ -140,8 +137,8 @@ void ExportDialog::updateQualityChoices()
 
     // Defaults: 24-bit for WAV and FLAC, 192 kbps for OGG, 320 kbps for MP3.
     const bool bitRate = format == ExportFormat::ogg || format == ExportFormat::mp3;
-    const auto preferred = (int) engine.getAppSetting (qualitySetting + SongExporter::getFileExtension (format),
-                                                       format == ExportFormat::mp3 ? 320 : (bitRate ? 192 : 24));
+    const auto extension = SongExporter::getFileExtension (format);
+    const auto preferred = engine.getPreferences().get (settings::exportQuality (extension.toRawUTF8()));
     qualityBox.clear (juce::dontSendNotification);
 
     for (size_t i = 0; i < choices.size(); ++i)
@@ -190,17 +187,15 @@ void ExportDialog::updateMessage()
 void ExportDialog::chooseDestination()
 {
     // Remember the choices, whether or not the export goes ahead.
+    auto& prefs = engine.getPreferences();
     const auto format = getFormat();
     const auto extension = SongExporter::getFileExtension (format);
-    engine.setAppSetting (formatSetting, extension);
-    engine.setAppSetting (qualitySetting + extension, qualityBox.getSelectedId());
-    engine.setAppSetting (normalizeSetting, normalizeToggle.getToggleState());
+    prefs.set (settings::exportFormat, extension);
+    prefs.set (settings::exportQuality (extension.toRawUTF8()), qualityBox.getSelectedId());
+    prefs.set (settings::exportNormalize, normalizeToggle.getToggleState());
     engine.setAppSetting (cycleSetting, rangeBox.getSelectedId() == 2);
 
-    juce::File folder (engine.getAppSetting (folderSetting, {}).toString());
-
-    if (! folder.isDirectory())
-        folder = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+    const auto folder = prefs.getFolder (settings::exportFolder, juce::File::getSpecialLocation (juce::File::userMusicDirectory));
 
     const bool stems = stemsToggle.getToggleState();
     const auto name = juce::File::createLegalFileName (engine.getSessionName());
@@ -223,7 +218,7 @@ void ExportDialog::chooseDestination()
 
 void ExportDialog::startExport (const juce::File& destination)
 {
-    engine.setAppSetting (folderSetting, destination.getParentDirectory().getFullPathName());
+    engine.getPreferences().set (settings::exportFolder, destination.getParentDirectory().getFullPathName());
 
     ExportSettings settings;
     settings.format = getFormat();

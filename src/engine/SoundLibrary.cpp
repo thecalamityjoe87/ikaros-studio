@@ -114,7 +114,8 @@ namespace
 const juce::String SoundLibrary::defaultSoundId ("synth:Basic Synth");
 
 //==============================================================================
-SoundLibrary::SoundLibrary()
+SoundLibrary::SoundLibrary (const juce::File& userSoundsFolder)
+    : userFolder (userSoundsFolder)
 {
     rescan();
 }
@@ -176,7 +177,7 @@ void SoundLibrary::rescan()
     // The packs that come with the app first, so if a user's pack has the
     // same id as one of them, the app's own wins.
     const auto bundledRoot = getBundledSoundsFolder();
-    std::vector<juce::File> roots { bundledRoot, getUserSoundsFolder() };
+    std::vector<juce::File> roots { bundledRoot, userFolder };
     roots.insert (roots.end(), extraPackFolders.begin(), extraPackFolders.end());
 
     for (auto& root : roots)

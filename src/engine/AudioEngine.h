@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/Preferences.h"
 #include "engine/RecordingTypes.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
@@ -47,6 +48,7 @@ using PluginWindowFactory = std::function<std::unique_ptr<juce::Component> (Plug
 
     Responsibilities: session lifecycle (new/open/save), the transport, tempo,
     undo/redo, and global meters/stats. Track-level work lives in TrackController.
+    It also owns the app's Preferences, and acts on the ones that change what it does.
 
     Change notification: listeners hear (always on the message thread, a
     moment after the edit, with bursts of changes collected into one call)
@@ -54,7 +56,7 @@ using PluginWindowFactory = std::function<std::unique_ptr<juce::Component> (Plug
     kind of thing changed (see ModelChanges). Fast-moving state (playhead,
     meters) is *not* broadcast; the UI polls it on a Timer instead.
 */
-class AudioEngine
+class AudioEngine  : private Preferences::Listener
 {
 public:
     /** Implement this to hear about session changes. */
@@ -136,8 +138,14 @@ public:
         (in the working copy). The UI writes it, then saves. */
     juce::File getPreviewFile() const;
 
+    /** Where the file dialogs for sessions start: the folder chosen in the
+        Preferences, or else Documents/Ikaros Studio. Made if it's missing. */
+    juce::File getSessionFolder() const;
+    static juce::File getStandardSessionFolder();
+
     /** Sessions opened or saved lately, newest first (missing files left out). */
     std::vector<RecentSession> getRecentSessions() const;
+    void clearRecentSessions();
 
     bool isUntitled() const;
 
@@ -184,7 +192,9 @@ public:
     void togglePlay();
 
     /** Starts recording onto the armed track (arming the selected track for
-        this take if none is armed), or stops recording. The take becomes a
+        this take if none is armed, unless the preference to do so is off:
+        then with no armed track nothing starts, and the report says
+        noTrackArmed), or stops recording. The take becomes a
         region when recording stops. With the count-in on, one bar of clicks
         plays first. With the loop on (cycle recording) it starts at the
         loop's start and each pass becomes a take (see TakeEditor); a loop
@@ -203,13 +213,14 @@ public:
 
     /** MIDI cycle recording: keep each pass as a take of one region (true),
         or merge every pass's notes into the region (false, the default).
-        An app preference, like the count-in. Audio passes are always takes. */
+        An app preference (Preferences, settings::midiCycleTakes). Audio
+        passes are always takes. */
     void setMidiCycleTakes (bool keepAsTakes);
     bool getMidiCycleTakes() const;
 
     /** Metronome clicks before recording starts (one or two bars, see
-        setCountInBars). This is an app preference (Tracktion stores it in
-        its settings), not part of a session. */
+        setCountInBars). This is an app preference (settings::countIn), not
+        part of a session. */
     void setCountInEnabled (bool);
 
     /** How many bars the count-in plays: 0 (off), 1 or 2. Turning the
@@ -278,8 +289,11 @@ public:
     /** The library's sounds and loops. */
     SoundLibrary& getSounds() noexcept          { return *sounds; }
 
-    /** Small app settings that aren't part of a session (e.g. whether the
-        starter sounds were offered), kept with the engine's own settings. */
+    /** The app's settings (see Preferences). */
+    Preferences& getPreferences() noexcept      { return *preferences; }
+
+    /** Small bits of app state that aren't choices (e.g. whether the starter
+        sounds were offered), kept with the engine's own settings. */
     juce::var getAppSetting (const juce::String& name, const juce::var& defaultValue = {}) const;
     void setAppSetting (const juce::String& name, const juce::var& value);
 
@@ -352,6 +366,12 @@ private:
         library and points tracks using that pack at its files. */
     void soundPacksChanged (const juce::String& packId);
 
+    // Preferences that change what the engine does.
+    void preferenceChanged (const juce::String& key) override;
+    void applyCountIn();
+    void applySoundsFolder();
+    juce::File getUserSoundsFolder() const;   // the preference, or the default
+
     // ListenerList is safe even if a listener removes itself while being called.
     juce::ListenerList<Listener> listeners;
 
@@ -360,6 +380,7 @@ private:
 
     // Declared after impl, so they're destroyed before it (members are
     // destroyed in reverse order), while Tracktion's Engine still exists.
+    std::unique_ptr<Preferences> preferences;
     std::unique_ptr<SoundLibrary> sounds;
     std::unique_ptr<PackStore> packStore;
     std::unique_ptr<PluginLibrary> plugins;

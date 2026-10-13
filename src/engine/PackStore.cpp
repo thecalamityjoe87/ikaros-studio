@@ -316,7 +316,7 @@ private:
 
 //==============================================================================
 PackStore::PackStore (SoundLibrary& s)
-    : sounds (s), indexUrl (getDefaultIndexUrl()), installFolder (SoundLibrary::getUserSoundsFolder())
+    : sounds (s), indexUrl (getDefaultIndexUrl()), installFolder (s.getUserFolder())
 {
 }
 

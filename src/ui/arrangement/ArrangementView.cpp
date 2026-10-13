@@ -95,7 +95,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     addAndMakeVisible (*overlay);
     addAndMakeVisible (*playhead);   // added last so it's drawn on top
 
-    setSnap (Snap::beat);
+    applySnapPreference();
     refresh();
 }
 
@@ -277,7 +277,7 @@ bool ArrangementView::handleWheel (const juce::MouseEvent& event, const juce::Mo
 {
     auto e = event.getEventRelativeTo (this);
 
-    if (e.mods.isCommandDown())
+    if (e.mods.isCommandDown() && engine.getPreferences().get (settings::wheelMode) == settings::Wheel::zoomWithModifier)
     {
         // Ctrl/Cmd + wheel: zoom around the playhead (or the mouse, if the
         // playhead is off screen). One wheel notch zooms ~1.4x.
@@ -312,6 +312,16 @@ void ArrangementView::setSnap (Snap newSnap)
 
     if (onSnapChanged)
         onSnapChanged();
+}
+
+void ArrangementView::applySnapPreference()
+{
+    auto& prefs = engine.getPreferences();
+
+    if (! prefs.get (settings::snapEnabled))
+        setSnap (Snap::off);
+    else
+        setSnap (prefs.get (settings::snapGrid) == settings::Grid::bar ? Snap::bar : Snap::beat);
 }
 
 double ArrangementView::getSnapBeats() const
@@ -355,11 +365,12 @@ void ArrangementView::updateTransport()
 
     // While playing, turn the page when the playhead leaves the screen (it
     // ran off the right edge, or jumped back to the start of a loop), but
-    // not while the user is dragging something.
+    // not while the user is dragging something, or if they turned it off.
     const bool wasVisible = lastPlayheadX >= 0.0f && lastPlayheadX <= width - 20.0f;
     const bool isVisible = x >= 0.0f && x <= width - 20.0f;
 
     if (state.playing && wasVisible && ! isVisible && ! regionDrag->isDragging()
+         && engine.getPreferences().get (settings::followPlayhead)
          && ! juce::Component::isMouseButtonDownAnywhere())
     {
         scrollToBeat (state.positionBeats - getVisibleBeats() * 0.05);
@@ -589,6 +600,21 @@ void ArrangementView::startRenamingTrack (TrackId id)
 
     if (auto* header = content->findHeader (id))
         header->startRenaming();
+}
+
+juce::Component* ArrangementView::getArmButton (TrackId id)
+{
+    const int row = rowOf (id);
+
+    if (row < 0)
+        return nullptr;
+
+    scrollRowIntoView (row);
+
+    if (auto* header = content->findHeader (id))
+        return &header->getArmButton();
+
+    return nullptr;
 }
 
 void ArrangementView::scrollRowIntoView (int row)

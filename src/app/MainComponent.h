@@ -6,6 +6,7 @@
 #include "ui/bottompanel/BottomPanel.h"
 #include "ui/dialogs/SessionChooser.h"
 #include "ui/library/LibrarySidebar.h"
+#include "ui/preferences/PreferencesDialog.h"
 #include "ui/titlebar/MenuBar.h"
 #include "ui/state/Selection.h"
 #include "ui/toolbar/Toolbar.h"
@@ -29,6 +30,7 @@ class MainComponent  : public juce::Component,
                        public juce::ApplicationCommandTarget,
                        public juce::DragAndDropContainer,   // library files dragged onto the timeline
                        private AudioEngine::Listener,        // session changes
+                       private Preferences::Listener,        // settings that change the window
                        private juce::ChangeListener,         // selection changes
                        private juce::Timer
 {
@@ -42,6 +44,13 @@ public:
     /** Opens a session the system handed us: double-clicked in the file
         manager, or named on the command line. */
     void openFileFromSystem (const juce::File&);
+
+    /** The smallest the window can be, in its own units (it grows with the interface size). */
+    static constexpr int minWindowWidth = 1100, minWindowHeight = 700;
+
+    /** Sets the interface size (1.0 is 100%), or the biggest one the screen
+        has room for. Works while the app runs. */
+    static void setInterfaceScale (float);
 
     /** For the custom title bar: what's at a point in this component's coordinates. */
     WindowControlKind getWindowControlAt (juce::Point<float>) const;
@@ -69,6 +78,7 @@ private:
 
     juce::TooltipWindow tooltipWindow { this, 700 };
     std::unique_ptr<juce::FileChooser> fileChooser;
+    juce::PopupMenu macAppMenu;   // macOS: Settings... in the app menu
 
     // Panel layout. The sizes are kept while a panel is hidden, so it comes
     // back the way it was. TODO: remember them between sessions.
@@ -102,6 +112,8 @@ private:
     std::vector<RegionId> getRegionsToSplit() const;
     bool canSplitAtPlayhead() const;
     void sessionChanged (const ModelChanges&) override;
+    void preferenceChanged (const juce::String& key) override;
+    void applyInterfaceScale();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
@@ -118,7 +130,7 @@ private:
     void save (const juce::File& bundle, std::function<void (bool saved)> afterSave);
     bool saving = false;        // a save is being written (see SavingOverlay)
     void confirmDiscardChanges (std::function<void()> thenDo);
-    void showAudioSettings();
+    void showPreferences (PreferencesDialog::Page = PreferencesDialog::Page::general);
     void showNewTrackDialog();
     void showAbout();
     void showError (const juce::String& title, const juce::String& message);
@@ -126,8 +138,6 @@ private:
     /** After a take: explains why recording stopped by itself, or hints
         that the input was too loud or the computer didn't keep up. */
     void showRecordingReport (const RecordingReport&);
-
-    static juce::File getDefaultSessionFolder();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

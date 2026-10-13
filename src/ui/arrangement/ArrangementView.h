@@ -73,6 +73,9 @@ public:
     void setSnap (Snap);
     Snap getSnap() const noexcept               { return snap; }
 
+    /** Takes the snap setting from the Preferences (on or off, and its grid). */
+    void applySnapPreference();
+
     /** The nearest grid line to a beat (or the beat itself with snap off). */
     double snapBeat (double beat) const;
 
@@ -87,6 +90,10 @@ public:
 
     /** Shows the rename field on a track header (scrolling it into view first). */
     void startRenamingTrack (TrackId);
+
+    /** A track's record-arm button (scrolling its row into view first), or
+        nullptr if there's no such track. */
+    juce::Component* getArmButton (TrackId);
 
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
@@ -179,7 +186,8 @@ private:
     void showSnapMenu();
     void updateAutomationButton();   // on while every track's automation shows
 
-    /** Mouse wheel over the timeline: Ctrl/Cmd zooms, Shift (or a sideways
+    /** Mouse wheel over the timeline: Ctrl/Cmd zooms (unless the Preferences
+        say the wheel only scrolls), Shift (or a sideways
         swipe) scrolls in time. Returns false to let the wheel scroll vertically. */
     bool handleWheel (const juce::MouseEvent&, const juce::MouseWheelDetails&, bool wheelScrollsTime);
 

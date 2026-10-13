@@ -170,6 +170,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SongExporter.h       src/engine/SongExporter.cpp
     src/engine/Mp3Format.h          src/engine/Mp3Format.cpp
     src/engine/RecordingTypes.h
+    src/engine/Preferences.h        src/engine/Preferences.cpp
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp)
 
 # The only OS-specific code.
@@ -195,6 +196,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
+    src/ui/widgets/FolderField.h            src/ui/widgets/FolderField.cpp
 
     # state: UI state shared between areas
     src/ui/state/Selection.h
@@ -207,7 +209,13 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
     src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
     src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
-    src/ui/dialogs/AudioSettingsPanel.h     src/ui/dialogs/AudioSettingsPanel.cpp
+
+    # the Preferences window and its pages
+    src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp
+    src/ui/preferences/PreferencesPage.h    src/ui/preferences/PreferencesPage.cpp
+    src/ui/preferences/PreferencesPages.h   src/ui/preferences/PreferencesPages.cpp
+    src/ui/preferences/SoundsPluginsPage.cpp
+    src/ui/preferences/AudioSettingsPanel.h src/ui/preferences/AudioSettingsPanel.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -420,7 +428,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -428,6 +436,10 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
     set_tests_properties(EngineSmokeTest.Undo PROPERTIES LABELS "undo")
     set_tests_properties(EngineSmokeTest.Recovery PROPERTIES LABELS "recovery")
+
+    # App-wide settings (see src/engine/Preferences.h), and what they change.
+    add_test(NAME EngineSmokeTest.Preferences COMMAND IkarosEngineSmokeTest --only=preferences)
+    set_tests_properties(EngineSmokeTest.Preferences PROPERTIES LABELS "preferences")
 
     # Recording through a pretend audio interface (see src/engine/TestAudioDevice.h):
     # latency, device trouble, full disks. The long take is "slow" (minutes).

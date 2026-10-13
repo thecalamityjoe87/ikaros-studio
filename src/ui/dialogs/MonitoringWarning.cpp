@@ -4,11 +4,9 @@
 namespace ikaros
 {
 
-static const char* const warningShownSetting = "monitoringWarningShown";
-
 void confirmMonitoring (AudioEngine& engine, juce::Component* associatedComponent, std::function<void (bool)> then)
 {
-    if ((bool) engine.getAppSetting (warningShownSetting, false))
+    if (engine.getPreferences().get (settings::monitoringWarningShown))
     {
         then (true);
         return;
@@ -30,7 +28,7 @@ void confirmMonitoring (AudioEngine& engine, juce::Component* associatedComponen
     juce::AlertWindow::showAsync (options, [&engine, then = std::move (then)] (int result)
     {
         if (result == 1)
-            engine.setAppSetting (warningShownSetting, true);
+            engine.getPreferences().set (settings::monitoringWarningShown, true);
 
         then (result == 1);
     });

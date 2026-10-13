@@ -32,7 +32,6 @@ public:
         setScrollButtonsVisible (false);
         setBlackNoteWidthProportion (0.55f);
         setBlackNoteLengthProportion (0.6f);
-        setVelocity (0.8f, true);                 // velocity follows how low on the key you click
         setOctaveForMiddleC (4);
         setTitle ("On-screen keyboard");
         setColour (juce::MidiKeyboardComponent::shadowColourId, juce::Colours::transparentBlack);
@@ -120,6 +119,8 @@ PianoKeyboard::PianoKeyboard (AudioEngine& e) : engine (e)
     keys->onOctaveShift = [this] (int direction) { shiftOctave (direction); };
     addAndMakeVisible (*keys);
     state.addListener (this);
+    engine.getPreferences().addListener (this);
+    applyVelocityPreference();
 
     for (auto* b : { &octaveDown, &octaveUp })
     {
@@ -166,8 +167,23 @@ void PianoKeyboard::updateRange()
 
 PianoKeyboard::~PianoKeyboard()
 {
+    engine.getPreferences().removeListener (this);
     state.removeListener (this);
     releaseAll();
+}
+
+void PianoKeyboard::preferenceChanged (const juce::String& key)
+{
+    if (key.isEmpty() || key == settings::keyboardVelocity.key)
+        applyVelocityPreference();
+}
+
+// The top velocity the keys play (a click lower on a key plays harder, up to this).
+void PianoKeyboard::applyVelocityPreference()
+{
+    const float velocities[] { 0.55f, 0.8f, 1.0f };   // soft, normal, hard
+    const auto choice = juce::jlimit (0, 2, engine.getPreferences().get (settings::keyboardVelocity));
+    keys->setVelocity (velocities[choice], true);
 }
 
 void PianoKeyboard::releaseAll()

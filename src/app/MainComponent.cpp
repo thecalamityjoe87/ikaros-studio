@@ -1,7 +1,6 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
-#include "ui/dialogs/AudioSettingsPanel.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
@@ -58,10 +57,13 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     addKeyListener (commands.getKeyMappings());
 
    #if JUCE_MAC
-    juce::MenuBarModel::setMacMainMenu (&menuModel);
+    // The app menu's own Settings... item (Cmd+,), next to About.
+    macAppMenu.addCommandItem (&commands, CommandIDs::preferences);
+    juce::MenuBarModel::setMacMainMenu (&menuModel, &macAppMenu);
    #endif
 
     engine.addListener (this);
+    engine.getPreferences().addListener (this);
     selection.addChangeListener (this);
 
     // Third-party plug-in windows: the engine supplies the plug-in's editor,
@@ -91,9 +93,18 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
         auto showChooser = [safeThis]
         {
-            if (safeThis != nullptr)
-                safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
-                                                                                          : SessionChooser::Page::recent);
+            if (safeThis == nullptr)
+                return;
+
+            auto& engine = safeThis->engine;
+
+            // Some people would rather go straight back to where they were.
+            if (engine.getPreferences().get (settings::onStartup) == settings::OnStartup::reopenLastSession)
+                if (auto recent = engine.getRecentSessions(); ! recent.empty() && engine.openSession (recent.front().file))
+                    return;
+
+            safeThis->showSessionChooser (engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                                            : SessionChooser::Page::recent);
         };
 
         RecoveryPrompt::show (*safeThis, safeThis->engine, [safeThis, showChooser] (bool recovered)
@@ -113,6 +124,7 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     engine.removeListener (this);
+    engine.getPreferences().removeListener (this);
     selection.removeChangeListener (this);
     engine.setPluginWindowFactory (nullptr);
     engine.getPlugins().cancelScan();
@@ -134,7 +146,8 @@ void MainComponent::resized()
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
              || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
-             || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr)
+             || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr
+             || dynamic_cast<PreferencesDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -333,9 +346,9 @@ void MainComponent::timerCallback()
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
-                                   CommandIDs::saveSessionAs, CommandIDs::closeSession, CommandIDs::audioSettings,
+                                   CommandIDs::saveSessionAs, CommandIDs::closeSession,
                                    CommandIDs::exportSong, CommandIDs::exportStems,
-                                   CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
+                                   CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection, CommandIDs::preferences,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
                                    CommandIDs::duplicateTrackSettings, CommandIDs::duplicateTrack,
@@ -387,10 +400,6 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Close Session", "Close the session and choose another", "File", 0);
             info.addDefaultKeypress ('w', cmd);
             break;
-        case CommandIDs::audioSettings:
-            info.setInfo ("Audio & MIDI Settings...", "Choose audio and MIDI devices", "File", 0);
-            info.addDefaultKeypress (',', cmd);
-            break;
         case CommandIDs::exportSong:
             info.setInfo ("Export Song...", "Save the song as a WAV, FLAC or OGG file", "File", 0);
             info.addDefaultKeypress ('e', cmd);
@@ -422,6 +431,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             // so pressing it with nothing selected can't remove a whole track.
             info.setInfo ("Delete", "Delete the selected regions, or the selected track", "Edit", 0);
             info.setActive (hasTrack);
+            break;
+        case CommandIDs::preferences:
+            info.setInfo (juce::String (PreferencesDialog::getName()) + "...", "Change the app's settings", "Edit", 0);
+            info.addDefaultKeypress (',', cmd);
             break;
 
         case CommandIDs::newTrack:
@@ -522,7 +535,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::toggleRecord:
             info.setInfo (transport.recording ? "Stop Recording" : "Record", "Record onto the armed or selected track", "Transport", 0);
-            info.setActive (hasTrack);
+
+            // Without auto-arm, pressing it with nothing armed explains what to do.
+            info.setActive (hasTrack || ! engine.getPreferences().get (settings::autoArmTrack));
             info.addDefaultKeypress ('r', 0);
             break;
         case CommandIDs::goToStart:
@@ -666,7 +681,6 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::saveSession:     saveSession(); break;
         case CommandIDs::saveSessionAs:   saveSessionAs(); break;
         case CommandIDs::closeSession:    closeSession(); break;
-        case CommandIDs::audioSettings:   showAudioSettings(); break;
         case CommandIDs::exportSong:      ExportDialog::show (*this, engine, false); break;
         case CommandIDs::exportStems:     ExportDialog::show (*this, engine, true); break;
 
@@ -808,6 +822,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
+        case CommandIDs::preferences:     showPreferences(); break;
         case CommandIDs::about:           showAbout(); break;
         case juce::StandardApplicationCommandIDs::quit: requestQuit(); break;
 
@@ -853,13 +868,6 @@ void MainComponent::showNewTrackDialog()
 }
 
 //==============================================================================
-juce::File MainComponent::getDefaultSessionFolder()
-{
-    auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Ikaros Studio");
-    dir.createDirectory();
-    return dir;
-}
-
 void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
 {
     if (! engine.hasUnsavedChanges())
@@ -940,7 +948,7 @@ void MainComponent::openOtherSession()
     confirmDiscardChanges ([this]
     {
         // Bundles, and session folders from earlier versions.
-        fileChooser = std::make_unique<juce::FileChooser> ("Open Session", getDefaultSessionFolder(),
+        fileChooser = std::make_unique<juce::FileChooser> ("Open Session", engine.getSessionFolder(),
                                                            juce::String ("*") + AudioEngine::sessionFileExtension
                                                              + ";*" + AudioEngine::legacySessionFileExtension);
 
@@ -1016,7 +1024,7 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
 void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
 {
     // A session is one file ("My Song.iksession").
-    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
+    auto initial = engine.isUntitled() ? engine.getSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
                                                                                     ? juce::String ("My Session")
                                                                                     : engine.getSessionName())
                                        : engine.getSessionFile();
@@ -1108,15 +1116,51 @@ void MainComponent::requestQuit()
     confirmDiscardChanges ([] { juce::JUCEApplication::getInstance()->quit(); });
 }
 
-void MainComponent::showAudioSettings()
+void MainComponent::showPreferences (PreferencesDialog::Page page)
 {
-    juce::DialogWindow::LaunchOptions o;
-    o.dialogTitle = "Audio & MIDI Settings";
-    o.dialogBackgroundColour = colour::toolbarBg;
-    o.content.setOwned (new AudioSettingsPanel (engine));   // the dialog takes ownership
-    o.useNativeTitleBar = true;
-    o.resizable = false;
-    o.launchAsync();
+    PreferencesDialog::show (*this, engine, commands, page, [this] { MoreSoundsDialog::show (*this, engine); });
+}
+
+// Some settings change something in this window the moment they change.
+void MainComponent::preferenceChanged (const juce::String& key)
+{
+    const bool all = key.isEmpty();   // reset
+
+    if (all || key == settings::snapEnabled.key || key == settings::snapGrid.key)
+        arrangement.applySnapPreference();
+
+    if (all || key == settings::interfaceScale.key)
+        applyInterfaceScale();
+
+    if (all || key == settings::autoArmTrack.key)
+        commands.commandStatusChanged();   // Record is available with no track selected, or not
+}
+
+void MainComponent::setInterfaceScale (float requested)
+{
+    auto& desktop = juce::Desktop::getInstance();
+    desktop.setGlobalScaleFactor (requested);
+
+    // Too big for the screen? The window can't get smaller than its minimum
+    // size, so settle for the biggest scale where that still fits.
+    if (auto* display = desktop.getDisplays().getPrimaryDisplay())
+    {
+        const auto area = display->userArea;   // in the units of the scale just set
+        const float fits = juce::jmin ((float) area.getWidth() / (float) minWindowWidth,
+                                       (float) area.getHeight() / (float) minWindowHeight);
+
+        if (fits < 1.0f)
+            desktop.setGlobalScaleFactor (juce::jmax (1.0f, requested * fits));
+    }
+}
+
+void MainComponent::applyInterfaceScale()
+{
+    setInterfaceScale (engine.getPreferences().getInterfaceScale());
+
+    // The window keeps its size on screen, so in the new units it may be smaller than allowed.
+    if (auto* window = getTopLevelComponent())
+        window->setSize (juce::jmax (window->getWidth(), minWindowWidth), juce::jmax (window->getHeight(), minWindowHeight));
 }
 
 void MainComponent::showAbout()
@@ -1146,10 +1190,18 @@ void MainComponent::showRecordingReport (const RecordingReport& report)
                        "Make the loop longer, or turn the loop off to record.");
             return;
 
+        case Reason::noTrackArmed:
+        {
+            // Point at the selected track's record button (or the toolbar's, with no track to point at).
+            auto* target = arrangement.getArmButton (selection.getTrack());
+            HintBubble::show (target != nullptr ? *target : toolbar.getRecordButton(), "Arm a track to record");
+            return;
+        }
+
         case Reason::deviceStopped:
             showError ("Recording Stopped",
                        "The audio device stopped responding. Was it unplugged?" + kept
-                         + "\n\nCheck that it's connected, then choose it in File > Audio & MIDI Settings." + tooLoud);
+                         + "\n\nCheck that it's connected, then choose it in " + PreferencesDialog::getName() + " > Audio & MIDI." + tooLoud);
             return;
 
         case Reason::deviceChanged:
@@ -1190,7 +1242,7 @@ void MainComponent::showRecordingReport (const RecordingReport& report)
                           juce::String (report.dropouts) + (report.dropouts == 1 ? " dropout" : " dropouts")
                             + " during that take: the computer couldn't keep up, which can leave clicks or gaps. "
                               "A larger buffer size helps.",
-                          "Audio Settings", [this] { showAudioSettings(); });
+                          "Audio Settings", [this] { showPreferences (PreferencesDialog::Page::audioMidi); });
     }
 }
 

@@ -1322,6 +1322,304 @@ static void runLongRecordingSection()
     take.deleteFile();
 }
 
+// The app-wide settings: the store itself (no engine needed), then what the
+// engine does with them.
+static void runPreferencesSection (const juce::File& dir)
+{
+    auto folder = dir.getChildFile ("Preferences");
+    folder.createDirectory();
+    auto file = folder.getChildFile ("Preferences.xml");
+
+    std::cout << "Preferences: the store\n";
+    {
+        Preferences prefs (file);
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser
+                 && prefs.get (settings::sessionFolder).isEmpty()
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::normal
+                 && ! prefs.get (settings::monitoringWarningShown),
+               "General and Audio & MIDI start with their defaults");
+        check (prefs.get (settings::countIn) == 0 && ! prefs.get (settings::midiCycleTakes) && prefs.get (settings::autoArmTrack),
+               "Recording starts with no count-in, merged MIDI passes and auto-arm on (today's behaviour)");
+        check (prefs.get (settings::snapEnabled) && prefs.get (settings::snapGrid) == settings::Grid::beat
+                 && prefs.get (settings::followPlayhead) && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier,
+               "Editing starts with snap to beats, following the playhead and Ctrl-wheel zoom (today's behaviour)");
+        check (prefs.get (settings::userSoundsFolder).isEmpty() && prefs.getList (settings::pluginFolders).isEmpty()
+                 && prefs.getList (settings::disabledPluginFormats).isEmpty(),
+               "no extra folders, and every plug-in format is on");
+        check (prefs.get (settings::exportFormat) == "wav" && prefs.get (settings::exportQuality ("wav")) == 24
+                 && prefs.get (settings::exportQuality ("mp3")) == 320 && prefs.get (settings::exportQuality ("ogg")) == 192
+                 && ! prefs.get (settings::exportNormalize) && prefs.get (settings::interfaceScale) == 100
+                 && prefs.getInterfaceScale() == 1.0f,
+               "Export and Appearance start with their defaults");
+
+        int heard = 0;
+        struct Counter : Preferences::Listener
+        {
+            int& count;
+            juce::String lastKey;
+            explicit Counter (int& c) : count (c) {}
+            void preferenceChanged (const juce::String& key) override   { ++count; lastKey = key; }
+        } listener (heard);
+        prefs.addListener (&listener);
+
+        prefs.set (settings::onStartup, settings::OnStartup::reopenLastSession);
+        check (heard == 1 && listener.lastKey == settings::onStartup.key, "a change is announced at once, with its key");
+        prefs.removeListener (&listener);
+
+        prefs.set (settings::sessionFolder, folder.getFullPathName());
+        prefs.set (settings::keyboardVelocity, settings::Velocity::hard);
+        prefs.set (settings::monitoringWarningShown, true);
+        prefs.set (settings::countIn, 2);
+        prefs.set (settings::midiCycleTakes, true);
+        prefs.set (settings::autoArmTrack, false);
+        prefs.set (settings::snapEnabled, false);
+        prefs.set (settings::snapGrid, settings::Grid::bar);
+        prefs.set (settings::followPlayhead, false);
+        prefs.set (settings::wheelMode, settings::Wheel::scroll);
+        prefs.setList (settings::pluginFolders, { "/plugins/a", "/plugins/b" });
+        prefs.setList (settings::disabledPluginFormats, { "LV2" });
+        prefs.set (settings::exportFormat, "flac");
+        prefs.set (settings::exportQuality ("flac"), 16);
+        prefs.set (settings::exportNormalize, true);
+        prefs.set (settings::interfaceScale, 150);
+    }
+
+    {
+        Preferences prefs (file);   // the file as the first one left it
+        check (prefs.get (settings::onStartup) == settings::OnStartup::reopenLastSession
+                 && prefs.getFolder (settings::sessionFolder, {}) == folder
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::hard
+                 && prefs.get (settings::monitoringWarningShown),
+               "General and Audio & MIDI settings round-trip through the file");
+        check (prefs.get (settings::countIn) == 2 && prefs.get (settings::midiCycleTakes) && ! prefs.get (settings::autoArmTrack),
+               "Recording settings round-trip");
+        check (! prefs.get (settings::snapEnabled) && prefs.get (settings::snapGrid) == settings::Grid::bar
+                 && ! prefs.get (settings::followPlayhead) && prefs.get (settings::wheelMode) == settings::Wheel::scroll,
+               "Editing settings round-trip");
+        check (prefs.getList (settings::pluginFolders) == juce::StringArray ({ "/plugins/a", "/plugins/b" })
+                 && prefs.getList (settings::disabledPluginFormats) == juce::StringArray ({ "LV2" }),
+               "lists round-trip");
+        check (prefs.get (settings::exportFormat) == "flac" && prefs.get (settings::exportQuality ("flac")) == 16
+                 && prefs.get (settings::exportNormalize) && prefs.getInterfaceScale() == 1.5f,
+               "Export and Appearance settings round-trip");
+        check (prefs.getFolder (settings::userSoundsFolder, folder) == folder
+                 && prefs.getFolder (settings::sessionFolder, {}) != juce::File(),
+               "a folder setting that's empty (or gone) falls back");
+
+        int heard = 0;
+        struct Counter : Preferences::Listener
+        {
+            int& count;
+            juce::String lastKey = "unset";
+            explicit Counter (int& c) : count (c) {}
+            void preferenceChanged (const juce::String& key) override   { ++count; lastKey = key; }
+        } listener (heard);
+        prefs.addListener (&listener);
+
+        prefs.resetAll();
+        check (heard == 1 && listener.lastKey.isEmpty(), "resetting tells listeners everything changed");
+        prefs.removeListener (&listener);
+
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser && prefs.get (settings::autoArmTrack)
+                 && prefs.get (settings::snapEnabled) && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier
+                 && prefs.getList (settings::pluginFolders).isEmpty() && prefs.get (settings::exportFormat) == "wav"
+                 && prefs.get (settings::exportQuality ("flac")) == 24 && prefs.get (settings::interfaceScale) == 100,
+               "reset puts every setting back to its default");
+    }
+
+    {
+        Preferences prefs (file);
+        check (prefs.get (settings::exportFormat) == "wav" && prefs.get (settings::countIn) == 0 && prefs.get (settings::autoArmTrack),
+               "and the reset is what was saved");
+    }
+
+    {
+        // A file from before most settings existed: only a few keys.
+        auto oldFile = folder.getChildFile ("Old.xml");
+        oldFile.replaceWithText ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<PROPERTIES>\n"
+                                 "  <VALUE name=\"exportFormat\" val=\"ogg\"/>\n"
+                                 "  <VALUE name=\"midiCycleTakes\" val=\"1\"/>\n"
+                                 "</PROPERTIES>\n");
+        Preferences prefs (oldFile);
+        check (prefs.get (settings::exportFormat) == "ogg" && prefs.get (settings::midiCycleTakes),
+               "an old settings file keeps the values it has");
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser && prefs.get (settings::autoArmTrack)
+                 && prefs.get (settings::snapEnabled) && prefs.get (settings::followPlayhead)
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::normal
+                 && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier
+                 && prefs.get (settings::exportQuality ("ogg")) == 192 && prefs.get (settings::interfaceScale) == 100,
+               "and has the defaults for the keys it lacks");
+    }
+
+    std::cout << "Preferences: settings from the older settings file\n";
+    {
+        juce::PropertiesFile::Options options;
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        juce::PropertiesFile legacy (folder.getChildFile ("Settings.xml"), options);
+        legacy.setValue ("countInMode", 2);
+        legacy.setValue ("midiCycleTakes", true);
+        legacy.setValue ("monitoringWarningShown", true);
+        legacy.setValue ("exportFormat", "flac");
+        legacy.setValue ("exportQuality.flac", 16);
+        legacy.setValue ("exportNormalize", true);
+        legacy.setValue ("exportFolder", folder.getFullPathName());
+
+        auto migrated = folder.getChildFile ("Migrated.xml");
+        {
+            Preferences prefs (migrated, &legacy);
+            check (prefs.get (settings::countIn) == 2 && prefs.get (settings::midiCycleTakes)
+                     && prefs.get (settings::monitoringWarningShown),
+                   "the first time, an existing user's choices are copied over (count-in, MIDI loops, the warning)");
+            check (prefs.get (settings::exportFormat) == "flac" && prefs.get (settings::exportQuality ("flac")) == 16
+                     && prefs.get (settings::exportNormalize) && prefs.getFolder (settings::exportFolder, {}) == folder,
+                   "and the Export window's remembered choices");
+            check (prefs.get (settings::autoArmTrack) && prefs.get (settings::snapEnabled),
+                   "settings that didn't exist before have their defaults");
+        }
+
+        legacy.setValue ("exportFormat", "ogg");
+        Preferences again (migrated, &legacy);
+        check (again.get (settings::exportFormat) == "flac", "later, the older file isn't read again");
+
+        again.resetAll();
+        Preferences afterReset (migrated, &legacy);
+        check (afterReset.get (settings::exportFormat) == "wav" && afterReset.get (settings::countIn) == 0,
+               "and a reset isn't undone by it");
+    }
+
+    std::cout << "Preferences: what the engine does\n";
+    {
+        AudioEngine engine { testSettings, false };
+        TestAudioDevice::Settings deviceSettings;
+        auto device = std::make_unique<TestAudioDevice> (engine, deviceSettings);
+        auto& tracks = engine.getTracks();
+        auto& prefs = engine.getPreferences();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        runAudio (*device, 0.2);
+
+        prefs.set (settings::countIn, 2);
+        check (engine.getCountInBars() == 2 && engine.getTransportState().countIn, "the count-in setting is the session's count-in");
+        engine.setCountInBars (1);
+        check (prefs.get (settings::countIn) == 1, "and the toolbar's change is the setting");
+        prefs.resetAll();
+        check (engine.getCountInBars() == 0 && ! engine.getTransportState().countIn, "resetting turns the count-in off");
+
+        engine.setMidiCycleTakes (true);
+        check (prefs.get (settings::midiCycleTakes) && engine.getMidiCycleTakes(), "MIDI loop recording uses the setting");
+        engine.setMidiCycleTakes (false);
+
+        check (engine.getPlugins().getFormatNames().contains ("VST3"), "the plug-in formats are listed");
+
+        {
+            check (! engine.getSounds().findPack ("ikaros-studio.test").has_value(), "the test sound pack isn't in the library at first");
+            prefs.set (settings::userSoundsFolder, juce::File (IKAROS_TEST_FIXTURES).getFullPathName());
+            check (engine.getSounds().findPack ("ikaros-studio.test").has_value()
+                     && engine.getPackStore().getInstallFolder() == juce::File (IKAROS_TEST_FIXTURES),
+                   "choosing a sound pack folder loads the packs in it, and downloads go there");
+            prefs.set (settings::userSoundsFolder, "");
+            check (! engine.getSounds().findPack ("ikaros-studio.test").has_value(), "the default folder comes back with an empty one");
+        }
+
+        engine.setBpm (120.0);
+        engine.setMetronomeEnabled (false);
+
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (! inputs.empty(), "the pretend device has inputs");
+
+        if (inputs.empty())
+            return;
+
+        const auto first = tracks.getTracks().front().id;
+        auto rec = tracks.addAudioTrack();
+        tracks.inputs().setTrackInput (rec, inputs[0].id);
+        runAudio (*device, 0.3);
+
+        auto regionCount = [&] { return tracks.regions().getRegions (rec).size(); };
+        double nextTakeBeat = 8.0;
+
+        auto record = [&] (double seconds)
+        {
+            engine.setPositionBeats (nextTakeBeat);
+            nextTakeBeat += 20.0;
+            engine.toggleRecord();
+            const bool started = engine.getTransportState().recording;
+
+            if (started)
+            {
+                runAudio (*device, seconds, tone (*device, 0.3f));
+                engine.toggleRecord();
+            }
+
+            return started;
+        };
+
+        std::cout << "Arming (auto-arm on, the default)\n";
+        {
+            check (prefs.get (settings::autoArmTrack), "it's on by default");
+            tracks.setSelectedTrack (first);
+            tracks.setSelectedTrack (rec);
+            check (tracks.inputs().getArmedTrack() == rec, "selecting a track arms it");
+            tracks.inputs().setArmed (rec, false);
+
+            const auto before = regionCount();
+            engine.setPositionBeats (nextTakeBeat);
+            nextTakeBeat += 20.0;
+            engine.toggleRecord();
+            check (engine.getTransportState().recording && tracks.inputs().getArmedTrack() == rec,
+                   "Record arms the selected track for the take");
+            runAudio (*device, 1.0, tone (*device, 0.3f));
+            engine.toggleRecord();
+            check (regionCount() == before + 1 && tracks.inputs().getArmedTrack() == 0,
+                   "and disarms it again afterwards");
+            engine.takeRecordingReport();
+        }
+
+        std::cout << "Arming (auto-arm off)\n";
+        {
+            prefs.set (settings::autoArmTrack, false);
+            tracks.setSelectedTrack (first);
+            tracks.setSelectedTrack (rec);
+            check (tracks.inputs().getArmedTrack() == 0, "selecting a track doesn't arm it");
+
+            const auto before = regionCount();
+            check (! record (1.0), "Record with no track armed doesn't start recording");
+            auto report = engine.takeRecordingReport();
+            check (report && report->reason == RecordingStopReason::noTrackArmed, "the report says no track is armed");
+            check (regionCount() == before && tracks.inputs().getArmedTrack() == 0, "nothing was recorded, and nothing got armed");
+
+            tracks.inputs().setArmed (rec, true);
+            check (record (1.0), "with a track armed by hand, Record starts");
+            check (regionCount() == before + 1, "and records onto it");
+            check (tracks.inputs().getArmedTrack() == rec, "which is still armed afterwards");
+            engine.takeRecordingReport();
+
+            // Turning it back on goes back to the old behaviour.
+            tracks.inputs().setArmed (rec, false);
+            prefs.set (settings::autoArmTrack, true);
+            check (record (1.0) && regionCount() == before + 2 && tracks.inputs().getArmedTrack() == 0,
+                   "with it on again, Record arms the selected track for its take, as before");
+            engine.takeRecordingReport();
+        }
+
+        prefs.resetAll();
+    }
+
+    std::cout << "Preferences: kept between runs\n";
+    {
+        {
+            AudioEngine engine { testSettings, false };
+            engine.getPreferences().set (settings::exportFormat, "mp3");
+            engine.setCountInBars (2);
+        }
+
+        AudioEngine engine { testSettings, false };
+        check (engine.getPreferences().get (settings::exportFormat) == "mp3" && engine.getCountInBars() == 2
+                 && engine.getTransportState().countIn,
+               "the engine's settings are there next time (and the count-in is on)");
+        engine.getPreferences().resetAll();
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -3888,6 +4186,9 @@ int main (int argc, char* argv[])
 
     if (runs ("longrecording"))
         runLongRecordingSection();
+
+    if (runs ("preferences"))
+        runPreferencesSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

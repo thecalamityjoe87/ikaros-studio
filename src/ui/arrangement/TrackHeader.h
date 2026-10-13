@@ -27,6 +27,7 @@ public:
 
     void update (const TrackInfo&, bool isSelected);
     TrackId getTrackId() const noexcept     { return info.id; }
+    juce::Component& getArmButton() noexcept   { return armButton; }
 
     /** Updates the meter in the volume slider (the ~30 Hz timer calls this):
         the track's level, or while it's armed to record audio, its input's

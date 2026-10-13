@@ -20,8 +20,14 @@ MainWindow::MainWindow (const juce::String& name, AudioEngine& engine)
     setContentOwned (content, true);
 
     setResizable (true, false);
-    setResizeLimits (1100, 700, 16384, 16384);
-    centreWithSize (getWidth(), getHeight());
+    setResizeLimits (MainComponent::minWindowWidth, MainComponent::minWindowHeight, 16384, 16384);
+    // No bigger than the screen (a large interface size makes the window's units bigger on it).
+    auto size = juce::Point<int> (getWidth(), getHeight());
+
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        size = { juce::jmin (size.x, display->userArea.getWidth()), juce::jmin (size.y, display->userArea.getHeight()) };
+
+    centreWithSize (size.x, size.y);
     setVisible (true);
 
     restoredBounds = getBounds();

@@ -80,8 +80,9 @@ void InputRouter::setSelectedTrack (TrackId id)
 
     // The arm follows the selection, but not mid-take: the take stays on the
     // track it started on. Only on a change, so a track the user disarmed
-    // stays disarmed while it's still selected.
-    if (changed && ! owner.getTransportState().recording)
+    // stays disarmed while it's still selected. Not at all if the user
+    // prefers to arm tracks themselves.
+    if (changed && ! owner.getTransportState().recording && owner.getPreferences().get (settings::autoArmTrack))
     {
         if (id != 0)
             setArmed (id, true);

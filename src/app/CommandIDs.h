@@ -17,11 +17,11 @@ namespace CommandIDs
         saveSession,
         saveSessionAs,
         closeSession,
-        audioSettings,
 
         undo,
         redo,
         deleteSelection,
+        preferences,        // Edit > Preferences (Settings in the macOS app menu)
 
         newTrack,
         newAudioTrack,

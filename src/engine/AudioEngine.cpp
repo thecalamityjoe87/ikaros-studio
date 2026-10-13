@@ -753,8 +753,13 @@ private:
 AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice)
     : impl (std::make_unique<Impl> (*this, settingsName, openAudioDevice))
 {
+    // The first run after an update takes the choices from Tracktion's settings file.
+    auto& storage = impl->engine.getPropertyStorage();
+    preferences = std::make_unique<Preferences> (storage.getAppPrefsFolder().getChildFile ("Preferences.xml"),
+                                                 &storage.getPropertiesFile());
+
     recordingGuard = std::make_unique<RecordingGuard> (*this);
-    sounds = std::make_unique<SoundLibrary>();
+    sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
     packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
     plugins = std::make_unique<PluginLibrary> (*this);
@@ -762,11 +767,14 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
     exporter = std::make_unique<SongExporter> (*this);
+    preferences->addListener (this);
     newSession();
 }
 
 AudioEngine::~AudioEngine()
 {
+    preferences->removeListener (this);
+
     // Order matters: stop playback and drop anything that references the Edit
     // before the Edit itself goes away, and the Edit before the Engine.
     exporter.reset();   // stops a running export
@@ -1077,6 +1085,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
 
     // Keep the audio graph running while stopped so live MIDI (keyboard) is audible.
     edit.playInStopEnabled = true;
+    applyCountIn();
 
     // Allocates the playback graph now rather than on first play.
     edit.getTransport().ensureContextAllocated();
@@ -1128,6 +1137,25 @@ void AudioEngine::setAppSetting (const juce::String& name, const juce::var& valu
 {
     auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
     props.setValue (name, value);
+    props.saveIfNeeded();
+}
+
+juce::File AudioEngine::getStandardSessionFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Ikaros Studio");
+}
+
+juce::File AudioEngine::getSessionFolder() const
+{
+    auto folder = preferences->getFolder (settings::sessionFolder, getStandardSessionFolder());
+    folder.createDirectory();
+    return folder;
+}
+
+void AudioEngine::clearRecentSessions()
+{
+    auto& props = impl->engine.getPropertyStorage().getPropertiesFile();
+    props.removeValue ("recentSessions");
     props.saveIfNeeded();
 }
 
@@ -1693,12 +1721,23 @@ void AudioEngine::toggleRecord()
         return;
     }
 
-    impl->autoArmedTrack = trackController->inputs().armForRecording();
+    // The arm follows the selection by default; with that preference off the
+    // user arms tracks themselves, so a take only goes where they put it.
+    const bool autoArm = preferences->get (settings::autoArmTrack);
+
+    if (autoArm)
+        impl->autoArmedTrack = trackController->inputs().armForRecording();
 
     const auto armed = trackController->inputs().getArmedTrack();
 
     if (armed == 0)
-        return;   // no track to record onto
+    {
+        // With auto-arm on, this only happens with no track to record onto.
+        if (! autoArm)
+            recordingGuard->refuseTake (RecordingStopReason::noTrackArmed);
+
+        return;
+    }
 
     // Cycle recording always starts at the start of the loop: Tracktion cuts
     // the recording into passes from there. It won't cycle-record a loop
@@ -1805,12 +1844,12 @@ void AudioEngine::setMetronomeEnabled (bool enabled)
 
 void AudioEngine::setMidiCycleTakes (bool keepAsTakes)
 {
-    impl->engine.getPropertyStorage().getPropertiesFile().setValue ("midiCycleTakes", keepAsTakes);
+    preferences->set (settings::midiCycleTakes, keepAsTakes);
 }
 
 bool AudioEngine::getMidiCycleTakes() const
 {
-    return impl->engine.getPropertyStorage().getPropertiesFile().getBoolValue ("midiCycleTakes", false);
+    return preferences->get (settings::midiCycleTakes);
 }
 
 void AudioEngine::setCountInEnabled (bool enabled)
@@ -1822,24 +1861,59 @@ void AudioEngine::setCountInEnabled (bool enabled)
 
 void AudioEngine::setCountInBars (int bars)
 {
-    bars = juce::jlimit (0, 2, bars);
-
-    if (bars > 0)
-        impl->engine.getPropertyStorage().getPropertiesFile().setValue ("countInBars", bars);   // remembered for the button
-
-    impl->edit->setCountInMode (bars == 2 ? te::Edit::CountIn::twoBar
-                              : bars == 1 ? te::Edit::CountIn::oneBar
-                                          : te::Edit::CountIn::none);
+    preferences->set (settings::countIn, juce::jlimit (0, 2, bars));   // applyCountIn() does the rest
 }
 
 int AudioEngine::getCountInBars() const
 {
-    switch (impl->edit->getCountInMode())
+    return juce::jlimit (0, 2, preferences->get (settings::countIn));
+}
+
+// Tracktion keeps its own count-in setting (in its settings file); ours is
+// the one the user sees, so it's copied there whenever it changes.
+void AudioEngine::applyCountIn()
+{
+    const int bars = getCountInBars();
+
+    if (bars > 0)
+        impl->engine.getPropertyStorage().getPropertiesFile().setValue ("countInBars", bars);   // remembered for the button
+
+    if (impl->edit != nullptr)
+        impl->edit->setCountInMode (bars == 2 ? te::Edit::CountIn::twoBar
+                                  : bars == 1 ? te::Edit::CountIn::oneBar
+                                              : te::Edit::CountIn::none);
+}
+
+juce::File AudioEngine::getUserSoundsFolder() const
+{
+    return preferences->getFolder (settings::userSoundsFolder, SoundLibrary::getUserSoundsFolder());
+}
+
+void AudioEngine::applySoundsFolder()
+{
+    const auto folder = getUserSoundsFolder();
+    sounds->setUserFolder (folder);
+    packStore->setInstallFolder (folder);
+}
+
+void AudioEngine::preferenceChanged (const juce::String& key)
+{
+    const bool all = key.isEmpty();   // a reset
+
+    if (all || key == settings::countIn.key)
+        applyCountIn();
+
+    if (all || key == settings::userSoundsFolder.key)
     {
-        case te::Edit::CountIn::oneBar:  return 1;
-        case te::Edit::CountIn::twoBar:  return 2;
-        default:                         return 0;
+        if (getUserSoundsFolder() != sounds->getUserFolder())
+        {
+            applySoundsFolder();
+            soundPacksChanged ({});   // rescan, and point tracks at the packs the new folder holds
+        }
     }
+
+    if (all || key == settings::pluginFolders.key || key == settings::disabledPluginFormats.key)
+        plugins->preferencesChanged();
 }
 
 void AudioEngine::setBpm (double bpm)
