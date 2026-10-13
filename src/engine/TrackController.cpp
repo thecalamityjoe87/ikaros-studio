@@ -218,6 +218,12 @@ void TrackController::deleteTrack (TrackId id)
         owner.beginUndoStep ("Delete Track");
         impl->meters.erase (id);
 
+        // Where the track was, so the selection can move to the one that
+        // takes its place (or the one above, if it was the last).
+        auto before = getTracks();
+        const auto index = std::find_if (before.begin(), before.end(), [id] (const TrackInfo& t) { return t.id == id; })
+                             - before.begin();
+
         inputRouter->trackDeleted (id);
 
         owner.getEdit()->deleteTrack (track);
@@ -225,7 +231,7 @@ void TrackController::deleteTrack (TrackId id)
         if (selectedTrack == id)
         {
             auto remaining = getTracks();
-            setSelectedTrack (remaining.empty() ? 0 : remaining.front().id);
+            setSelectedTrack (remaining.empty() ? 0 : remaining[(size_t) juce::jmin ((int) index, (int) remaining.size() - 1)].id);
         }
     }
 }

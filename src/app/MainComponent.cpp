@@ -639,8 +639,14 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::exportSong:      ExportDialog::show (*this, engine, false); break;
         case CommandIDs::exportStems:     ExportDialog::show (*this, engine, true); break;
 
-        case CommandIDs::undo:            engine.undo(); break;
-        case CommandIDs::redo:            engine.redo(); break;
+        case CommandIDs::undo:
+        case CommandIDs::redo:
+        {
+            const auto before = selection.getContents();
+            info.commandID == CommandIDs::undo ? engine.undo() : engine.redo();
+            selection.selectAfterUndoOrRedo (before);
+            break;
+        }
 
         case CommandIDs::deleteSelection:
             if (selection.hasRegions())

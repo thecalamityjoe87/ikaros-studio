@@ -9,6 +9,7 @@
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
 #include "engine/SongExporter.h"
+#include "ui/state/Selection.h"                    // plain logic, no components
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
@@ -2403,6 +2404,75 @@ int main (int argc, char* argv[])
         checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignature (3, 4); });
         checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, true); });
         checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Selection after delete, undo and redo\n";
+        {
+            engine.newSession();
+            pumpMessages();
+            Selection selection { engine };
+
+            // The same as the Undo and Redo commands do (see MainComponent::perform).
+            auto undoOrRedo = [&] (bool undo)
+            {
+                const auto before = selection.getContents();
+                undo ? engine.undo() : engine.redo();
+                selection.selectAfterUndoOrRedo (before);
+                pumpMessages();
+            };
+
+            tracks.addInstrumentTrack();
+            pumpMessages();
+            const auto lastAdded = tracks.addInstrumentTrack();
+            pumpMessages();
+            std::vector<TrackId> order;
+
+            for (auto& t : tracks.getTracks())
+                order.push_back (t.id);
+
+            selection.selectTrack (order[1]);
+            tracks.deleteTrack (order[1]);
+            pumpMessages();
+            check (selection.getTrack() == order[2], "deleting a track selects the one that takes its place");
+            tracks.deleteTrack (order[2]);
+            pumpMessages();
+            check (selection.getTrack() == order[0], "deleting the bottom track selects the one above");
+
+            undoOrRedo (true);
+            check (selection.getTrack() == order[2], "undoing a delete selects the track that comes back");
+            undoOrRedo (true);
+            check (selection.getTrack() == order[1], "(and again)");
+
+            // Undoing "Add Track" takes the selected track away.
+            selection.selectTrack (lastAdded);
+            const auto at = std::find (order.begin(), order.end(), lastAdded) - order.begin();
+            const auto expected = at + 1 < (long) order.size() ? order[(size_t) at + 1] : order[(size_t) at - 1];
+            undoOrRedo (true);
+            check (selection.getTrack() == expected, "undoing Add Track selects its neighbour, not the first track");
+            undoOrRedo (false);
+            check (selection.getTrack() == lastAdded, "redoing it selects the new track again");
+
+            auto& regions = tracks.regions();
+            const auto r1 = regions.createChordRegion (order[0], 0.0);
+            pumpMessages();
+            const auto r2 = regions.createChordRegion (order[0], 32.0);
+            pumpMessages();
+            selection.selectRegions (order[0], { r1, r2 });
+            regions.deleteRegions ({ r1, r2 });
+            pumpMessages();
+            selection.validate();
+            check (! selection.hasRegions(), "deleted regions leave the selection");
+            undoOrRedo (true);
+            check (selection.isSelected (r1) && selection.isSelected (r2) && selection.getTrack() == order[0],
+                   "undoing a delete selects the regions that come back");
+
+            selection.selectTrack (order[1]);
+            undoOrRedo (false);   // deletes them again
+            undoOrRedo (true);
+            check (selection.isSelected (r1) && selection.isSelected (r2), "(also when another track was selected)");
+            undoOrRedo (true);    // the second "Add Region"
+            check (selection.getRegions() == std::vector<RegionId> { r1 } && selection.getRegion() == r1,
+                   "undoing Add Region drops just that region from the selection");
+        }
     }
 
     dir.deleteRecursively();
