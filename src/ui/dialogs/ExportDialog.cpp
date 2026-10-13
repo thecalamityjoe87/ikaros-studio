@@ -285,7 +285,7 @@ void ExportDialog::showStage (Stage s)
 
     progressBar.setVisible (stage == Stage::exporting);
     exportButton.setVisible (stage != Stage::exporting);
-    exportButton.setButtonText (stage == Stage::done ? "Done" : "Export...");
+    exportButton.setText (stage == Stage::done ? "Done" : "Export...");   // (IconButton draws its own text, not getButtonText())
     cancelButton.setVisible (stage != Stage::done);
     revealButton.setVisible (stage == Stage::done && result.ok);
 
@@ -402,6 +402,14 @@ void ExportDialog::resized()
     progressBar.setBounds (rows.withHeight (20));
 
     auto buttons = panel.reduced (padX, padY).removeFromBottom (36);
+
+    // While exporting, Cancel is the only button: centered under the progress bar.
+    if (stage == Stage::exporting)
+    {
+        cancelButton.setBounds (buttons.withSizeKeepingCentre (100, buttons.getHeight()));
+        return;
+    }
+
     exportButton.setBounds (buttons.removeFromRight (110));
     buttons.removeFromRight (10);
     cancelButton.setBounds (buttons.removeFromRight (100));
