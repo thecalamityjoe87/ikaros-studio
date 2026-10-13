@@ -60,7 +60,13 @@ AudioMidiPage::AudioMidiPage (AudioEngine& e) : engine (e), devices (e)
         updateWarningButton();
     };
 
+    fillChoices (deviceChangeBox, { "Ask me", "Switch automatically", "Never ask" }, prefs.get (settings::deviceChange));
+    deviceChangeBox.setTitle ("Audio device changes");
+    deviceChangeBox.onChange = [this] { engine.getPreferences().set (settings::deviceChange, deviceChangeBox.getSelectedItemIndex()); };
+
     addWide (devices);
+    addRow ("Audio device changes", deviceChangeBox, 200,
+            "What to do when you plug in an audio device, or unplug the one in use.");
     addRow ("Keyboard velocity", velocityBox, 160,
             "How hard the on-screen keyboard and your computer's keys play. A MIDI keyboard sends its own.");
     addRow ("Monitoring", warningButton, 240,

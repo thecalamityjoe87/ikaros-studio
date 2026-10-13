@@ -1,4 +1,5 @@
 #include "engine/AudioEngine.h"
+#include "engine/AudioDeviceWatcher.h"
 #include "engine/AudioPreview.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
@@ -759,6 +760,7 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                                  &storage.getPropertiesFile());
 
     recordingGuard = std::make_unique<RecordingGuard> (*this);
+    deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
     sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
     packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
@@ -778,6 +780,7 @@ AudioEngine::~AudioEngine()
     // Order matters: stop playback and drop anything that references the Edit
     // before the Edit itself goes away, and the Edit before the Engine.
     exporter.reset();   // stops a running export
+    deviceWatcher.reset();
 
     if (impl->edit != nullptr)
         impl->edit->getTransport().stop (false, true);
@@ -2089,6 +2092,38 @@ std::optional<RecordingReport> AudioEngine::takeRecordingReport()
 AudioDeviceStatus AudioEngine::getAudioDeviceStatus() const
 {
     return recordingGuard->getDeviceStatus();
+}
+
+std::optional<AudioDevicePrompt> AudioEngine::takeAudioDevicePrompt()
+{
+    return deviceWatcher->popPrompt();
+}
+
+juce::String AudioEngine::switchAudioDevice (const AudioDevicePrompt& prompt)
+{
+    auto& adm = impl->engine.getDeviceManager().deviceManager;
+    const auto previous = adm.getAudioDeviceSetup();
+    auto setup = previous;
+
+    if (prompt.inputName.isNotEmpty())
+    {
+        setup.inputDeviceName = prompt.inputName;
+        setup.useDefaultInputChannels = true;
+    }
+
+    if (prompt.outputName.isNotEmpty())
+    {
+        setup.outputDeviceName = prompt.outputName;
+        setup.useDefaultOutputChannels = true;
+    }
+
+    auto error = adm.setAudioDeviceSetup (setup, true);
+
+    // A failed switch may leave the old device closed.
+    if (error.isNotEmpty())
+        adm.setAudioDeviceSetup (previous, true);
+
+    return error;
 }
 
 void AudioEngine::setMinimumFreeDiskSpace (juce::int64 bytes)

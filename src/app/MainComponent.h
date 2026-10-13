@@ -139,6 +139,8 @@ private:
         that the input was too loud or the computer didn't keep up. */
     void showRecordingReport (const RecordingReport&);
 
+    bool deviceChangeOpen = false;      // the "switch to this audio device?" question is showing
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
 

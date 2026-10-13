@@ -171,14 +171,16 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/Mp3Format.h          src/engine/Mp3Format.cpp
     src/engine/RecordingTypes.h
     src/engine/Preferences.h        src/engine/Preferences.cpp
-    src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp)
+    src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
+    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
     src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
     src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
     src/platform/AppFolders.h          src/platform/AppFolders.cpp
-    src/platform/FileLock.h            src/platform/FileLock.cpp)
+    src/platform/FileLock.h            src/platform/FileLock.cpp
+    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -209,6 +211,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
     src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
     src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
+    src/ui/dialogs/DeviceChangePrompt.h     src/ui/dialogs/DeviceChangePrompt.cpp
 
     # the Preferences window and its pages
     src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp
@@ -381,6 +384,7 @@ if(IKAROS_BUILD_TESTS)
         tests/EngineSmokeTest.cpp
         src/platform/AppFolders.cpp      # the engine keeps open sessions there
         src/platform/FileLock.cpp        # and marks them as open with a lock
+        src/platform/AudioHardware.cpp   # and the audio device watcher notices new sound cards
         src/engine/TestAudioDevice.cpp   # a pretend audio interface the test drives
         ${IKAROS_ENGINE_SOURCES})
 

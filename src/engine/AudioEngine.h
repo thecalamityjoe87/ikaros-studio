@@ -25,6 +25,7 @@ class PackStore;
 class AudioPreview;
 class SongExporter;
 class RecordingGuard;
+class AudioDeviceWatcher;
 
 //==============================================================================
 /** What the engine hands the UI when a third-party plug-in's window should
@@ -276,6 +277,18 @@ public:
     /** The audio device's buffer, latencies and dropouts (for the audio settings). */
     AudioDeviceStatus getAudioDeviceStatus() const;
 
+    /** A device was plugged in, or the one in use unplugged, and the user
+        should be asked about it (unless the "Audio device changes" setting
+        says otherwise). Each prompt is returned once. */
+    std::optional<AudioDevicePrompt> takeAudioDevicePrompt();
+
+    /** Switches to the devices a prompt names. Returns what went wrong, or
+        an empty string. */
+    juce::String switchAudioDevice (const AudioDevicePrompt&);
+
+    /** For tests, to act out devices coming and going. */
+    AudioDeviceWatcher& getDeviceWatcher() noexcept     { return *deviceWatcher; }
+
     /** Recording needs at least this much free disk space (default 200 MB).
         Tests raise it to act out a full disk. */
     void setMinimumFreeDiskSpace (juce::int64 bytes);
@@ -334,6 +347,7 @@ private:
     friend class PluginLibrary;
     friend class SongExporter;
     friend class RecordingGuard;
+    friend class AudioDeviceWatcher;
     friend class TestAudioDevice;
 
     tracktion::Engine& getTeEngine() noexcept;
@@ -388,6 +402,7 @@ private:
     std::unique_ptr<TrackController> trackController;
     std::unique_ptr<SongExporter> exporter;
     std::unique_ptr<RecordingGuard> recordingGuard;
+    std::unique_ptr<AudioDeviceWatcher> deviceWatcher;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

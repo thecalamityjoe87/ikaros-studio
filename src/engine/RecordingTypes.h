@@ -45,6 +45,20 @@ struct RecordingReport
     double seconds = 0.0;   // how long it recorded for
 };
 
+/** A device was plugged in, or the one in use was unplugged: what to ask
+    the user (see AudioDeviceWatcher). */
+struct AudioDevicePrompt
+{
+    enum class Kind { appeared, disappeared };
+
+    Kind kind = Kind::appeared;
+    juce::String deviceName;        // the device that appeared or went away, as the user knows it
+    juce::String useName;           // the device to switch to, for the same
+
+    // The names JUCE uses for useName's inputs and outputs. An empty one means leave that side as it is.
+    juce::String inputName, outputName;
+};
+
 /** The audio device as the audio settings show it. Latencies are what the
     driver reports; on Linux they're an estimate (see RecordingGuard.h). */
 struct AudioDeviceStatus

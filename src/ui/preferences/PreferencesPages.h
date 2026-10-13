@@ -37,7 +37,7 @@ private:
     AudioEngine& engine;
     AudioSettingsPanel devices;
     juce::ComboBox velocityBox;
-    IconButton warningButton { "Show the feedback warning again", std::nullopt, "Show Feedback Warning Again" };
+    juce::ComboBox deviceChangeBox;    IconButton warningButton { "Show the feedback warning again", std::nullopt, "Show Feedback Warning Again" };
 
     void updateWarningButton();
 };

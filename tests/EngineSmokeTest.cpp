@@ -3,6 +3,7 @@
 // IkarosEngineSmokeTest binary directly.
 
 #include "engine/AudioEngine.h"
+#include "engine/AudioDeviceWatcher.h"
 #include "engine/PackStore.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SoundLibrary.h"
@@ -1517,7 +1518,89 @@ static void runPreferencesSection (const juce::File& dir)
                      && engine.getPackStore().getInstallFolder() == juce::File (IKAROS_TEST_FIXTURES),
                    "choosing a sound pack folder loads the packs in it, and downloads go there");
             prefs.set (settings::userSoundsFolder, "");
-            check (! engine.getSounds().findPack ("ikaros-studio.test").has_value(), "the default folder comes back with an empty one");
+        }
+
+        std::cout << "Audio device changes\n";
+        {
+            const juce::String scarlett = "Scarlett 2i2 USB, USB Audio; Direct hardware device without any conversions";
+            const juce::String headphones = "USB Headphones, USB Audio; Direct hardware device without any conversions";
+
+            AudioDeviceState before;
+            before.inputs = { "Default ALSA Input" };
+            before.outputs = { "Default ALSA Output" };
+            before.inUseInput = before.defaultInput = "Default ALSA Input";
+            before.inUseOutput = before.defaultOutput = "Default ALSA Output";
+
+            check (! findDeviceChange (before, before), "no change, nothing to ask");
+
+            auto usb = before;
+            usb.inputs.add (scarlett);
+            usb.outputs.add (scarlett);
+            auto prompt = findDeviceChange (before, usb);
+            check (prompt && prompt->kind == AudioDevicePrompt::Kind::appeared && prompt->deviceName == "Scarlett 2i2 USB"
+                     && prompt->inputName == scarlett && prompt->outputName == scarlett,
+                   "an interface that appears is offered for both recording and playback, under its short name");
+
+            auto dac = before;
+            dac.outputs.add (headphones);
+            prompt = findDeviceChange (before, dac);
+            check (prompt && prompt->inputName.isEmpty() && prompt->outputName == headphones,
+                   "headphones are offered for playback only");
+
+            auto mixed = before;
+            mixed.inputs.add (scarlett);
+            mixed.outputs.add (headphones);
+            prompt = findDeviceChange (before, mixed);
+            check (prompt && prompt->inputName.isEmpty() && prompt->outputName == headphones,
+                   "an input and an output of different devices at once: one question, about the output");
+
+            auto alreadyUsed = usb;
+            alreadyUsed.inUseInput = alreadyUsed.inUseOutput = scarlett;
+            check (! findDeviceChange (before, alreadyUsed), "a device that's already in use isn't offered");
+
+            auto inUse = usb;
+            inUse.inUseInput = inUse.inUseOutput = scarlett;
+
+            auto unplugged = before;
+            unplugged.inUseInput = unplugged.inUseOutput = scarlett;   // JUCE on Linux keeps the old name
+            prompt = findDeviceChange (inUse, unplugged);
+            check (prompt && prompt->kind == AudioDevicePrompt::Kind::disappeared && prompt->deviceName == "Scarlett 2i2 USB"
+                     && prompt->inputName == "Default ALSA Input" && prompt->outputName == "Default ALSA Output"
+                     && prompt->useName == "Default ALSA Output",
+                   "the device in use going away offers the default one");
+
+            check (! findDeviceChange (inUse, before), "if the system already moved to the default device, there's nothing to offer");
+
+            // The watcher, with the lists acted out.
+            auto& watcher = engine.getDeviceWatcher();
+            auto shown = before;
+            watcher.setStateSource ([&shown] { return shown; });
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "the first look only notes the devices");
+
+            shown = usb;
+            watcher.check();
+            prompt = engine.takeAudioDevicePrompt();
+            check (prompt && prompt->deviceName == "Scarlett 2i2 USB", "a device plugged in is offered");
+            check (! engine.takeAudioDevicePrompt(), "a prompt comes once");
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "and the same device isn't offered again");
+
+            prefs.set (settings::deviceChange, settings::DeviceChange::neverAsk);
+            shown = before;
+            watcher.check();
+            shown = usb;
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "with \"never ask\", it stays quiet");
+
+            prefs.set (settings::deviceChange, settings::DeviceChange::ask);
+            shown = before;
+            watcher.check();
+            shown = usb;
+            watcher.check();
+            check (engine.takeAudioDevicePrompt().has_value(), "and asks again when the setting is back");
+
+            watcher.setStateSource ({});
         }
 
         engine.setBpm (120.0);

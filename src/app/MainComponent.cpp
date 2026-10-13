@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/DeviceChangePrompt.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
@@ -340,6 +341,21 @@ void MainComponent::timerCallback()
 
     if (auto report = engine.takeRecordingReport())
         showRecordingReport (*report);
+
+    // One question at a time, and not in the middle of a take.
+    if (! deviceChangeOpen && ! engine.getTransportState().recording)
+    {
+        if (auto prompt = engine.takeAudioDevicePrompt())
+        {
+            deviceChangeOpen = true;
+            showDeviceChangePrompt (engine, *prompt, this,
+                                    [safeThis = SafePointer<MainComponent> (this)]
+                                    {
+                                        if (safeThis != nullptr)
+                                            safeThis->deviceChangeOpen = false;
+                                    });
+        }
+    }
 }
 
 //==============================================================================

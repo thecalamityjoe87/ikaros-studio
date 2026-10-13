@@ -29,6 +29,8 @@ namespace settings
     namespace Velocity { enum { soft, normal, hard }; }
     inline constexpr IntSetting  keyboardVelocity    { "keyboardVelocity", Velocity::normal };
     inline constexpr BoolSetting monitoringWarningShown { "monitoringWarningShown", false };
+    namespace DeviceChange { enum { ask, alwaysSwitch, neverAsk }; }
+    inline constexpr IntSetting  deviceChange        { "deviceChange", DeviceChange::ask };   // plugging in or unplugging an audio device
 
     // Recording
     inline constexpr IntSetting  countIn             { "countIn", 0 };                // bars: 0 (off), 1 or 2
