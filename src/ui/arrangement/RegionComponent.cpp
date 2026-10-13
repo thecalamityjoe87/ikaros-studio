@@ -13,7 +13,7 @@ namespace
 {
     constexpr float corner = 8.0f;
     constexpr int stripHeight = 20;
-    constexpr int loopCornerWidth = 18;    // the loop handle: the upper half of the right edge
+    constexpr int loopCornerWidth = 18;    // the loop handle (top-right) and trim handle (bottom-right) are this wide and stripHeight tall
     constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
     constexpr int fadeHandleReach = 7;        // how close the mouse has to be to grab one
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
@@ -70,17 +70,26 @@ RegionComponent::Zone RegionComponent::getZoneAt (juce::Point<int> p) const
             if (std::abs ((float) p.x - getFadeHandle (fadeIn).x) <= (float) fadeHandleReach)
                 return fadeIn ? Zone::fadeIn : Zone::fadeOut;
 
-    // As in GarageBand: the upper half of the right edge loops, the lower half trims.
-    if (getWidth() >= 32 && p.y < getHeight() / 2 && p.x >= getWidth() - loopCornerWidth)
+    // The top-right handle loops; the bottom-right one and the rest of the right edge trim.
+    if (getWidth() >= 32 && p.y < stripHeight && p.x >= getWidth() - loopCornerWidth)
         return Zone::loopCorner;
 
-    if (p.x >= getWidth() - edge)
+    if (getTrimHandleBounds().contains (p) || p.x >= getWidth() - edge)
         return Zone::rightEdge;
 
     if (getTakeBadgeBounds().contains (p))
         return Zone::takeBadge;
 
     return p.y < stripHeight ? Zone::nameStrip : Zone::body;
+}
+
+juce::Rectangle<int> RegionComponent::getTrimHandleBounds() const
+{
+    // Empty when the region is too small for the loop and trim handles not to touch.
+    if (getWidth() < 32 || getHeight() < 2 * stripHeight)
+        return {};
+
+    return getLocalBounds().removeFromBottom (stripHeight).removeFromRight (loopCornerWidth);
 }
 
 // "Take 2 ▾" at the start of the name strip, before the name (where it's
@@ -267,7 +276,20 @@ void RegionComponent::paint (juce::Graphics& g)
                 g.fillRect (handle);
             }
 
-            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 12.0f, 1.6f);
+            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
+        }
+
+        // The trim handle: the same, in the bottom-right corner, with a resize arrow.
+        if (const auto trimHandle = getTrimHandleBounds().toFloat(); ! trimHandle.isEmpty() && (hovering || trimPreview.has_value()))
+        {
+            const bool active = hoveringTrimHandle || (trimPreview.has_value() && ! loopPreview);
+
+            g.setColour (juce::Colours::black.withAlpha (active ? 0.3f : 0.15f));
+            g.fillRect (trimHandle);
+
+            // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.
+            icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
+                         colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
         }
     }
 
@@ -515,6 +537,12 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
         repaint();
     }
 
+    if (getTrimHandleBounds().contains (e.getPosition()) != hoveringTrimHandle)
+    {
+        hoveringTrimHandle = ! hoveringTrimHandle;
+        repaint();
+    }
+
     if ((zone == Zone::takeBadge) != hoveringTakeBadge)
     {
         hoveringTakeBadge = zone == Zone::takeBadge;
@@ -533,9 +561,9 @@ void RegionComponent::mouseExit (const juce::MouseEvent&)
     hovering = false;
     repaint();
 
-    if (hoveringLoopCorner || hoveringTakeBadge)
+    if (hoveringLoopCorner || hoveringTrimHandle || hoveringTakeBadge)
     {
-        hoveringLoopCorner = hoveringTakeBadge = false;
+        hoveringLoopCorner = hoveringTrimHandle = hoveringTakeBadge = false;
         repaint();
     }
 }

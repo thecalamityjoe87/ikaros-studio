@@ -21,8 +21,9 @@ class RegionComponent  : public juce::Component
 {
 public:
     /** The parts of a region that react differently to the mouse. The loop
-        "corner" is the upper half of the right edge, as in GarageBand (the
-        lower half trims): dragging it repeats the content. The fade handles
+        "corner" is a small handle at the top of the right edge: dragging it
+        repeats the content. A matching handle at the bottom-right trims (it
+        reports rightEdge, like the rest of the edge). The fade handles
         sit on an audio region's waveform, at the top, where each fade ends.
         A region with takes has a take badge in its name strip, which opens
         the take menu. */
@@ -60,6 +61,7 @@ public:
 
     /** Where the take badge is drawn (empty if the region has no takes or is too narrow). */
     juce::Rectangle<int> getTakeBadgeBounds() const;
+    juce::Rectangle<int> getTrimHandleBounds() const;
 
     /** Escape was pressed on the region. Return true if it was used (it
         cancelled a drag), so it doesn't go on to the app's shortcuts. */
@@ -85,6 +87,7 @@ private:
     std::optional<juce::Range<double>> trimPreview;
     bool loopPreview = false;
     bool hoveringLoopCorner = false;
+    bool hoveringTrimHandle = false;
     bool hoveringTakeBadge = false;
     bool pressedTakeBadge = false;                  // the press went to the badge: no drag
     bool hovering = false;                          // the fade handles show while the mouse is over the region
