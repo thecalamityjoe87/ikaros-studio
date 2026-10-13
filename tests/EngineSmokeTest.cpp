@@ -8,6 +8,7 @@
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
+#include "engine/SongExporter.h"
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
@@ -72,6 +73,25 @@ int main (int argc, char* argv[])
     // app-data folder, under the name the engine is given.
     juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile (testSettings).deleteRecursively();
 
+    // Sections: "--only=export" runs just that one, "--skip=export" all the
+    // others (ctest runs them as separate tests, see CMakeLists.txt). The
+    // "main" section is everything that isn't in a section of its own.
+    juce::String only, skip;
+
+    for (int i = args.size(); --i >= 0;)
+    {
+        if (args[i].startsWith ("--only="))       only = args[i].fromFirstOccurrenceOf ("=", false, false);
+        else if (args[i].startsWith ("--skip="))  skip = args[i].fromFirstOccurrenceOf ("=", false, false);
+        else continue;
+
+        args.remove (i);
+    }
+
+    auto runs = [&] (const juce::String& section)
+    {
+        return (only.isEmpty() || only == section) && skip != section;
+    };
+
     // The test plug-ins (built with -DIKAROS_BUILD_TEST_PLUGINS=ON), if any.
     const auto testPlugins = args.isEmpty() ? juce::File() : juce::File (args[0]);
 
@@ -89,6 +109,7 @@ int main (int argc, char* argv[])
    #endif
     auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke.iksession
 
+    if (runs ("main"))
     {
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
@@ -472,6 +493,7 @@ int main (int argc, char* argv[])
         engine.newSession();
     }
 
+    if (runs ("main"))
     {
         std::cout << "Open (fresh engine)\n";
         AudioEngine engine { testSettings };
@@ -497,6 +519,7 @@ int main (int argc, char* argv[])
         check (std::abs (engine.getTransportState().bpm - 96.0) < 0.001, "tempo round-trips");
     }
 
+    if (runs ("main"))
     {
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
@@ -1527,6 +1550,7 @@ int main (int argc, char* argv[])
         }
     }
 
+    if (runs ("main"))
     {
         // A fresh engine: Tracktion expects only one at a time.
         AudioEngine reopened { testSettings };
@@ -1548,8 +1572,9 @@ int main (int argc, char* argv[])
         check (std::abs (first.reverbSend - 0.5f) < 0.01f && std::abs (first.delaySend - 0.25f) < 0.01f, "sends round-trip");
     }
 
-    std::cout << "Automation\n";
+    if (runs ("main"))
     {
+        std::cout << "Automation\n";
         auto automationSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Automation"));
         const std::vector<AutomationPoint> ramp { { 4.0, 0.2f }, { 8.0, 0.9f } };
 
@@ -1687,7 +1712,221 @@ int main (int argc, char* argv[])
         }
     }
 
-    if (testPlugins.getChildFile ("Good").isDirectory())
+    if (runs ("export"))
+    {
+        std::cout << "Export\n";
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        auto& tracks = engine.getTracks();
+        auto& exporter = engine.getExporter();
+        auto exportDir = dir.getChildFile ("Export");
+        constexpr double rate = SongExporter::sampleRate;
+
+        // Runs an export to the end (pumping the message loop like the app would).
+        auto runExport = [&] (ExportSettings s)
+        {
+            ExportResult result;
+            bool done = false;
+
+            if (exporter.start (s, [&] (const ExportResult& r) { result = r; done = true; }).failed())
+                return result;
+
+            for (int i = 0; i < 1200 && ! done; ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            return result;
+        };
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        auto readAudio = [&] (const juce::File& f)
+        {
+            juce::AudioBuffer<float> audio;
+
+            if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (f) })
+            {
+                audio.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+            }
+
+            return audio;
+        };
+
+        auto peakIn = [&] (const juce::AudioBuffer<float>& a, double fromSeconds, double toSeconds)
+        {
+            const auto from = juce::jlimit (0, a.getNumSamples(), (int) (fromSeconds * rate));
+            const auto to = juce::jlimit (0, a.getNumSamples(), (int) (toSeconds * rate));
+            return to > from ? a.getMagnitude (from, to - from) : 0.0f;
+        };
+
+        auto seconds = [&] (const juce::AudioBuffer<float>& a) { return a.getNumSamples() / rate; };
+
+        ExportSettings settings;
+        settings.format = ExportFormat::wav;
+        settings.quality = 24;
+        settings.destination = exportDir.getChildFile ("Song");
+
+        check (exporter.start (settings, {}).failed() && ! exporter.isRunning(), "a song without regions can't be exported");
+
+        // At 120 bpm a beat is half a second: the region plays from 4 s to 12 s.
+        auto t = tracks.getTracks().front().id;
+        tracks.regions().createChordRegion (t, 8.0);
+        pumpMessages();
+        check (std::abs (exporter.getSongEndBeats() - 24.0) < 1.0e-6, "the song ends where the last region ends");
+
+        auto result = runExport (settings);
+        const auto songFile = exportDir.getChildFile ("Song.wav");
+        auto song = readAudio (songFile);
+        std::cout << "  (song: " << seconds (song) << " s, peak " << peakIn (song, 0.0, 60.0) << ")\n";
+        check (result.ok && result.files.size() == 1 && result.files[0] == songFile && song.getNumChannels() == 2,
+               "the song exports to a stereo WAV (the extension is added)");
+        check (seconds (song) >= 12.0 && seconds (song) < 12.0 + SongExporter::maxTailSeconds,
+               "it lasts to the end of the last region, plus a short tail");
+        check (peakIn (song, 0.0, 3.95) < 1.0e-4 && peakIn (song, 4.2, 11.8) > 0.01f, "silence before the region, sound during it");
+        check (exportDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1, "(nothing else is left next to it)");
+
+        // A reverb send makes the tail longer.
+        engine.beginUndoStep ("Reverb");
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 1.0f);
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Reverb.wav");
+        runExport (settings);
+        auto reverb = readAudio (settings.destination);
+        std::cout << "  (with reverb: " << seconds (reverb) << " s)\n";
+        check (seconds (reverb) > seconds (song) + 0.5 && seconds (reverb) <= 12.0 + SongExporter::maxTailSeconds + 0.2,
+               "the tail lasts until the reverb dies out");
+
+        // Normalizing: the loudest moment lands just under full scale.
+        settings.normalize = true;
+        settings.destination = exportDir.getChildFile ("Normalized.wav");
+        runExport (settings);
+        const auto normalizedPeak = peakIn (readAudio (settings.destination), 0.0, 60.0);
+        std::cout << "  (normalized peak " << normalizedPeak << ")\n";
+        check (std::abs (normalizedPeak - juce::Decibels::decibelsToGain (SongExporter::normalizeLevelDb)) < 0.01f,
+               "normalize brings the peak to -1 dB");
+        settings.normalize = false;
+
+        // Automation: the volume drops to nothing for beats 12-16 (6-8 s).
+        // (Dry, so the reverb doesn't ring on into the gap.)
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 0.0f);
+        engine.beginUndoStep ("Volume Automation");
+        tracks.automation().setPoints (t, automationTargets::volume,
+                                       { { 0.0, 0.8f }, { 11.99, 0.8f }, { 12.0, 0.0f }, { 15.99, 0.0f }, { 16.0, 0.8f } });
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Automation.wav");
+        runExport (settings);
+        auto automated = readAudio (settings.destination);
+        std::cout << "  (automated peaks: " << peakIn (automated, 4.2, 5.9) << ", " << peakIn (automated, 6.1, 7.9)
+                  << ", " << peakIn (automated, 8.2, 11.8) << ")\n";
+        check (peakIn (automated, 6.1, 7.9) < 1.0e-3f && peakIn (automated, 4.2, 5.9) > 0.01f && peakIn (automated, 8.2, 11.8) > 0.01f,
+               "the volume follows its automation in the file");
+        tracks.automation().setPoints (t, automationTargets::volume, {});
+        pumpMessages();
+
+        // The cycle range, exactly (no tail).
+        engine.setLoopRangeBeats (8.0, 12.0);
+        settings.cycleOnly = true;
+        settings.destination = exportDir.getChildFile ("Cycle.wav");
+        runExport (settings);
+        auto cycle = readAudio (settings.destination);
+        check (std::abs (cycle.getNumSamples() - 2.0 * rate) <= 2.0 && peakIn (cycle, 0.0, 2.0) > 0.01f,
+               "just the cycle range exports exactly");
+        settings.cycleOnly = false;
+
+        // Stems: a second track plays 0-8 s, without reverb.
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 1.0f);
+        auto t2 = tracks.addInstrumentTrack();
+        tracks.regions().createChordRegion (t2, 0.0);
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Mix.wav");
+        runExport (settings);
+        auto mix = readAudio (settings.destination);
+
+        settings.stems = true;
+        settings.destination = exportDir.getChildFile ("Stems");
+        result = runExport (settings);
+        check (result.ok && result.files.size() == 2 && exporter.getStemNames().size() == 2, "stems: one file per track");
+
+        if (result.files.size() == 2)
+        {
+            auto a = readAudio (result.files[0]), b = readAudio (result.files[1]);
+            // (The synth isn't sample-for-sample repeatable, so the song's own
+            // render may find the end of the reverb tail a little earlier or later.)
+            check (result.files[0].getFileName().startsWith ("01 ") && a.getNumSamples() == b.getNumSamples()
+                     && std::abs (seconds (a) - seconds (mix)) < 0.5,
+                   "all the same length, the song's");
+            check (peakIn (a, 0.0, 3.95) < 1.0e-4 && peakIn (b, 0.0, 3.95) > 0.01f, "each holds only its own track");
+
+            // Each stem has its own reverb, and only its own. (The synth isn't
+            // sample-for-sample repeatable, so the stems can't be compared
+            // with the song directly.)
+            std::cout << "  (after 12.5 s: reverb stem " << peakIn (a, 12.5, 60.0) << ", dry stem " << peakIn (b, 9.0, 60.0) << ")\n";
+            check (peakIn (a, 12.5, 60.0) > 1.0e-3f && peakIn (b, 9.0, 60.0) < 1.0e-4f, "each stem has its own reverb, and only its own");
+        }
+
+        // Mute and solo, like playback.
+        tracks.setMute (t2, true);
+        settings.stems = false;
+        settings.destination = exportDir.getChildFile ("Muted.wav");
+        runExport (settings);
+        check (peakIn (readAudio (settings.destination), 0.0, 3.95) < 1.0e-4 && exporter.getStemNames().size() == 1,
+               "a muted track isn't in the song or the stems");
+        tracks.setMute (t2, false);
+        tracks.setSolo (t2, true);
+        settings.destination = exportDir.getChildFile ("Solo.wav");
+        runExport (settings);
+        auto solo = readAudio (settings.destination);
+        std::cout << "  (solo peaks: " << peakIn (solo, 0.0, 3.95) << ", " << peakIn (solo, 9.0, 60.0) << "; stems: "
+                  << exporter.getStemNames().joinIntoString (", ") << ")\n";
+        check (peakIn (solo, 0.0, 3.95) > 0.01f && peakIn (solo, 9.0, 60.0) < 1.0e-4f
+                 && exporter.getStemNames() == juce::StringArray (tracks.getTrack (t2)->name),
+               "solo leaves only the soloed track");
+        tracks.setSolo (t2, false);
+
+        // FLAC and OGG.
+        settings.format = ExportFormat::flac;
+        settings.quality = 16;
+        settings.destination = exportDir.getChildFile ("Song.flac");
+        runExport (settings);
+        auto flac = readAudio (settings.destination);
+        std::cout << "  (FLAC " << seconds (flac) << " s, song " << seconds (mix) << " s)\n";
+        check (std::abs (seconds (flac) - seconds (mix)) < 0.5 && peakIn (flac, 4.2, 11.8) > 0.01f, "FLAC (16-bit) exports");
+
+        settings.format = ExportFormat::ogg;
+        settings.quality = 192;
+        settings.destination = exportDir.getChildFile ("Song.ogg");
+        runExport (settings);
+        auto ogg = readAudio (settings.destination);
+        check (std::abs (seconds (ogg) - seconds (mix)) < 0.1 && peakIn (ogg, 4.2, 11.8) > 0.01f, "OGG Vorbis exports");
+
+        settings.format = ExportFormat::mp3;
+        settings.quality = 320;
+        settings.destination = exportDir.getChildFile ("Song");
+        runExport (settings);
+        auto mp3 = readAudio (exportDir.getChildFile ("Song.mp3"));
+        std::cout << "  (MP3 " << seconds (mp3) << " s, " << exportDir.getChildFile ("Song.mp3").getSize() / 1024 << " KB)\n";
+        check (std::abs (seconds (mp3) - seconds (mix)) < 0.5 && peakIn (mp3, 4.2, 11.8) > 0.01f,
+               "MP3 exports (with LAME)");
+
+        // Cancel: nothing is left behind, and the song still plays.
+        settings.format = ExportFormat::wav;
+        settings.destination = exportDir.getChildFile ("Cancelled.wav");
+        bool cancelled = false;
+        check (exporter.start (settings, [&] (const ExportResult& r) { cancelled = r.cancelled; }).wasOk(), "(start)");
+        exporter.cancel();
+
+        for (int i = 0; i < 200 && exporter.isRunning(); ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        check (cancelled && ! settings.destination.exists() && ! exporter.isRunning(), "cancel stops the export and leaves no file");
+        engine.togglePlay();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        check (engine.getTransportState().playing, "the song still plays after exporting");
+        engine.togglePlay();
+    }
+
+    if (runs ("main") && testPlugins.getChildFile ("Good").isDirectory())
     {
         std::cout << "Third-party plug-ins\n";
         auto pluginSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Plugins"));
@@ -1848,7 +2087,7 @@ int main (int argc, char* argv[])
                    "the missing plug-in's automation survives saving again");
         }
     }
-    else
+    else if (runs ("main"))
     {
         std::cout << "(Third-party plug-in checks skipped: build with -DIKAROS_BUILD_TEST_PLUGINS=ON)\n";
     }

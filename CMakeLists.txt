@@ -89,6 +89,10 @@ endif()
 
 add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
 
+# LAME's MP3 encoder (libmp3lame 3.100, LGPL), kept in the repo since LAME
+# has no official git repository; see external/lame/README.ikaros.
+add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_ALL)
+
 # Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
 # Units on macOS. JUCE ships everything needed to host them.
 if(APPLE)
@@ -158,7 +162,9 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/PackStore.h          src/engine/PackStore.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
-    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp)
+    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp
+    src/engine/SongExporter.h       src/engine/SongExporter.cpp
+    src/engine/Mp3Format.h          src/engine/Mp3Format.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -190,6 +196,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
+    src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -262,6 +269,7 @@ target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
         miniz
+        mp3lame
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
@@ -366,6 +374,7 @@ if(IKAROS_BUILD_TESTS)
 
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
+        JUCE_USE_MP3AUDIOFORMAT=1           # to read exported MP3s back
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
@@ -374,6 +383,7 @@ if(IKAROS_BUILD_TESTS)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
         miniz
+        mp3lame
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
@@ -395,7 +405,12 @@ if(IKAROS_BUILD_TESTS)
     ikaros_copy_sounds(IkarosEngineSmokeTest)
 
     # The test scans the test plug-ins when they've been built.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins")
+    # One test per section (see main() in the test), so `ctest -L export`
+    # runs just that section.
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export)
+    add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
+    set_tests_properties(EngineSmokeTest PROPERTIES LABELS "engine")
+    set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

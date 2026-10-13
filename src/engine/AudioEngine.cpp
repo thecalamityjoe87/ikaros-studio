@@ -5,6 +5,7 @@
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
+#include "engine/SongExporter.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
@@ -655,6 +656,7 @@ AudioEngine::AudioEngine (const juce::String& settingsName)
     preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
+    exporter = std::make_unique<SongExporter> (*this);
     newSession();
 }
 
@@ -662,6 +664,8 @@ AudioEngine::~AudioEngine()
 {
     // Order matters: stop playback and drop anything that references the Edit
     // before the Edit itself goes away, and the Edit before the Engine.
+    exporter.reset();   // stops a running export
+
     if (impl->edit != nullptr)
         impl->edit->getTransport().stop (false, true);
 
@@ -897,6 +901,8 @@ bool AudioEngine::openSession (const juce::File& file)
 void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
                             const juce::File& bundle, const juce::File& legacySessionFile)
 {
+    exporter->cancelAndWait();   // it renders the old Edit
+
     if (impl->edit != nullptr)
     {
         impl->edit->getTransport().stop (false, true);

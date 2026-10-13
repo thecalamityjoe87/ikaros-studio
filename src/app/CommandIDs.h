@@ -68,6 +68,9 @@ namespace CommandIDs
         toggleFullScreen,
         moreSounds,
         about,
+
+        exportSong,
+        exportStems,
     };
 }
 

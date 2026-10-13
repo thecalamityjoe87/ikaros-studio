@@ -33,7 +33,12 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::closeSession);
         m.addSeparator();
         add (CommandIDs::audioSettings);
-        // TODO(milestone-4): Export / Share submenu.
+        m.addSeparator();
+
+        juce::PopupMenu exportMenu;
+        exportMenu.addCommandItem (&commands, CommandIDs::exportSong);
+        exportMenu.addCommandItem (&commands, CommandIDs::exportStems);
+        m.addSubMenu ("Export", exportMenu);
 
        #if ! JUCE_MAC   // macOS puts Quit in the app menu automatically
         m.addSeparator();

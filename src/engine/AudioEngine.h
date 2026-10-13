@@ -20,6 +20,7 @@ class SoundLibrary;
 class PluginLibrary;
 class PackStore;
 class AudioPreview;
+class SongExporter;
 
 //==============================================================================
 /** What the engine hands the UI when a third-party plug-in's window should
@@ -189,8 +190,7 @@ public:
 
     /** Renders part of the session offline (not through the speakers) and
         returns its loudest sample, 0..1. The smoke test uses it to check
-        that instruments really play; an Export command can build on the
-        same rendering later. */
+        that instruments really play (exporting is getExporter()'s job). */
     float renderPeak (double startBeat, double endBeat);
 
     //==============================================================================
@@ -223,6 +223,9 @@ public:
     /** Plays library files on their own, for previewing. */
     AudioPreview& getPreview() noexcept         { return *preview; }
 
+    /** Renders the song (or one file per track) to WAV/FLAC/OGG. */
+    SongExporter& getExporter() noexcept        { return *exporter; }
+
     /** Sets how plug-in windows are framed (see PluginWindowRequest). Without
         one, plug-in windows don't open. */
     void setPluginWindowFactory (PluginWindowFactory);
@@ -243,6 +246,7 @@ private:
     friend class SendBuses;
     friend class AutomationEditor;
     friend class PluginLibrary;
+    friend class SongExporter;
 
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
@@ -275,6 +279,7 @@ private:
     std::unique_ptr<PluginLibrary> plugins;
     std::unique_ptr<AudioPreview> preview;
     std::unique_ptr<TrackController> trackController;
+    std::unique_ptr<SongExporter> exporter;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

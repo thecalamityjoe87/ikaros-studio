@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/library/MoreSoundsDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
@@ -123,7 +124,7 @@ void MainComponent::resized()
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
              || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
-             || dynamic_cast<AboutDialog*> (child) != nullptr)
+             || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -320,6 +321,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
                                    CommandIDs::saveSessionAs, CommandIDs::closeSession, CommandIDs::audioSettings,
+                                   CommandIDs::exportSong, CommandIDs::exportStems,
                                    CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
@@ -374,6 +376,16 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case CommandIDs::audioSettings:
             info.setInfo ("Audio & MIDI Settings...", "Choose audio and MIDI devices", "File", 0);
             info.addDefaultKeypress (',', cmd);
+            break;
+        case CommandIDs::exportSong:
+            info.setInfo ("Export Song...", "Save the song as a WAV, FLAC or OGG file", "File", 0);
+            info.addDefaultKeypress ('e', cmd);
+            info.setActive (engine.getExporter().getSongEndBeats() > 0.0);
+            break;
+        case CommandIDs::exportStems:
+            info.setInfo ("Export Stems...", "Save each track as its own audio file", "File", 0);
+            info.addDefaultKeypress ('e', cmd | shift);
+            info.setActive (engine.getExporter().getSongEndBeats() > 0.0);
             break;
 
         case CommandIDs::undo:
@@ -610,7 +622,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 {
     // Nothing happens while a save is being written (see SavingOverlay); a
     // change then wouldn't be in the file, yet would look saved.
-    if (saving)
+    if (saving || engine.getExporter().isRunning())
         return true;
 
     auto& tracks = engine.getTracks();
@@ -624,6 +636,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::saveSessionAs:   saveSessionAs(); break;
         case CommandIDs::closeSession:    closeSession(); break;
         case CommandIDs::audioSettings:   showAudioSettings(); break;
+        case CommandIDs::exportSong:      ExportDialog::show (*this, engine, false); break;
+        case CommandIDs::exportStems:     ExportDialog::show (*this, engine, true); break;
 
         case CommandIDs::undo:            engine.undo(); break;
         case CommandIDs::redo:            engine.redo(); break;
