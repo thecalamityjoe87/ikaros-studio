@@ -1,5 +1,6 @@
 #include "engine/AudioEngine.h"
 #include "engine/AudioPreview.h"
+#include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
 #include "engine/SfzPlugin.h"
@@ -9,6 +10,7 @@
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
+#include "platform/FileLock.h"
 
 #include <tracktion_engine/tracktion_engine.h>
 
@@ -245,7 +247,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         stopObservingEdit();
 
         // The working copy goes with the session. (The user has already been
-        // asked about unsaved changes; after a crash it would stay behind.)
+        // asked about unsaved changes; after a crash it would stay behind,
+        // to be offered at the next launch.)
+        autosaver.detach();
         edit = nullptr;
         deleteWorkFolder (workFolder);
     }
@@ -272,6 +276,14 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
     juce::File getAudioFolder() const     { return workFolder.getChildFile (SessionBundle::audioFolder); }
 
+    // Recovery copies, the "session is open" marker, and takes written as
+    // they're recorded (see Autosaver).
+    Autosaver autosaver;
+
+    // A session just recovered after a crash: it stays "unsaved" when the
+    // clean-slate timer below resets the changed flag.
+    bool keepUnsavedAfterSetup = false;
+
     //==============================================================================
     // Working copies live in the local data folder, one folder each.
     static juce::File getWorkRoot()
@@ -295,14 +307,20 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
             folder.deleteRecursively();
     }
 
-    // Working copies left behind by a crash. Nothing offers to recover them
-    // yet, so after two weeks untouched they're tidied away.
+    // Working copies left behind by a crash with nothing worth recovering
+    // (or from versions before recovery existed) are tidied away after two
+    // weeks untouched. Ones with work to recover wait to be offered, and ones
+    // open in another copy of the app are left alone.
     static void deleteStaleWorkFolders()
     {
         const auto cutoff = juce::Time::getCurrentTime() - juce::RelativeTime::days (14);
 
         for (auto& folder : getWorkRoot().findChildFiles (juce::File::findDirectories, false))
         {
+            if (platform::FileLock::isHeld (folder.getChildFile (SessionRecovery::lockFile))
+                 || SessionRecovery::hasWorkToRecover (folder))
+                continue;
+
             auto session = folder.getChildFile (SessionBundle::sessionEntry);
             auto lastUsed = (session.existsAsFile() ? session : folder).getLastModificationTime();
 
@@ -656,6 +674,9 @@ private:
             edit->resetChangedStatus();
             addPending ({});   // nothing to re-read, but Undo is no longer available
         }
+
+        if (edit != nullptr && std::exchange (keepUnsavedAfterSetup, false))
+            edit->markAsChanged();
     }
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override
@@ -958,6 +979,9 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     // (meter taps, held notes) *before* the old Edit is destroyed.
     trackController->sessionChanged();
 
+    // The old session's recovery files go (its working copy is about to).
+    impl->autosaver.detach();
+
     // Set before creating the Edit: it finds its audio files from here while loading.
     const auto oldWorkFolder = impl->workFolder;
     impl->workFolder = workFolder;
@@ -967,6 +991,16 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->untitled = bundle == juce::File();
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
     prepareRegions (*impl->edit);
+    impl->keepUnsavedAfterSetup = false;
+
+    impl->autosaver.attach (*impl->edit, workFolder, [this]
+    {
+        SessionRecovery::Info info;
+        info.name = getSessionName();
+        info.bundle = impl->untitled ? juce::File() : impl->bundleFile;
+        info.legacySession = impl->legacySessionFile;
+        return info;
+    });
 
     // ...so the old session's working copy isn't needed any more.
     if (oldWorkFolder != workFolder)
@@ -1229,6 +1263,7 @@ bool AudioEngine::finishSave (SaveJob& job)
     impl->legacySessionFile = juce::File();   // its audio has all been copied in now
     impl->addToRecentSessions (job.bundle);
     impl->edit->resetChangedStatus();
+    impl->autosaver.sessionSaved();   // the saved session has it all now
     notifyModelChanged();
     return true;
 }
@@ -1261,6 +1296,196 @@ juce::String AudioEngine::getSessionName() const
     return "Untitled Session";
 }
 
+//==============================================================================
+// Crash recovery
+
+std::vector<RecoverableSession> AudioEngine::findRecoverableSessions()
+{
+    std::vector<RecoverableSession> found;
+
+    for (auto& folder : SessionRecovery::findCrashedWorkFolders (Impl::getWorkRoot()))
+    {
+        if (folder == impl->workFolder)
+            continue;   // (can't happen: ours is locked. Just in case.)
+
+        auto info = SessionRecovery::readInfo (folder);
+
+        if (! info.has_value() || ! SessionRecovery::hasWorkToRecover (folder))
+        {
+            Impl::deleteWorkFolder (folder);   // nothing unsaved: nothing to offer
+            continue;
+        }
+
+        found.push_back ({ info->name.isNotEmpty() ? info->name : juce::String ("Untitled Session"),
+                           SessionRecovery::getLastWriteTime (folder, *info),
+                           info->bundle == juce::File(),
+                           folder });
+    }
+
+    std::sort (found.begin(), found.end(), [] (auto& a, auto& b) { return a.savedAt > b.savedAt; });
+    return found;
+}
+
+// Puts a take that a crash cut short back on its track: audio from the file
+// Tracktion was recording into (repaired first), MIDI from the notes written
+// as they were played. Not an undo step: it's part of the recovered session.
+static bool restoreTake (te::Edit& edit, const SessionRecovery::Take& take, const juce::File& workFolder)
+{
+    using namespace detail;   // findTrack, beatToTime, timeToBeat (TrackHelpers.h)
+
+    auto* track = findTrack (&edit, take.track);
+    auto file = workFolder.getChildFile (take.path);
+
+    if (track == nullptr || ! file.existsAsFile())
+        return false;
+
+    const auto start = beatToTime (edit, take.startBeats);
+
+    if (! take.midi)
+    {
+        SessionRecovery::repairWavFile (file);
+        const auto seconds = te::AudioFile (edit.engine, file).getLength();
+
+        if (seconds <= 0.0)
+            return false;
+
+        return track->insertWaveClip ("Recovered Take", file, { { start, start + te::TimeDuration::fromSeconds (seconds) }, {} }, false) != nullptr;
+    }
+
+    // Pair each note-on with its note-off. Times are seconds on the timeline.
+    struct Played { int pitch, velocity; double start, end; };
+    std::vector<Played> notes;
+    std::map<int, size_t> sounding;   // channel/pitch -> index in notes
+    double lastTime = start.inSeconds();
+
+    for (auto& m : SessionRecovery::readJournal (file))
+    {
+        const auto t = m.getTimeStamp();
+        const int key = m.getChannel() * 128 + m.getNoteNumber();
+        lastTime = juce::jmax (lastTime, t);
+
+        if (m.isNoteOn())
+        {
+            if (auto it = sounding.find (key); it != sounding.end())
+                notes[it->second].end = t;   // played again before it was let go
+
+            sounding[key] = notes.size();
+            notes.push_back ({ m.getNoteNumber(), m.getVelocity(), t, t });
+        }
+        else if (m.isNoteOff())
+        {
+            if (auto it = sounding.find (key); it != sounding.end())
+            {
+                notes[it->second].end = t;
+                sounding.erase (it);
+            }
+        }
+    }
+
+    // Notes still held when the crash came end with the last thing played.
+    for (auto& [key, index] : sounding)
+        notes[index].end = lastTime;
+
+    if (notes.empty())
+        return false;
+
+    double startBeat = take.startBeats, endBeat = take.startBeats + 1.0;
+
+    for (auto& n : notes)
+    {
+        startBeat = juce::jmin (startBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.start)));
+        endBeat = juce::jmax (endBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.end)));
+    }
+
+    endBeat = std::ceil (endBeat);
+    auto clip = track->insertMIDIClip ("Recovered Take", { beatToTime (edit, startBeat), beatToTime (edit, endBeat) }, nullptr);
+
+    if (clip == nullptr)
+        return false;
+
+    for (auto& n : notes)
+    {
+        const auto noteStart = timeToBeat (edit, te::TimePosition::fromSeconds (n.start));
+        const auto length = juce::jmax (1.0 / 64.0, timeToBeat (edit, te::TimePosition::fromSeconds (n.end)) - noteStart);
+        clip->getSequence().addNote (n.pitch, te::BeatPosition::fromBeats (noteStart - startBeat),
+                                     te::BeatDuration::fromBeats (length), n.velocity, 0, nullptr);
+    }
+
+    return true;
+}
+
+bool AudioEngine::recoverSession (const RecoverableSession& session)
+{
+    const auto folder = session.folder;
+
+    // Only crashed working copies: never one another copy of the app has open.
+    if (! folder.isAChildOf (Impl::getWorkRoot())
+         || platform::FileLock::isHeld (folder.getChildFile (SessionRecovery::lockFile)))
+        return false;
+
+    auto info = SessionRecovery::readInfo (folder);
+
+    if (! info.has_value())
+        return false;
+
+    // The autosave; without one, the session as it was opened (and takes go back into that).
+    auto autosave = folder.getChildFile (SessionRecovery::autosaveFile);
+    auto file = autosave.existsAsFile() ? autosave : folder.getChildFile (SessionBundle::sessionEntry);
+    auto state = te::loadEditFromFile (impl->engine, file, te::ProjectItemID());
+
+    if (! state.isValid() && removeInvalidAttributes (file))
+        state = te::loadEditFromFile (impl->engine, file, te::ProjectItemID());
+
+    if (! state.isValid())
+        return false;
+
+    const auto autosaveId = state[SessionRecovery::autosaveIdProperty].toString();
+    state.removeProperty (SessionRecovery::autosaveIdProperty, nullptr);
+    pointInstrumentsAtLocalFiles (state, *sounds);
+
+    // The crashed session's working copy (with its recordings) becomes this
+    // session's; the current one's is deleted.
+    loadEdit (state, folder, info->bundle, info->legacySession);
+
+    // Takes recorded after the autosave aren't in it yet.
+    for (auto& take : info->takes)
+        if (take.recordedAfter == autosaveId || ! autosave.existsAsFile())
+            restoreTake (*impl->edit, take, folder);
+
+    prepareRegions (*impl->edit);
+
+    auto tracks = trackController->getTracks();
+    trackController->setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
+
+    // Unsaved: the user decides whether this becomes their saved session.
+    impl->startFromCleanSlateSoon();
+    impl->keepUnsavedAfterSetup = true;
+    impl->edit->markAsChanged();
+
+    // A fresh recovery copy with the takes in it (this also replaces the old
+    // Recovery.json, takes and all).
+    impl->autosaver.autosaveNow();
+
+    notifyModelChanged();
+    return true;
+}
+
+void AudioEngine::discardRecoverableSession (const RecoverableSession& session)
+{
+    if (! platform::FileLock::isHeld (session.folder.getChildFile (SessionRecovery::lockFile)))
+        Impl::deleteWorkFolder (session.folder);
+}
+
+void AudioEngine::autosaveNow()                 { impl->autosaver.autosaveNow(); }
+void AudioEngine::waitForAutosave()             { impl->autosaver.waitUntilWritten(); }
+juce::Time AudioEngine::getLastAutosaveTime() const   { return impl->autosaver.getLastAutosaveTime(); }
+juce::File AudioEngine::getWorkingCopyFolder() const  { return impl->workFolder; }
+
+void AudioEngine::setAutosaveTiming (int quietMs, int minIntervalMs, int maxWaitMs)
+{
+    impl->autosaver.setTiming ({ quietMs, minIntervalMs, maxWaitMs });
+}
+
 bool AudioEngine::hasUnsavedChanges() const
 {
     return impl->edit != nullptr && impl->edit->hasChangedSinceSaved();
@@ -1284,7 +1509,10 @@ void AudioEngine::stop()
     const bool wasRecording = transport.isRecording();
 
     if (wasRecording)
+    {
+        impl->autosaver.recordingStopping();   // writes the last of the MIDI first
         beginUndoStep ("Record");   // the new region is added as one undo step
+    }
 
     transport.stop (false, false);   // false = keep the recording
 
@@ -1313,6 +1541,7 @@ void AudioEngine::toggleRecord()
     // With the count-in on, Tracktion starts playback a bar early and clicks
     // through that bar (even with the metronome off); the take itself starts here.
     impl->recordStartBeats = impl->edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
+    impl->autosaver.recordingStarting (impl->recordStartBeats);   // so a crash mid-take keeps the take
     transport.record (false);
 }
 

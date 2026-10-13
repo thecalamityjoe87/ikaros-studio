@@ -2,6 +2,7 @@
 
 #include "engine/EngineTypes.h"
 #include "engine/SessionBundle.h"
+#include "engine/SessionRecovery.h"
 #include <juce_events/juce_events.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
@@ -142,6 +143,35 @@ public:
     juce::File getSessionFile() const;
     juce::String getSessionName() const;
     bool hasUnsavedChanges() const;
+
+    //==============================================================================
+    // Crash recovery (see Autosaver and SessionRecovery). A few seconds after
+    // changes stop (at most once a minute), a recovery copy of the session is
+    // written into its working copy; the user's saved file is only ever
+    // written by Save. Takes go to disk as they're recorded.
+
+    /** Sessions that were open when the app crashed and have unsaved work,
+        newest first. Crashed ones with nothing unsaved are tidied away.
+        Sessions open in another copy of the app are never listed. */
+    std::vector<RecoverableSession> findRecoverableSessions();
+
+    /** Replaces the current session with a crashed one, as it was at its
+        last autosave, with any take that was being recorded back on its
+        track. It's marked as having unsaved changes. Returns false (and keeps
+        the current session) if it can't be read. */
+    bool recoverSession (const RecoverableSession&);
+
+    /** Deletes a crashed session's unsaved work for good. */
+    void discardRecoverableSession (const RecoverableSession&);
+
+    /** For tests: write the recovery copy now / change when it's written /
+        wait until it's on disk / see when it was last written, and where the
+        session's working copy is. */
+    void autosaveNow();
+    void setAutosaveTiming (int quietMs, int minIntervalMs, int maxWaitMs);
+    void waitForAutosave();
+    juce::Time getLastAutosaveTime() const;
+    juce::File getWorkingCopyFolder() const;
 
     //==============================================================================
     // Transport

@@ -158,6 +158,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
+    src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
+    src/engine/Autosaver.h          src/engine/Autosaver.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PackStore.h          src/engine/PackStore.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
@@ -170,7 +172,8 @@ set(IKAROS_ENGINE_SOURCES
 set(IKAROS_PLATFORM_SOURCES
     src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
     src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
-    src/platform/AppFolders.h          src/platform/AppFolders.cpp)
+    src/platform/AppFolders.h          src/platform/AppFolders.cpp
+    src/platform/FileLock.h            src/platform/FileLock.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -197,6 +200,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
     src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
+    src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -361,6 +365,7 @@ if(IKAROS_BUILD_TESTS)
     target_sources(IkarosEngineSmokeTest PRIVATE
         tests/EngineSmokeTest.cpp
         src/platform/AppFolders.cpp      # the engine keeps open sessions there
+        src/platform/FileLock.cpp        # and marks them as open with a lock
         ${IKAROS_ENGINE_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
@@ -407,12 +412,14 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
+    add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
     set_tests_properties(EngineSmokeTest PROPERTIES LABELS "engine")
     set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
     set_tests_properties(EngineSmokeTest.Undo PROPERTIES LABELS "undo")
+    set_tests_properties(EngineSmokeTest.Recovery PROPERTIES LABELS "recovery")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

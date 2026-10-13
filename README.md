@@ -6,6 +6,8 @@ Early development. You can make instrument and audio tracks, record from a MIDI 
 
 A saved session is a single `.iksession` file, like a GarageBand project: it holds the session and every recording, loop and audio file it uses, so you can move it, back it up or send it to someone on Linux, Windows or macOS. Instruments from sound packs aren't copied into it; the session finds them by pack on whichever computer opens it. Sessions saved as folders by earlier versions still open, and saving one writes a `.iksession` next to its folder.
 
+While you work, the app keeps its own recovery copy of the session a few seconds after you stop making changes, and recordings go to disk as you play. Your saved file only changes when you save. If the app crashes, it offers to bring back your unsaved work the next time it starts, including a take that was cut short.
+
 ## Sounds and plug-ins
 
 The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`.

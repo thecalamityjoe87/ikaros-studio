@@ -8,6 +8,8 @@
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
+#include "engine/SessionRecovery.h"
+#include "platform/AppFolders.h"
 #include "engine/SongExporter.h"
 #include "ui/state/Selection.h"                    // plain logic, no components
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
@@ -196,6 +198,112 @@ static void checkSaveAndReopen (AudioEngine& engine, const juce::File& file)
     checkSameState (saved, engine.getStateSnapshot(), "the reopened session is the same");
 }
 
+//==============================================================================
+// Crash recovery helpers
+
+// A WAV file as a crash leaves it: the audio is there, but the header still
+// says it holds none (the sizes are only filled in when recording stops),
+// and the last sample frame is half written. Returns the whole frames in it.
+static int writeCutOffWav (const juce::File& f, double seconds)
+{
+    f.deleteFile();
+    const int frames = (int) (seconds * 44100.0);
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+
+        // Like Tracktion's takes: a "bext" chunk (the recording's start time) before the audio.
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                    .withNumChannels (1)
+                                                                                    .withBitsPerSample (16)
+                                                                                    .withMetadata (juce::WavAudioFormat::bwavTimeReference, "0"));
+        juce::AudioBuffer<float> buffer (1, frames);
+
+        for (int i = 0; i < frames; ++i)
+            buffer.setSample (0, i, 0.5f * std::sin ((float) i * 0.05f));
+
+        if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (buffer, 0, frames))
+            return 0;
+    }
+
+    // Find the "data" chunk and zero its size and the file's.
+    juce::MemoryBlock data;
+    f.loadFileAsData (data);
+    auto* bytes = static_cast<char*> (data.getData());
+
+    for (size_t i = 12; i + 8 <= data.getSize(); ++i)
+    {
+        if (std::memcmp (bytes + i, "data", 4) == 0)
+        {
+            std::memset (bytes + 4, 0, 4);
+            std::memset (bytes + i + 4, 0, 4);
+            break;
+        }
+    }
+
+    data.append ("\x01", 1);   // half of the next 16-bit sample
+    return f.replaceWithData (data.getData(), data.getSize()) ? frames : 0;
+}
+
+static juce::int64 lengthOfWav (const juce::File& f)
+{
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (f.createInputStream().release(), true));
+    return reader != nullptr ? reader->lengthInSamples : -1;
+}
+
+// The child process the recovery test kills: it saves a session, makes more
+// changes, waits for the autosave, then records MIDI and says so on stdout.
+// Then it waits to be killed, mid-take.
+static int runRecoveryChild (const juce::File& bundle)
+{
+    AudioEngine engine { testSettings + "Child" };   // settings of its own: it runs beside the test
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+
+    engine.saveSessionAs (bundle);
+
+    // Work the saved session doesn't have.
+    auto a1 = tracks.addAudioTrack();
+    auto t2 = tracks.addInstrumentTrack();
+    engine.beginUndoStep ("Rename");
+    tracks.renameTrack (t2, "After Save");
+    tracks.regions().createChordRegion (t2, 16.0);   // bars 5 to 8
+
+    // The autosave, on a short schedule (normally a few seconds after the
+    // last change).
+    engine.setAutosaveTiming (200, 0, 2000);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (1500);
+
+    if (engine.getLastAutosaveTime() == juce::Time())
+        std::cout << "CHILD: no autosave" << std::endl;
+
+    // A MIDI take from the start; the last note is still held when it dies.
+    // (No count-in: notes played during it aren't part of the take.)
+    tracks.setSelectedTrack (t2);
+    engine.setCountInEnabled (false);
+    engine.goToStart();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (500);
+    engine.toggleRecord();
+
+    for (int note : { 60, 64, 67 })
+    {
+        tracks.inputs().noteOn (note, 0.8f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+        tracks.inputs().noteOff (note);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+    }
+
+    tracks.inputs().noteOn (72, 0.8f);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (600);   // long enough for the notes to reach the disk
+
+    // std::endl flushes, so the test sees the line straight away.
+    std::cout << "RECORDING " << (engine.getTransportState().recording ? 1 : 0) << " " << (juce::int64) a1 << std::endl;
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (120000);   // killed long before this
+    return 0;
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -213,6 +321,11 @@ int main (int argc, char* argv[])
         juce::MessageManager::getInstance()->runDispatchLoop();
         return 0;
     }
+
+    // The recovery test's crashing child (it shares the test's folders, set below).
+    for (auto& arg : args)
+        if (arg.startsWith ("--recovery-child="))
+            return runRecoveryChild (juce::File (arg.fromFirstOccurrenceOf ("=", false, false)));
 
     // Start from fresh settings, so earlier runs (e.g. remembered plug-in
     // scans) don't change the results. Tracktion keeps them in the user's
@@ -251,10 +364,15 @@ int main (int argc, char* argv[])
     // Never read or change the user's own sound packs: the library's user
     // Sounds folder is one of the test's (see SoundLibrary::getUserSoundsFolder).
     const auto userSounds = dir.getChildFile ("User Sounds").getFullPathName();
+    // Nor the app's open sessions: on Linux, working copies (and crash
+    // recovery) go in a local data folder of the test's (see
+    // platform::getLocalDataFolder).
    #if JUCE_WINDOWS
     _putenv_s ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8());
    #else
+    const auto localData = dir.getChildFile ("Local Data").getFullPathName();
     setenv ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8(), 1);
+    setenv ("XDG_DATA_HOME", localData.toRawUTF8(), 1);
    #endif
     auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke.iksession
 
@@ -2514,6 +2632,227 @@ int main (int argc, char* argv[])
             check (selection.getRegions() == std::vector<RegionId> { r1 } && selection.getRegion() == r1,
                    "undoing Add Region drops just that region from the selection");
         }
+    }
+
+    if (runs ("recovery"))
+    {
+        std::cout << "Atomic saves\n";
+        {
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+
+            auto saveDir = dir.getChildFile ("Atomic");
+            auto bundle = AudioEngine::getSessionFileFor (saveDir.getChildFile ("Kept"));
+            check (engine.saveSessionAs (bundle), "(save)");
+            check (engine.saveSession(), "(save again, over the first)");
+            check (saveDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1,
+                   "saving leaves no temporary files behind");
+
+            juce::MemoryBlock before, after;
+            bundle.loadFileAsData (before);
+
+            // A save that fails halfway (a file it should hold has vanished).
+            std::vector<SessionBundle::Entry> entries { { SessionBundle::sessionEntry, engine.getWorkingCopyFolder().getChildFile (SessionBundle::sessionEntry), true },
+                                                        { "Audio/Gone.wav", saveDir.getChildFile ("Gone.wav"), false } };
+            check (SessionBundle::pack (bundle, entries, {}).failed(), "(a save that fails partway)");
+            bundle.loadFileAsData (after);
+            check (before == after, "a failed save leaves the saved session exactly as it was");
+            check (saveDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1, "and leaves no half-written file");
+
+            std::cout << "Autosave\n";
+            engine.newSession();
+            engine.setAutosaveTiming (400, 1500, 5000);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (3500);
+            const auto work = engine.getWorkingCopyFolder();
+            const auto autosave = work.getChildFile (SessionRecovery::autosaveFile);
+            check (work.getChildFile (SessionRecovery::lockFile).existsAsFile(), "an open session's working copy is marked as open");
+            check (! autosave.exists(), "a session with no changes isn't autosaved");
+
+            auto& tracks = engine.getTracks();
+            auto t = tracks.addInstrumentTrack();
+            engine.beginUndoStep ("Rename");
+            tracks.renameTrack (t, "Autosaved Track");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+            check (! autosave.exists(), "no autosave while changes are still coming");
+            const auto undoName = engine.getUndoDescription();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+            engine.waitForAutosave();
+            check (autosave.loadFileAsString().contains ("Autosaved Track"), "a moment after changes stop, the recovery copy is written");
+            check (engine.getUndoDescription() == undoName && undoName.isNotEmpty() && ! engine.canRedo(), "autosaving doesn't touch undo");
+            check (engine.hasUnsavedChanges(), "the session still has unsaved changes");
+
+            engine.beginUndoStep ("Rename");
+            tracks.renameTrack (t, "Second Name");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+            engine.waitForAutosave();
+            check (! autosave.loadFileAsString().contains ("Second Name"), "not autosaved again until the interval has passed");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
+            engine.waitForAutosave();
+            check (autosave.loadFileAsString().contains ("Second Name"), "then autosaved again");
+
+            check (engine.saveSessionAs (saveDir.getChildFile ("Autosaved")), "(save)");
+            check (! autosave.exists(), "saving removes the recovery copy");
+            check (engine.findRecoverableSessions().empty(), "sessions open in this copy of the app aren't offered");
+        }
+
+        std::cout << "Cut-off recordings\n";
+        {
+            auto wavFile = dir.getChildFile ("CutOff.wav");
+            const int frames = writeCutOffWav (wavFile, 1.0);
+            check (frames > 0 && lengthOfWav (wavFile) <= 0, "(a WAV cut off mid-recording reads as empty)");
+            check (SessionRecovery::repairWavFile (wavFile), "it can be repaired");
+            check (lengthOfWav (wavFile) == frames, "and then holds every whole sample frame");
+
+            juce::MemoryBlock good, again;
+            wavFile.loadFileAsData (good);
+            SessionRecovery::repairWavFile (wavFile);
+            wavFile.loadFileAsData (again);
+            check (good == again, "a WAV that's fine is left alone");
+
+            juce::Array<juce::MidiMessage> played { juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100).withTimeStamp (1.25),
+                                                    juce::MidiMessage::noteOff (1, 60).withTimeStamp (1.5) };
+            auto journal = dir.getChildFile ("Take.txt");
+            journal.replaceWithText (SessionRecovery::toJournalLines (played) + "2.0 90 4");   // cut off mid-line
+            auto readBack = SessionRecovery::readJournal (journal);
+            check (readBack.size() == 2 && readBack[0].isNoteOn() && readBack[0].getNoteNumber() == 60
+                     && std::abs (readBack[0].getTimeStamp() - 1.25) < 1e-6 && readBack[1].isNoteOff(),
+                   "MIDI written as it's played reads back, without a line cut off by the crash");
+        }
+
+        std::cout << "Crash recovery\n";
+        {
+            auto bundle = AudioEngine::getSessionFileFor (dir.getChildFile ("Crashy"));
+            juce::ChildProcess child;
+            const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+            check (child.start (juce::StringArray { exe, "--recovery-child=" + bundle.getFullPathName() }),
+                   "(started a copy of the app to crash)");
+
+            // Wait for it to be mid-take. readProcessOutput blocks until it has
+            // filled the buffer (or the process ends), so it reads a byte at a time.
+            juce::String output;
+            const auto giveUp = juce::Time::getMillisecondCounter() + 60000;
+            char buffer[1];
+
+            while (! output.contains ("RECORDING") && child.isRunning() && juce::Time::getMillisecondCounter() < giveUp)
+                if (auto n = child.readProcessOutput (buffer, sizeof (buffer)); n > 0)
+                    output += juce::String::fromUTF8 (buffer, n);
+
+            // Read up to the end of the line (the audio track's ID).
+            while (output.contains ("RECORDING") && ! output.fromFirstOccurrenceOf ("RECORDING", false, false).containsChar ('\n') && child.isRunning())
+                if (auto n = child.readProcessOutput (buffer, sizeof (buffer)); n > 0)
+                    output += juce::String::fromUTF8 (buffer, n);
+
+            const auto status = juce::StringArray::fromTokens (output.fromFirstOccurrenceOf ("RECORDING", false, false).upToFirstOccurrenceOf ("\n", false, false).trim(), " ", {});
+            check (status.size() == 2 && status[0] == "1" && ! output.contains ("no autosave"),
+                   "(the other copy autosaved, and is recording)");
+            if (status.size() != 2)
+                std::cout << "         the other copy said:\n" << output.getLastCharacters (1500) << "\n";
+
+            const auto audioTrack = (TrackId) status[1].getLargeIntValue();
+
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            check (engine.findRecoverableSessions().empty(), "a session open in another copy of the app isn't offered");
+
+            child.kill();   // SIGKILL: no chance to tidy up, like a crash
+
+            for (int i = 0; i < 100 && child.isRunning(); ++i)
+                juce::Thread::sleep (50);
+
+
+            auto found = engine.findRecoverableSessions();
+            check (found.size() == 1, "after the crash, its session is offered");
+
+            if (found.size() == 1)
+            {
+                const auto session = found.front();
+                const auto age = juce::Time::getCurrentTime() - session.savedAt;
+                check (session.name == "Crashy" && ! session.untitled, "with its name");
+                check (age.inSeconds() >= 0 && age.inSeconds() < 120, "and when its work was autosaved");
+
+                const auto saved = SessionBundle::readEntry (bundle, SessionBundle::sessionEntry).toString();
+                check (saved.contains ("TRACK") && ! saved.contains ("After Save"), "autosaving never wrote to the saved session");
+
+                // An audio take cut off by the crash too. (The test can't record
+                // audio, so this is what Tracktion would have left: a WAV in the
+                // Audio folder, noted in Recovery.json.)
+                auto info = SessionRecovery::readInfo (session.folder);
+                check (info.has_value() && info->takes.size() == 1 && info->takes[0].midi, "the MIDI take was noted as it started");
+
+                if (info.has_value() && ! info->takes.empty())
+                {
+                    auto audioTake = info->takes[0];
+                    audioTake.midi = false;
+                    audioTake.track = audioTrack;
+                    audioTake.path = "Audio/Cut Off Take.wav";
+                    writeCutOffWav (session.folder.getChildFile (audioTake.path), 2.0);
+                    info->takes.push_back (audioTake);
+                    SessionRecovery::writeInfo (session.folder, *info);
+                }
+
+                check (engine.recoverSession (session), "Recover opens it");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (3500);   // past the clean-slate reset
+
+                auto& tracks = engine.getTracks();
+                check (engine.getSessionName() == "Crashy" && ! engine.isUntitled(), "as the saved session it was");
+                check (engine.hasUnsavedChanges(), "marked as unsaved");
+
+                std::optional<TrackInfo> afterSave;
+
+                for (auto& t : tracks.getTracks())
+                    if (t.name == "After Save")
+                        afterSave = t;
+
+                check (afterSave.has_value(), "with the changes made after saving");
+
+                if (afterSave.has_value())
+                {
+                    auto regions = tracks.regions().getRegions (afterSave->id);
+                    check (regions.size() == 2, "the chord region, and the take cut short");
+
+                    if (regions.size() != 2)
+                        for (auto& r : regions)
+                            std::cout << "         region at " << r.startBeat << ", " << r.notes.size() << " notes\n";
+
+                    if (regions.size() == 2)
+                    {
+                        const auto& take = regions[0].startBeat < regions[1].startBeat ? regions[0] : regions[1];
+                        check (take.notes.size() == 4, "the take holds the notes played before the crash (the held one too)");
+                        check (take.startBeat < 0.5 && take.lengthBeats < 16.0, "where it was recorded");
+                    }
+                }
+
+                auto audioRegions = tracks.regions().getRegions (audioTrack);
+                check (audioRegions.size() == 1 && audioRegions[0].lengthBeats > 3.0, "a cut-off audio take goes back on its track too");
+                check (engine.getWorkingCopyFolder() == session.folder, "the recordings stay in its working copy");
+                check (engine.findRecoverableSessions().empty(), "a recovered session isn't offered again");
+
+                // Discard: a crashed copy of it, then one with nothing unsaved.
+                engine.waitForAutosave();
+                auto copy = session.folder.getSiblingFile ("Discard Me");
+                session.folder.copyDirectoryTo (copy);
+                auto offered = engine.findRecoverableSessions();
+                check (offered.size() == 1 && offered[0].folder == copy, "(another crashed session)");
+
+                if (! offered.empty())
+                    engine.discardRecoverableSession (offered[0]);
+
+                check (! copy.exists(), "Discard deletes it");
+
+                auto empty = session.folder.getSiblingFile ("Nothing Unsaved");
+                empty.createDirectory();
+                empty.getChildFile (SessionRecovery::lockFile).create();
+                SessionRecovery::writeInfo (empty, { "Nothing", {}, {}, {} });
+                check (engine.findRecoverableSessions().empty() && ! empty.exists(),
+                       "a crashed session with nothing unsaved isn't offered, and is tidied away");
+            }
+        }
+
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile (testSettings + "Child").deleteRecursively();
+
+        // Closing a session leaves nothing behind to recover.
+        auto openSessions = platform::getLocalDataFolder().getChildFile ("Open Sessions");
+        check (openSessions.getNumberOfChildFiles (juce::File::findDirectories) == 0, "closed sessions leave no working copies");
     }
 
     dir.deleteRecursively();

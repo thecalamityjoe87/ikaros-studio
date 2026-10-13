@@ -3,6 +3,7 @@
 #include "ui/dialogs/AboutDialog.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/dialogs/RecoveryPrompt.h"
 #include "ui/library/MoreSoundsDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
@@ -79,7 +80,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
     // Like GarageBand, start with the session chooser: recent sessions if
     // there are any, otherwise the templates. On first run, offer the
-    // starter sounds first. (Async: the window isn't on screen yet.)
+    // starter sounds first. After a crash, offer to recover the unsaved
+    // work before anything else. (Async: the window isn't on screen yet.)
     juce::MessageManager::callAsync ([safeThis = SafePointer<MainComponent> (this)]
     {
         if (safeThis == nullptr)
@@ -92,10 +94,16 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
                                                                                           : SessionChooser::Page::recent);
         };
 
-        if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
-            MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
-        else
-            showChooser();
+        RecoveryPrompt::show (*safeThis, safeThis->engine, [safeThis, showChooser] (bool recovered)
+        {
+            if (safeThis == nullptr || recovered)
+                return;   // a recovered session is open: no chooser
+
+            if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+                MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+            else
+                showChooser();
+        });
     });
 }
 
