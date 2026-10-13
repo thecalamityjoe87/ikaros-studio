@@ -1465,17 +1465,26 @@ static void syncParametersFromState (te::Edit& edit)
 
 void AudioEngine::undo()
 {
+    if (! canUndo())
+        return;
+
     trackController->automation().keepValuesWhenAutomationGoes ([this] { impl->edit->undo(); });
     syncParametersFromState (*impl->edit);
 }
 
 void AudioEngine::redo()
 {
+    if (! canRedo())
+        return;
+
     trackController->automation().keepValuesWhenAutomationGoes ([this] { impl->edit->redo(); });
     syncParametersFromState (*impl->edit);
 }
-bool AudioEngine::canUndo() const   { return impl->edit->getUndoManager().canUndo(); }
-bool AudioEngine::canRedo() const   { return impl->edit->getUndoManager().canRedo(); }
+// Undo and redo wait while recording (count-in included): the take is being
+// written into a track, and undoing that track or its regions away under it
+// could lose the take. The menus, shortcuts and toolbar all ask these.
+bool AudioEngine::canUndo() const   { return ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
+bool AudioEngine::canRedo() const   { return ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canRedo(); }
 
 juce::String AudioEngine::getUndoDescription() const { return impl->edit->getUndoManager().getUndoDescription(); }
 juce::String AudioEngine::getRedoDescription() const { return impl->edit->getUndoManager().getRedoDescription(); }

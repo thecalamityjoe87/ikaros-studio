@@ -502,6 +502,15 @@ int main (int argc, char* argv[])
             pumpMessages();
             check (engine.getTransportState().recording, "Record starts recording");
             check (tracks.inputs().getArmedTrack() == t3, "the selected track is armed for the take");
+            {
+                const auto lastStep = engine.getUndoDescription();
+                const auto numTracks = tracks.getTracks().size();
+                check (! engine.canUndo() && ! engine.canRedo(), "Undo and Redo are unavailable while recording");
+                engine.undo();
+                pumpMessages();
+                check (engine.getUndoDescription() == lastStep && tracks.getTracks().size() == numTracks,
+                       "(and do nothing if asked anyway)");
+            }
             tracks.setSelectedTrack (t2);
             check (tracks.inputs().getArmedTrack() == t3, "selecting another track mid-take doesn't move the arm");
             tracks.setSelectedTrack (t3);
@@ -523,6 +532,7 @@ int main (int argc, char* argv[])
             auto regions = tracks.regions().getRegions (t3);
             check (regions.size() == 1, "the take becomes a region");
             check (! regions.empty() && regions[0].notes.size() == 3, "the region holds the played notes");
+            check (engine.canUndo() && engine.getUndoDescription() == "Record", "after the take, Undo is back (to undo the take)");
 
             tracks.setSelectedTrack (t2);
             tracks.setSelectedTrack (t3);   // armed by selecting it this time
