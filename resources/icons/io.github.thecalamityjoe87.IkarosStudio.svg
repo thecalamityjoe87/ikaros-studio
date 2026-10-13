@@ -1,13 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- Ikaros Studio app icon: dark tile, amber wing made of rising level bars and a playhead. -->
+  <!-- Ikaros Studio: orange audio visualizer on a charcoal tile. -->
   <rect x="16" y="16" width="224" height="224" rx="52" fill="#1a1d23"/>
   <rect x="16.5" y="16.5" width="223" height="223" rx="51.5" fill="none" stroke="#2f343e" stroke-width="1"/>
   <g fill="#ffb547">
-    <rect x="62"  y="150" width="18" height="44" rx="9"/>
-    <rect x="90"  y="126" width="18" height="68" rx="9"/>
-    <rect x="118" y="100" width="18" height="94" rx="9"/>
-    <rect x="146" y="78"  width="18" height="116" rx="9"/>
-    <rect x="174" y="58"  width="18" height="136" rx="9"/>
+    <rect x="48"  y="101" width="16" height="54" rx="8"/>
+    <rect x="72"  y="61"  width="16" height="120" rx="8"/>
+    <rect x="96"  y="72"  width="16" height="102" rx="8"/>
+    <rect x="120" y="57"  width="16" height="142" rx="8"/>
+    <rect x="144" y="76"  width="16" height="104" rx="8"/>
+    <rect x="168" y="66"  width="16" height="122" rx="8"/>
+    <rect x="192" y="103" width="16" height="50" rx="8"/>
   </g>
-  <path d="M58 118 C 96 92, 140 66, 198 46" fill="none" stroke="#eef1f5" stroke-width="8" stroke-linecap="round"/>
 </svg>

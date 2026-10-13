@@ -922,15 +922,22 @@ bool AudioEngine::openSession (const juce::File& file)
     return true;
 }
 
-// Recorded notes, and notes in sessions from before note IDs existed, get
-// their IDs here, so that reading a region never has to change the session.
-// Not an undo step: an ID is bookkeeping, not an edit.
-static void assignAllNoteIds (te::Edit& edit)
+// Gives every region what the rest of the app expects: note IDs on MIDI
+// notes (so reading a region never has to change the session), and the
+// short edge fades on audio (so cuts don't click). For recordings, and for
+// sessions from before these existed.
+static void prepareRegions (te::Edit& edit)
 {
     for (auto* track : te::getAudioTracks (edit))
+    {
         for (auto* clip : track->getClips())
+        {
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
                 detail::assignNoteIds (*midi);
+            else if (auto* audio = dynamic_cast<te::AudioClipBase*> (clip))
+                detail::ensureEdgeFades (*audio);
+        }
+    }
 }
 
 void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
@@ -959,7 +966,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->legacySessionFile = legacySessionFile;
     impl->untitled = bundle == juce::File();
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
-    assignAllNoteIds (*impl->edit);
+    prepareRegions (*impl->edit);
 
     // ...so the old session's working copy isn't needed any more.
     if (oldWorkFolder != workFolder)
@@ -1282,7 +1289,7 @@ void AudioEngine::stop()
     transport.stop (false, false);   // false = keep the recording
 
     if (wasRecording)
-        assignAllNoteIds (*impl->edit);
+        prepareRegions (*impl->edit);
 
     if (wasRecording && impl->autoArmedTrack != 0)
         trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);

@@ -14,6 +14,8 @@ namespace
     constexpr float corner = 8.0f;
     constexpr int stripHeight = 20;
     constexpr int loopCornerWidth = 14;    // the loop handle in the top-right corner
+    constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
+    constexpr int fadeHandleReach = 7;        // how close the mouse has to be to grab one
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
 }
 
@@ -64,10 +66,40 @@ RegionComponent::Zone RegionComponent::getZoneAt (juce::Point<int> p) const
     if (getWidth() >= 32 && p.y < stripHeight && p.x >= getWidth() - loopCornerWidth)
         return Zone::loopCorner;
 
+    // An audio region's fade handles, at the top of the waveform. Near an
+    // edge they win over trimming, which the rest of the edge still does.
+    if (! info.isMidi && getWidth() >= 32 && p.y >= stripHeight && p.y < stripHeight + fadeHandleReach)
+        for (bool fadeIn : { true, false })
+            if (std::abs ((float) p.x - getFadeHandle (fadeIn).x) <= (float) fadeHandleReach)
+                return fadeIn ? Zone::fadeIn : Zone::fadeOut;
+
     if (p.x >= getWidth() - edge)
         return Zone::rightEdge;
 
     return p.y < stripHeight ? Zone::nameStrip : Zone::body;
+}
+
+void RegionComponent::setFadePreview (std::optional<double> fadeInBeats, std::optional<double> fadeOutBeats)
+{
+    fadeInPreview = fadeInBeats;
+    fadeOutPreview = fadeOutBeats;
+    repaint();
+}
+
+double RegionComponent::getFadeLength (bool fadeIn) const
+{
+    // value_or: the preview if there is one, else the region's own fade.
+    return fadeIn ? fadeInPreview.value_or (info.fadeInBeats) : fadeOutPreview.value_or (info.fadeOutBeats);
+}
+
+juce::Point<float> RegionComponent::getFadeHandle (bool fadeIn) const
+{
+    const auto range = getDisplayRange();
+    const float pixelsPerBeat = range.getLength() > 0.0 ? (float) getWidth() / (float) range.getLength() : 0.0f;
+    const float length = (float) getFadeLength (fadeIn) * pixelsPerBeat;
+    const float x = fadeIn ? length : (float) getWidth() - length;
+    return { juce::jlimit (fadeHandleInset, juce::jmax (fadeHandleInset, (float) getWidth() - fadeHandleInset), x),
+             (float) stripHeight + 1.0f };
 }
 
 void RegionComponent::setTrimPreview (std::optional<juce::Range<double>> range, bool asLoop)
@@ -159,6 +191,9 @@ void RegionComponent::paint (juce::Graphics& g)
 
         paintLoopDividers (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
 
+        if (! info.isMidi)
+            paintFades (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
+
         // The loop handle: a small loop arrow in the corner, while the mouse
         // is over it or it's being dragged.
         if (hoveringLoopCorner || loopPreview)
@@ -247,6 +282,52 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
             auto w = juce::jmax (2.0f, (float) n.lengthBeats * pxPerBeat - 1.0f);
             auto y = area.getY() + (float) (hi - n.pitch) * rowH + (rowH - noteH) * 0.5f;
             g.fillRoundedRectangle (x, y, w, noteH, noteH * 0.5f);
+        }
+    }
+}
+
+void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const auto range = getDisplayRange();
+
+    if (range.getLength() <= 0.0)
+        return;
+
+    const float pixelsPerBeat = area.getWidth() / (float) range.getLength();
+
+    for (bool fadeIn : { true, false })
+    {
+        // The fade as a line from silence at the edge up to full volume, with
+        // the part it turns down shaded. The automatic edge fades are less
+        // than a pixel, so they don't show.
+        const float length = juce::jmin (area.getWidth(), (float) getFadeLength (fadeIn) * pixelsPerBeat);
+
+        if (length >= 1.0f)
+        {
+            const float edge = fadeIn ? area.getX() : area.getRight();
+            const float end = fadeIn ? edge + length : edge - length;
+
+            juce::Path faded;
+            faded.startNewSubPath (edge, area.getY());
+            faded.lineTo (end, area.getY());
+            faded.lineTo (edge, area.getBottom());
+            faded.closeSubPath();
+
+            g.setColour (colour::windowBg.withAlpha (0.5f));   // dimmed: quieter there
+            g.fillPath (faded);
+            g.setColour (colour);
+            g.drawLine (edge, area.getBottom(), end, area.getY(), 1.5f);
+        }
+
+        // The handles, while the mouse is over the region or one is being dragged.
+        if (hovering || fadeInPreview.has_value() || fadeOutPreview.has_value())
+        {
+            const auto handle = getFadeHandle (fadeIn);
+            const auto dot = juce::Rectangle<float> (8.0f, 8.0f).withCentre (handle);
+            g.setColour (colour::text);
+            g.fillEllipse (dot);
+            g.setColour (colour::windowBg);
+            g.drawEllipse (dot, 1.0f);
         }
     }
 }
@@ -358,6 +439,7 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
     // loop corner shows its loop arrow.
     auto zone = getZoneAt (e.getPosition());
     setMouseCursor (zone == Zone::leftEdge || zone == Zone::rightEdge || zone == Zone::loopCorner
+                     || zone == Zone::fadeIn || zone == Zone::fadeOut
                         ? juce::MouseCursor::LeftRightResizeCursor
                         : juce::MouseCursor::PointingHandCursor);
 
@@ -368,8 +450,21 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
     }
 }
 
+void RegionComponent::mouseEnter (const juce::MouseEvent&)
+{
+    hovering = true;
+
+    if (! info.isMidi)
+        repaint();
+}
+
 void RegionComponent::mouseExit (const juce::MouseEvent&)
 {
+    hovering = false;
+
+    if (! info.isMidi)
+        repaint();
+
     if (hoveringLoopCorner)
     {
         hoveringLoopCorner = false;

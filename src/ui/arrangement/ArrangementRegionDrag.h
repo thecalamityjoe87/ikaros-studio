@@ -32,7 +32,7 @@ public:
 private:
     struct Drag
     {
-        enum class Mode { none, pending, move, trimStart, trimEnd, loop };
+        enum class Mode { none, pending, move, trimStart, trimEnd, loop, fadeIn, fadeOut };
 
         Mode mode = Mode::none;
         RegionId anchor = 0;                 // the region that was clicked
@@ -43,6 +43,7 @@ private:
         double beatDelta = 0.0;              // move: how far in time
         int rowDelta = 0;                    // move: how many tracks down
         juce::Range<double> trim;            // trim and loop: the anchor's new edges
+        double fade = 0.0;                   // fade: the anchor's new fade length, in beats
     };
 
     ArrangementView& owner;
@@ -51,6 +52,7 @@ private:
     void updateMoveDrag (juce::Point<int>);
     void updateTrimDrag (int dx);
     void updateLoopDrag (int dx);
+    void updateFadeDrag (int dx);
 };
 
 } // namespace ikaros

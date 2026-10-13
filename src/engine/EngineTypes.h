@@ -71,6 +71,12 @@ struct RegionInfo
     double loopLengthBeats = 0.0;  // 0 = not looped
     double loopOffsetBeats = 0.0;
 
+    // Audio regions only: how long they fade in at the start and out at the
+    // end, in beats. Every audio region has at least a very short fade
+    // (minFadeSeconds), so cuts don't click.
+    double fadeInBeats = 0.0;
+    double fadeOutBeats = 0.0;
+
     double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
     bool isLooped() const noexcept          { return loopLengthBeats > 0.0; }
 

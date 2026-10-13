@@ -2350,6 +2350,47 @@ int main (int argc, char* argv[])
             check (writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()), "(test audio written)");
         }
         checkUndoRoundTrip (engine, "Import Audio File", [&] { regions.importAudioFiles (audio, { wavFile.getFullPathName() }, 0.0); });
+
+        std::cout << "-- Fades\n";
+        {
+            // At 120 bpm the one-second tone is 2 beats long, and the
+            // automatic edge fade (minFadeSeconds, 5 ms) is 0.01 beats.
+            const auto a = regions.getRegions (audio).front();
+            const double edgeFade = 0.005 * 2.0;
+            auto near = [] (double x, double y) { return std::abs (x - y) < 1.0e-4; };
+            check (near (a.fadeInBeats, edgeFade) && near (a.fadeOutBeats, edgeFade),
+                   "an imported audio region gets very short fades at its edges, so it can't click");
+
+            checkUndoRoundTrip (engine, "Fade In", [&] { regions.setFade (a.id, true, 0.5); });
+            checkUndoRoundTrip (engine, "Fade Out", [&] { regions.setFade (a.id, false, 1.0); });
+            auto faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, 0.5) && near (faded->fadeOutBeats, 1.0), "fades can be made longer");
+
+            pumpMessages();
+            regions.setFade (a.id, true, 2.0);
+            pumpMessages();
+            faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, 1.0), "a fade in stops where the fade out starts");
+            engine.undo();
+            pumpMessages();
+
+            regions.setFade (a.id, true, 0.0);
+            pumpMessages();
+            faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, edgeFade), "a fade can't go below the automatic edge fade");
+            engine.undo();
+            pumpMessages();
+
+            const auto right = regions.splitRegions ({ a.id }, 0.75);   // leaves room for both fades on each half
+            pumpMessages();
+            auto leftHalf = regions.getRegion (a.id);
+            auto rightHalf = right.empty() ? std::nullopt : regions.getRegion (right.front());
+            check (leftHalf && rightHalf && near (leftHalf->fadeOutBeats, edgeFade) && near (rightHalf->fadeInBeats, edgeFade)
+                     && near (leftHalf->fadeInBeats, 0.5) && near (rightHalf->fadeOutBeats, 1.0),
+                   "splitting keeps the outer fades and gives the cut short fades");
+            engine.undo();
+            pumpMessages();
+        }
         checkSaveAndReopen (engine, undoSession);
 
         std::cout << "-- Notes\n";
