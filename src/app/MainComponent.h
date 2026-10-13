@@ -123,6 +123,10 @@ private:
     void showAbout();
     void showError (const juce::String& title, const juce::String& message);
 
+    /** After a take: explains why recording stopped by itself, or hints
+        that the input was too loud or the computer didn't keep up. */
+    void showRecordingReport (const RecordingReport&);
+
     static juce::File getDefaultSessionFolder();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

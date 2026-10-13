@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/AudioSettingsPanel.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
@@ -10,6 +11,7 @@
 #include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/AutomationHint.h"
 
 namespace ikaros
 {
@@ -322,6 +324,9 @@ void MainComponent::timerCallback()
     bottomPanel.update();
     library.update();
     updateSessionStatus();   // "unsaved" isn't broadcast, so check it here (cheap: it only tells the menu bar on a change)
+
+    if (auto report = engine.takeRecordingReport())
+        showRecordingReport (*report);
 }
 
 //==============================================================================
@@ -1087,7 +1092,7 @@ void MainComponent::showAudioSettings()
     juce::DialogWindow::LaunchOptions o;
     o.dialogTitle = "Audio & MIDI Settings";
     o.dialogBackgroundColour = colour::toolbarBg;
-    o.content.setOwned (engine.createAudioSettingsComponent().release());   // the dialog takes ownership
+    o.content.setOwned (new AudioSettingsPanel (engine));   // the dialog takes ownership
     o.useNativeTitleBar = true;
     o.resizable = false;
     o.launchAsync();
@@ -1096,6 +1101,70 @@ void MainComponent::showAudioSettings()
 void MainComponent::showAbout()
 {
     AboutDialog::show (*this, engine);
+}
+
+void MainComponent::showRecordingReport (const RecordingReport& report)
+{
+    using Reason = RecordingStopReason;
+    const juce::String kept = report.seconds > 0.5 ? " What you recorded up to then has been kept." : "";
+    const juce::String tooLoud = report.clipped ? "\n\nYour input was also too loud in places (it distorted)." : "";
+
+    switch (report.reason)
+    {
+        case Reason::user:
+            break;
+
+        case Reason::notStarted:
+            showError ("Not Enough Disk Space",
+                       "Recording needs at least 200 MB of free disk space. Free up some space, then try again.");
+            return;
+
+        case Reason::deviceStopped:
+            showError ("Recording Stopped",
+                       "The audio device stopped responding. Was it unplugged?" + kept
+                         + "\n\nCheck that it's connected, then choose it in File > Audio & MIDI Settings." + tooLoud);
+            return;
+
+        case Reason::deviceChanged:
+            showError ("Recording Stopped", "The audio device or its settings changed while recording." + kept + tooLoud);
+            return;
+
+        case Reason::sampleRateChanged:
+            showError ("Recording Stopped",
+                       "The audio device switched to a different sample rate while recording." + kept
+                         + " Recordings at either rate play back correctly." + tooLoud);
+            return;
+
+        case Reason::diskFull:
+            showError ("Recording Stopped",
+                       "The disk is almost full, so recording stopped before it ran out of space." + kept
+                         + " Free up some space to record more." + tooLoud);
+            return;
+
+        case Reason::diskWriteFailed:
+            showError ("Recording Stopped",
+                       "The recording couldn't be written to disk (it may be full)." + kept + tooLoud);
+            return;
+    }
+
+    // A normal take: gentle hints, not dialogs. MIDI takes can't clip or drop out.
+    if (! report.audio)
+        return;
+
+    if (report.clipped)
+    {
+        HintBubble::show (toolbar.getRecordButton(),
+                          "Your input is too loud: parts of that take distorted. Turn down the gain on your "
+                          "audio interface, or move back a little from the mic, and try again.");
+    }
+    else if (report.dropouts > 0)
+    {
+        HintBubble::show (toolbar.getRecordButton(),
+                          juce::String (report.dropouts) + (report.dropouts == 1 ? " dropout" : " dropouts")
+                            + " during that take: the computer couldn't keep up, which can leave clicks or gaps. "
+                              "A larger buffer size helps.",
+                          "Audio Settings", [this] { showAudioSettings(); });
+    }
 }
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)

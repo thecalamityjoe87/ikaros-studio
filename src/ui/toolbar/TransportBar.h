@@ -23,6 +23,9 @@ public:
 
     int getPreferredWidth() const;
 
+    /** For hints about recording to point at. */
+    juce::Component& getRecordButton() noexcept     { return recordButton; }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

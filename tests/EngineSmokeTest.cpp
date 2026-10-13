@@ -9,6 +9,8 @@
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
+#include "engine/RecordingGuard.h"
+#include "engine/TestAudioDevice.h"
 #include "platform/AppFolders.h"
 #include "engine/SongExporter.h"
 #include "ui/state/Selection.h"                    // plain logic, no components
@@ -302,6 +304,507 @@ static int runRecoveryChild (const juce::File& bundle)
     std::cout << "RECORDING " << (engine.getTransportState().recording ? 1 : 0) << " " << (juce::int64) a1 << std::endl;
     juce::MessageManager::getInstance()->runDispatchLoopUntil (120000);   // killed long before this
     return 0;
+}
+
+//==============================================================================
+// Recording through a pretend audio interface (TestAudioDevice): the test
+// plays generated audio into it, block by block. Never a real microphone.
+
+// A mono WAV of silence with a 1 ms click (a burst at `level`) at each of clickTimes.
+static bool writeClickWav (const juce::File& f, double sampleRate, double seconds,
+                           const std::vector<double>& clickTimes, float level)
+{
+    f.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (sampleRate)
+                                                                                .withNumChannels (1)
+                                                                                .withBitsPerSample (24));
+    juce::AudioBuffer<float> buffer (1, (int) (seconds * sampleRate));
+    buffer.clear();
+
+    for (auto t : clickTimes)
+        for (int i = 0; i < (int) (sampleRate * 0.001); ++i)
+            buffer.setSample (0, (int) std::round (t * sampleRate) + i, level);
+
+    return writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+}
+
+// The session's takes (the WAVs in its Audio folder). Note them before a
+// take, then newTake() finds the one it added.
+static juce::Array<juce::File> listTakes (AudioEngine& engine)
+{
+    return engine.getWorkingCopyFolder().getChildFile (SessionBundle::audioFolder)
+                 .findChildFiles (juce::File::findFiles, false, "*.wav");
+}
+
+static juce::File newTake (AudioEngine& engine, const juce::Array<juce::File>& before)
+{
+    for (auto& f : listTakes (engine))
+        if (! before.contains (f))
+            return f;
+
+    return {};
+}
+
+// Where the clicks in a WAV start (sample index of the first sample over
+// `threshold` after at least `minGap` quiet samples). Reads in chunks, so
+// long takes don't need to fit in memory.
+struct Clicks { std::vector<juce::int64> starts; juce::int64 length = 0; double sampleRate = 0.0; };
+
+static Clicks findClicks (const juce::File& f, float threshold = 0.1f, int minGap = 1000)
+{
+    Clicks result;
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+    if (reader == nullptr)
+        return result;
+
+    result.length = reader->lengthInSamples;
+    result.sampleRate = reader->sampleRate;
+    juce::AudioBuffer<float> chunk (1, 65536);
+    juce::int64 quiet = minGap;
+
+    for (juce::int64 pos = 0; pos < reader->lengthInSamples; pos += chunk.getNumSamples())
+    {
+        const auto num = (int) juce::jmin ((juce::int64) chunk.getNumSamples(), reader->lengthInSamples - pos);
+        reader->read (&chunk, 0, num, pos, true, false);
+
+        for (int i = 0; i < num; ++i)
+        {
+            if (std::abs (chunk.getSample (0, i)) > threshold)
+            {
+                if (quiet >= minGap)
+                    result.starts.push_back (pos + i);
+
+                quiet = 0;
+            }
+            else
+            {
+                ++quiet;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Runs the pretend device for `seconds`, in ~100 ms chunks, letting the
+// message loop run between them (the engine's timers and checks).
+// input (start sample, length) makes each chunk's input; looping back
+// feeds the output back in instead; neither = silence. Normally faster than
+// real time; realTime paces it like a real device (for timer-based checks).
+using InputMaker = std::function<juce::AudioBuffer<float> (juce::int64, int)>;
+
+static void runAudio (TestAudioDevice& device, double seconds, const InputMaker& input = {},
+                      bool loopBack = false, bool realTime = false)
+{
+    const auto rate = device.getSettings().sampleRate;
+    const auto total = (juce::int64) (seconds * rate);
+    const int chunk = (int) (rate * 0.1);
+
+    for (juce::int64 done = 0; done < total; done += chunk)
+    {
+        const auto num = (int) juce::jmin ((juce::int64) chunk, total - done);
+
+        if (loopBack)       device.processLoopedBack (num);
+        else if (input)     device.process (input (done, num));
+        else                device.process (num);
+
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (realTime ? 100 : 1);
+    }
+}
+
+// A steady tone on every input channel, at `level` (1.0 = full scale, which clips).
+static InputMaker tone (const TestAudioDevice& device, float level, bool square = false)
+{
+    const auto channels = device.getSettings().numInputs;
+    const auto rate = device.getSettings().sampleRate;
+
+    return [=] (juce::int64 start, int num)
+    {
+        juce::AudioBuffer<float> b (channels, num);
+
+        for (int i = 0; i < num; ++i)
+        {
+            auto s = std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * (double) (start + i) / rate);
+            auto v = level * (float) (square ? (s >= 0.0 ? 1.0 : -1.0) : s);
+
+            for (int ch = 0; ch < channels; ++ch)
+                b.setSample (ch, i, v);
+        }
+
+        return b;
+    };
+}
+
+static float peakOf (const juce::AudioBuffer<float>& b)
+{
+    return b.getNumSamples() > 0 ? b.getMagnitude (0, b.getNumSamples()) : 0.0f;
+}
+
+// Memory the process is using (resident), in MB. Linux only; 0 elsewhere.
+static double residentMB()
+{
+   #if JUCE_LINUX
+    juce::StringArray lines;
+    juce::File ("/proc/self/status").readLines (lines);
+
+    for (auto& line : lines)
+        if (line.startsWith ("VmRSS:"))
+            return line.fromFirstOccurrenceOf (":", false, false).trim().getDoubleValue() / 1024.0;   // kB
+   #endif
+
+    return 0.0;
+}
+
+static void runRecordingSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+
+    // 10 ms of input latency and 5 ms of output latency, as a USB interface
+    // might report. (Replaced by one without latency after the loopback test.)
+    TestAudioDevice::Settings settings;
+    settings.inputLatency = 480;
+    settings.outputLatency = 240;
+    auto device = std::make_unique<TestAudioDevice> (engine, settings);
+    const auto rate = settings.sampleRate;
+    const auto block = settings.blockSize;
+
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    engine.setBpm (120.0);              // 2 beats a second
+    engine.setCountInEnabled (false);
+    engine.setMetronomeEnabled (false);
+
+    std::cout << "Audio device and latency\n";
+    {
+        auto s = engine.getAudioDeviceStatus();
+        check (s.running && s.sampleRate == rate && s.bufferSize == block, "the pretend device is running");
+        check (std::abs (s.inputLatencyMs - 10.0) < 0.01 && std::abs (s.outputLatencyMs - 5.0) < 0.01,
+               "its input and output latency are reported");
+        check (std::abs (s.monitoringLatencyMs - 15.0) < 0.01, "the monitoring delay is input + output latency");
+        check (std::abs (s.recordingCompensationMs - 15.0) < 0.01, "and recordings are moved back by as much");
+        check (s.dropouts == 0, "no dropouts yet");
+    }
+
+    // The track that records, from Input 1 (mono, the first input).
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (inputs.size() == 3 && inputs[0].name == "Input 1", "the device's inputs are offered (1, 2, 1+2)");
+
+    if (inputs.empty())
+        return;
+
+    auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, inputs[0].id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (*device, 0.3);
+
+    // Each take starts 20 beats after the last, so they don't overlap.
+    double nextTakeBeat = 40.0;
+
+    auto startTake = [&]
+    {
+        engine.setPositionBeats (nextTakeBeat);
+        nextTakeBeat += 20.0;
+        engine.toggleRecord();
+        return engine.getTransportState().recording;
+    };
+
+    auto lastRegion = [&]() -> std::optional<RegionInfo>
+    {
+        auto regions = tracks.regions().getRegions (rec);
+
+        if (regions.empty())
+            return std::nullopt;
+
+        return *std::max_element (regions.begin(), regions.end(),
+                                  [] (auto& a, auto& b) { return a.startBeat < b.startBeat; });
+    };
+
+    auto regionCount = [&] { return tracks.regions().getRegions (rec).size(); };
+
+    std::cout << "Monitoring\n";
+    {
+        tracks.inputs().setMonitoring (rec, true);
+        runAudio (*device, 0.2);
+        auto heard = device->process (tone (*device, 0.5f) (0, (int) rate / 2));
+        check (peakOf (heard) > 0.1f, "with monitoring on, the input is heard");
+
+        tracks.inputs().setMonitoring (rec, false);
+        runAudio (*device, 0.2);
+        heard = device->process (tone (*device, 0.5f) (0, (int) rate / 2));
+        check (peakOf (heard) < 0.001f, "with it off, it isn't");
+    }
+
+    std::cout << "Loopback: recordings line up with the music\n";
+    {
+        // Another track plays a click at 2.5 s; a cable takes the outputs
+        // back to the inputs, and the armed track records it. The click
+        // comes back late by the input and output latency plus the cable's
+        // block. Tracktion moves takes back by the reported latency plus one
+        // block (see the report in RecordingGuard.h), so the recorded click
+        // should land at 2.5 s exactly.
+        auto clickFile = dir.getChildFile ("Click.wav");
+        check (writeClickWav (clickFile, rate, 2.0, { 0.5 }, 0.5f), "(wrote a click)");
+
+        auto player = tracks.addAudioTrack();
+        tracks.regions().importAudioFiles (player, { clickFile.getFullPathName() }, 4.0);   // beat 4 = 2 s
+        tracks.setSelectedTrack (rec);
+        tracks.inputs().setArmed (rec, true);
+        runAudio (*device, 0.3, {}, true);
+
+        // From 1 s in: moved back by the latency, the take still starts
+        // after 0, where it can be placed exactly.
+        const auto takesBefore = listTakes (engine);
+        engine.setPositionBeats (2.0);
+        engine.toggleRecord();
+        check (engine.getTransportState().recording, "recording");
+        runAudio (*device, 3.0, {}, true);
+        engine.toggleRecord();
+        pumpMessages();
+
+        auto region = lastRegion();
+        auto clicks = findClicks (newTake (engine, takesBefore));
+        check (region.has_value() && clicks.starts.size() == 1, "the take holds the click");
+
+        if (region && clicks.starts.size() == 1)
+        {
+            // minStartBeat = where the take's first sample sits on the timeline.
+            const auto heardAt = region->minStartBeat / 2.0 + (double) clicks.starts[0] / rate;
+            const auto offBy = juce::roundToInt ((heardAt - 2.5) * rate);
+            std::cout << "    (round trip " << settings.inputLatency + settings.outputLatency + block
+                      << " samples; recorded click " << offBy << " samples off)\n";
+            check (std::abs (offBy) <= 2, "the recorded click lines up with the played one, to the sample");
+        }
+
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::user && report->audio, "a report on the take");
+        check (report && ! report->clipped && report->dropouts == 0, "it didn't clip or drop out");
+        check (! engine.takeRecordingReport(), "each report is handed over once");
+
+        tracks.deleteTrack (player);
+        pumpMessages();
+    }
+
+    // The rest on a device without simulated latency (so it can change
+    // sample rate, see TestAudioDevice::setSampleRate).
+    device.reset();
+    device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+    runAudio (*device, 0.3);
+
+    std::cout << "Clipping\n";
+    {
+        tracks.inputs().getInputMeter (rec);   // the UI's meters keep reading it
+        check (startTake(), "recording a too-loud input");
+        runAudio (*device, 1.0, tone (*device, 1.0f, true));
+        check (tracks.inputs().getInputMeter (rec).clipped, "the input meter's clip light comes on");
+        engine.toggleRecord();
+        auto report = engine.takeRecordingReport();
+        check (report && report->clipped, "the take is reported as clipped");
+
+        tracks.inputs().clearClipIndicator (rec);
+        check (! tracks.inputs().getInputMeter (rec).clipped, "clicking the clip light turns it off");
+
+        check (startTake(), "recording a comfortable level");
+        runAudio (*device, 1.0, tone (*device, 0.5f));
+        auto meter = tracks.inputs().getInputMeter (rec);
+        check (! meter.clipped && meter.level.leftDb > -12.0f && meter.level.leftDb < -3.0f, "the meter shows it (-6 dB), no clip");
+        engine.toggleRecord();
+        report = engine.takeRecordingReport();
+        check (report && ! report->clipped && report->dropouts == 0, "no clipping, no dropouts");
+    }
+
+    std::cout << "Dropouts\n";
+    {
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        juce::Thread::sleep (400);   // the computer falls behind: 400 ms of audio never arrive
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.toggleRecord();
+        auto report = engine.takeRecordingReport();
+        check (report && report->dropouts >= 1, "the gap is counted as a dropout");
+        check (engine.getAudioDeviceStatus().dropouts >= 1, "and in the device's count");
+    }
+
+    std::cout << "The device stops responding mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);   // no more audio arrives
+        check (! engine.getTransportState().recording, "recording stops by itself");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::deviceStopped, "the report says the device stopped");
+        auto region = lastRegion();
+        check (regionCount() == before + 1 && region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6,
+               "what was recorded (1 s) is kept");
+        runAudio (*device, 0.3);
+    }
+
+    std::cout << "The device is closed mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        device->close();
+        check (! engine.getTransportState().recording, "recording stops straight away");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::deviceStopped, "the report says the device stopped");
+        check (regionCount() == before + 1, "what was recorded is kept");
+
+        device->reopen();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        runAudio (*device, 0.3);
+        check (engine.getAudioDeviceStatus().running, "the device comes back");
+    }
+
+    std::cout << "The sample rate changes mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording at 48 kHz");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        device->setSampleRate (44100.0);
+        check (! engine.getTransportState().recording, "recording stops");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::sampleRateChanged, "the report says the sample rate changed");
+        auto region = lastRegion();
+        check (regionCount() == before + 1 && region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6,
+               "what was recorded is kept, and still lasts 1 s");
+
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        runAudio (*device, 0.3);
+        const auto takesBefore = listTakes (engine);
+        check (startTake(), "recording again at 44.1 kHz");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.toggleRecord();
+        region = lastRegion();
+        check (region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6, "works");
+        check (findClicks (newTake (engine, takesBefore)).sampleRate == 44100.0, "at the new rate");
+        engine.takeRecordingReport();
+    }
+
+    std::cout << "Disk full\n";
+    {
+        engine.setMinimumFreeDiskSpace (std::numeric_limits<juce::int64>::max());   // act out a full disk
+        const auto before = regionCount();
+        engine.toggleRecord();
+        check (! engine.getTransportState().recording, "Record won't start without enough disk space");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::notStarted, "and says why");
+
+        engine.setMinimumFreeDiskSpace (RecordingGuard::defaultMinimumFreeSpace);
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.setMinimumFreeDiskSpace (std::numeric_limits<juce::int64>::max());   // the disk fills up
+        runAudio (*device, 1.5, tone (*device, 0.3f), false, true);   // in real time: it's checked once a second
+        check (! engine.getTransportState().recording, "recording stops when the disk fills up");
+        report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::diskFull, "the report says the disk is full");
+        check (regionCount() == before + 1, "what was recorded is kept");
+        engine.setMinimumFreeDiskSpace (RecordingGuard::defaultMinimumFreeSpace);
+    }
+}
+
+// A long take of generated clicks, one a second: the take must hold every
+// one exactly a second apart (no drift, no lost samples), and memory must
+// stay flat. IKAROS_LONG_TAKE_MINUTES sets the length (default 20).
+static void runLongRecordingSection()
+{
+    const auto minutes = juce::jmax (1, juce::SystemStats::getEnvironmentVariable ("IKAROS_LONG_TAKE_MINUTES", "20").getIntValue());
+    std::cout << "A " << minutes << " minute take\n";
+
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice::Settings settings;
+    settings.blockSize = 512;
+    TestAudioDevice device (engine, settings);
+    const auto rate = (juce::int64) settings.sampleRate;
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (device, 0.2);
+    engine.setCountInEnabled (false);
+
+    auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, tracks.inputs().getAudioInputs().front().id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (device, 0.3);
+
+    // A 1 ms click half way through every second. (Not at the very start:
+    // a take starts at the punch-in, part way into a block.)
+    auto clicks = [&] (juce::int64 start, int num)
+    {
+        juce::AudioBuffer<float> b (settings.numInputs, num);
+        b.clear();
+
+        for (int i = 0; i < num; ++i)
+            if ((start + i + rate / 2) % rate < rate / 1000)
+                b.setSample (0, i, 0.5f);
+
+        return b;
+    };
+
+    const auto takesBefore = listTakes (engine);
+    engine.setPositionBeats (0.0);
+    engine.toggleRecord();
+    check (engine.getTransportState().recording, "recording");
+
+    const auto startTime = juce::Time::getMillisecondCounterHiRes();
+    double memoryAfterOneMinute = 0.0, memoryPeak = 0.0;
+    const juce::int64 total = rate * 60 * minutes;
+    const auto chunk = rate / 10;
+
+    for (juce::int64 done = 0; done < total; done += chunk)
+    {
+        device.process (clicks (done, (int) chunk));
+
+        // Let the engine's timers run, and the disk writer keep up (the
+        // test runs much faster than real time).
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+
+        if (done % (rate * 10) == 0)
+            juce::Thread::sleep (5);
+
+        if (done == rate * 60)
+            memoryAfterOneMinute = residentMB();
+
+        memoryPeak = juce::jmax (memoryPeak, done % (rate * 10) == 0 ? residentMB() : 0.0);
+    }
+
+    engine.toggleRecord();
+    pumpMessages();
+    const auto memoryAtEnd = residentMB();
+    std::cout << "    (" << minutes << " min recorded in " << juce::roundToInt ((juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0)
+              << " s; memory " << juce::roundToInt (memoryAfterOneMinute) << " MB after 1 min, peak "
+              << juce::roundToInt (memoryPeak) << " MB, " << juce::roundToInt (memoryAtEnd) << " MB at the end)\n";
+
+    check (! engine.getTransportState().recording, "recording stops");
+
+    auto report = engine.takeRecordingReport();
+    check (report && report->reason == RecordingStopReason::user && report->dropouts == 0, "with no dropouts");
+
+    auto take = newTake (engine, takesBefore);
+    auto found = findClicks (take);
+    check (std::abs (found.length - total) <= settings.blockSize, "the take is as long as what was played");
+    check ((juce::int64) found.starts.size() == 60 * minutes, "it holds every click");
+
+    juce::int64 worstDrift = 0;
+
+    for (size_t i = 0; i < found.starts.size(); ++i)
+        worstDrift = juce::jmax (worstDrift, std::abs (found.starts[i] - found.starts[0] - (juce::int64) i * rate));
+
+    check (worstDrift == 0, "exactly a second apart all the way through (no drift)");
+
+    if (memoryAfterOneMinute > 0.0)
+        check (memoryPeak - memoryAfterOneMinute < 64.0, "memory stays flat while recording");
+
+    take.deleteFile();
 }
 
 int main (int argc, char* argv[])
@@ -2854,6 +3357,12 @@ int main (int argc, char* argv[])
         auto openSessions = platform::getLocalDataFolder().getChildFile ("Open Sessions");
         check (openSessions.getNumberOfChildFiles (juce::File::findDirectories) == 0, "closed sessions leave no working copies");
     }
+
+    if (runs ("recording"))
+        runRecordingSection (dir);
+
+    if (runs ("longrecording"))
+        runLongRecordingSection();
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

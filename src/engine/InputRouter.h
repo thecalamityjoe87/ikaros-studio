@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/RecordingTypes.h"
 #include <memory>
 
 namespace ikaros
@@ -53,8 +54,14 @@ public:
     void setTrackInput (TrackId, const juce::String& inputId);
     void setMonitoring (TrackId, bool);
 
-    /** Level of the input feeding an audio track (for the recording meter). */
-    StereoLevel getInputLevel (TrackId);
+    /** Level of the input feeding an audio track, and whether it has
+        clipped (for the input meters). Several meters can show the same
+        input in one timer tick. */
+    InputMeter getInputMeter (TrackId);
+
+    /** Turns off the clip light of the input feeding a track. (A new take
+        on that input turns it off too.) */
+    void clearClipIndicator (TrackId);
 
     //==============================================================================
     // Live MIDI (on-screen keyboard). Hardware keyboards are routed

@@ -166,7 +166,9 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
     src/engine/AudioPreview.h       src/engine/AudioPreview.cpp
     src/engine/SongExporter.h       src/engine/SongExporter.cpp
-    src/engine/Mp3Format.h          src/engine/Mp3Format.cpp)
+    src/engine/Mp3Format.h          src/engine/Mp3Format.cpp
+    src/engine/RecordingTypes.h
+    src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -188,6 +190,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
 
@@ -201,6 +204,8 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
     src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
     src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
+    src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
+    src/ui/dialogs/AudioSettingsPanel.h     src/ui/dialogs/AudioSettingsPanel.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -366,6 +371,7 @@ if(IKAROS_BUILD_TESTS)
         tests/EngineSmokeTest.cpp
         src/platform/AppFolders.cpp      # the engine keeps open sessions there
         src/platform/FileLock.cpp        # and marks them as open with a lock
+        src/engine/TestAudioDevice.cpp   # a pretend audio interface the test drives
         ${IKAROS_ENGINE_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
@@ -412,7 +418,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,longrecording)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -420,6 +426,13 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
     set_tests_properties(EngineSmokeTest.Undo PROPERTIES LABELS "undo")
     set_tests_properties(EngineSmokeTest.Recovery PROPERTIES LABELS "recovery")
+
+    # Recording through a pretend audio interface (see src/engine/TestAudioDevice.h):
+    # latency, device trouble, full disks. The long take is "slow" (minutes).
+    add_test(NAME EngineSmokeTest.Recording COMMAND IkarosEngineSmokeTest --only=recording)
+    add_test(NAME EngineSmokeTest.LongRecording COMMAND IkarosEngineSmokeTest --only=longrecording)
+    set_tests_properties(EngineSmokeTest.Recording PROPERTIES LABELS "recording")
+    set_tests_properties(EngineSmokeTest.LongRecording PROPERTIES LABELS "slow" TIMEOUT 1800)
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

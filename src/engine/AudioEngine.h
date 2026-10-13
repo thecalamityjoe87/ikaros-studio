@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/RecordingTypes.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
 #include <juce_events/juce_events.h>
@@ -22,6 +23,7 @@ class PluginLibrary;
 class PackStore;
 class AudioPreview;
 class SongExporter;
+class RecordingGuard;
 
 //==============================================================================
 /** What the engine hands the UI when a third-party plug-in's window should
@@ -66,8 +68,10 @@ public:
     void removeListener (Listener* l)     { listeners.remove (l); }
 
     /** settingsName picks where Tracktion keeps its settings (devices, the
-        plug-in list...). Tests use their own, so they don't touch the app's. */
-    explicit AudioEngine (const juce::String& settingsName = "IkarosStudio");
+        plug-in list...). Tests use their own, so they don't touch the app's.
+        Tests that drive a TestAudioDevice pass openAudioDevice = false, so
+        the computer's own audio device is never opened. */
+    explicit AudioEngine (const juce::String& settingsName = "IkarosStudio", bool openAudioDevice = true);
     ~AudioEngine();
 
     //==============================================================================
@@ -182,7 +186,12 @@ public:
     /** Starts recording onto the armed track (arming the selected track for
         this take if none is armed), or stops recording. The take becomes a
         region when recording stops. With the count-in on, one bar of clicks
-        plays first. */
+        plays first.
+
+        Takes are lined up with the music automatically: Tracktion moves each
+        one back by the latency the audio device reports. If the device stops,
+        changes, or the disk fills up mid-take, recording stops by itself and
+        what was recorded is kept (see takeRecordingReport). */
     void toggleRecord();
     void goToStart();
     void setPositionBeats (double beats);
@@ -233,6 +242,18 @@ public:
     StereoLevel getMasterLevel();
     SystemStats getSystemStats() const;
 
+    /** After a take ends: why it stopped, whether the input clipped, and how
+        many dropouts it had. Each report is returned once (then nullopt).
+        A report with reason notStarted means Record was refused. */
+    std::optional<RecordingReport> takeRecordingReport();
+
+    /** The audio device's buffer, latencies and dropouts (for the audio settings). */
+    AudioDeviceStatus getAudioDeviceStatus() const;
+
+    /** Recording needs at least this much free disk space (default 200 MB).
+        Tests raise it to act out a full disk. */
+    void setMinimumFreeDiskSpace (juce::int64 bytes);
+
     /** JUCE's standard audio/MIDI device picker, wired to Tracktion's device manager. */
     std::unique_ptr<juce::Component> createAudioSettingsComponent();
 
@@ -282,6 +303,8 @@ private:
     friend class AutomationEditor;
     friend class PluginLibrary;
     friend class SongExporter;
+    friend class RecordingGuard;
+    friend class TestAudioDevice;
 
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
@@ -296,6 +319,18 @@ private:
         changes are spotted automatically by watching the session's ValueTree;
         call this for changes that don't live there (arming, plug-in scans). */
     void notifyModelChanged (const ModelChanges& = ModelChanges::everything());
+
+    /** For TestAudioDevice. The device calls its callbacks in the order they
+        were added, and the test device works in place (input and output
+        share buffers), so Tracktion's must come first, before ours that
+        write output (which would wipe the input). Tracktion adds its own
+        when the device manager is initialised, which without a real device
+        happens after ours: this moves ours behind it. */
+    void reattachAudioCallbacks();
+
+    /** A take has ended (the transport has stopped): turns it into regions,
+        disarms a track armed just for it, and has its report made. */
+    void finishTake();
 
     /** After a sound pack was installed, updated or removed: rescans the
         library and points tracks using that pack at its files. */
@@ -315,6 +350,7 @@ private:
     std::unique_ptr<AudioPreview> preview;
     std::unique_ptr<TrackController> trackController;
     std::unique_ptr<SongExporter> exporter;
+    std::unique_ptr<RecordingGuard> recordingGuard;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

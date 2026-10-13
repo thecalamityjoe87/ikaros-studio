@@ -3,6 +3,7 @@
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
+#include "engine/RecordingGuard.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
@@ -72,6 +73,10 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     void describeWaveDevices (std::vector<te::WaveDeviceDescription>& descriptions,
                               juce::AudioIODevice& device, bool isInput) override
     {
+        // Tracktion passes in the previous device's list when the device
+        // changes: start afresh, or old inputs would linger beside the new.
+        descriptions.clear();
+
         if (! isInput)
         {
             const int num = device.getOutputChannelNames().size();
@@ -208,14 +213,18 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
                             private juce::ChangeListener,
                             private juce::Timer
 {
-    Impl (AudioEngine& o, const juce::String& settingsName)
+    Impl (AudioEngine& o, const juce::String& settingsName, bool openAudioDevice)
         : owner (o),
           engine (settingsName, std::make_unique<IkarosUIBehaviour>(), std::make_unique<IkarosEngineBehaviour>())
     {
         // 2 inputs, 2 outputs by default. (Tracktion's default of "every
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
-        engine.getDeviceManager().initialise (2, 2);
+        if (openAudioDevice)
+        {
+            engine.getDeviceManager().initialise (2, 2);
+            chooseSmallBufferOnce();
+        }
 
         // Our own instrument for SFZ sounds, next to Tracktion's built-in
         // ones, so sessions can create it (and load it back) by type name.
@@ -252,6 +261,42 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         autosaver.detach();
         edit = nullptr;
         deleteWorkFolder (workFolder);
+    }
+
+    // What you hear while monitoring is late by about the device's buffer
+    // (each way). The first time the app runs, ask for a small one, ~5 ms;
+    // after that the choice in Audio & MIDI Settings sticks (Tracktion saves it).
+    void chooseSmallBufferOnce()
+    {
+        auto& props = engine.getPropertyStorage().getPropertiesFile();
+
+        if (props.getBoolValue ("smallBufferChosen"))
+            return;
+
+        props.setValue ("smallBufferChosen", true);
+
+        auto& adm = engine.getDeviceManager().deviceManager;
+        auto* device = adm.getCurrentAudioDevice();
+
+        if (device == nullptr)
+            return;
+
+        // The smallest size the device offers of at least 5 ms (240 samples
+        // at 48 kHz). Smaller ones tend to drop out on ordinary computers.
+        const auto current = device->getCurrentBufferSizeSamples();
+        const auto atLeast = juce::roundToInt (device->getCurrentSampleRate() * 0.005);
+        auto best = current;
+
+        for (auto size : device->getAvailableBufferSizes())
+            if (size >= atLeast && size < best)
+                best = size;
+
+        if (best < current)
+        {
+            auto setup = adm.getAudioDeviceSetup();
+            setup.bufferSize = best;
+            adm.setAudioDeviceSetup (setup, true);
+        }
     }
 
     AudioEngine& owner;
@@ -688,9 +733,10 @@ private:
 };
 
 //==============================================================================
-AudioEngine::AudioEngine (const juce::String& settingsName)
-    : impl (std::make_unique<Impl> (*this, settingsName))
+AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice)
+    : impl (std::make_unique<Impl> (*this, settingsName, openAudioDevice))
 {
+    recordingGuard = std::make_unique<RecordingGuard> (*this);
     sounds = std::make_unique<SoundLibrary>();
     packStore = std::make_unique<PackStore> (*sounds);
     packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
@@ -710,6 +756,8 @@ AudioEngine::~AudioEngine()
 
     if (impl->edit != nullptr)
         impl->edit->getTransport().stop (false, true);
+
+    recordingGuard.reset();
 
     impl->detachMasterMeter();
     preview.reset();
@@ -970,6 +1018,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     {
         impl->edit->getTransport().stop (false, true);
         trackController->inputs().allNotesOff();
+        recordingGuard->takeEnded();   // if a take was going (it stays in the old session)
     }
 
     impl->detachMasterMeter();
@@ -1517,10 +1566,17 @@ void AudioEngine::stop()
     transport.stop (false, false);   // false = keep the recording
 
     if (wasRecording)
-        prepareRegions (*impl->edit);
+        finishTake();
+}
 
-    if (wasRecording && impl->autoArmedTrack != 0)
+void AudioEngine::finishTake()
+{
+    prepareRegions (*impl->edit);
+
+    if (impl->autoArmedTrack != 0)
         trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
+
+    recordingGuard->takeEnded();
 }
 
 void AudioEngine::toggleRecord()
@@ -1535,14 +1591,33 @@ void AudioEngine::toggleRecord()
 
     impl->autoArmedTrack = trackController->inputs().armForRecording();
 
-    if (trackController->inputs().getArmedTrack() == 0)
+    const auto armed = trackController->inputs().getArmedTrack();
+
+    if (armed == 0)
         return;   // no track to record onto
+
+    if (! recordingGuard->canStartTake())
+    {
+        // Too little disk space: the report explains.
+        if (impl->autoArmedTrack != 0)
+            trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
+
+        return;
+    }
 
     // With the count-in on, Tracktion starts playback a bar early and clicks
     // through that bar (even with the metronome off); the take itself starts here.
     impl->recordStartBeats = impl->edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
     impl->autosaver.recordingStarting (impl->recordStartBeats);   // so a crash mid-take keeps the take
     transport.record (false);
+
+    if (transport.isRecording())
+    {
+        const auto track = trackController->getTrack (armed);
+        const bool audioTake = track.has_value() && track->kind == TrackKind::audio;
+        recordingGuard->takeStarting (audioTake ? trackController->inputs().getRecordingSettings (armed).inputId : juce::String());
+        trackController->inputs().clearClipIndicator (armed);   // the clip light shows this take
+    }
 }
 
 void AudioEngine::togglePlay()
@@ -1753,6 +1828,27 @@ SystemStats AudioEngine::getSystemStats() const
     s.sampleRate = dm.getSampleRate();
     s.latencyMs = dm.getOutputLatencySeconds() * 1000.0;
     return s;
+}
+
+void AudioEngine::reattachAudioCallbacks()
+{
+    preview->reattach();
+    recordingGuard->reattach();
+}
+
+std::optional<RecordingReport> AudioEngine::takeRecordingReport()
+{
+    return recordingGuard->popReport();
+}
+
+AudioDeviceStatus AudioEngine::getAudioDeviceStatus() const
+{
+    return recordingGuard->getDeviceStatus();
+}
+
+void AudioEngine::setMinimumFreeDiskSpace (juce::int64 bytes)
+{
+    recordingGuard->setMinimumFreeSpace (bytes);
 }
 
 std::unique_ptr<juce::Component> AudioEngine::createAudioSettingsComponent()

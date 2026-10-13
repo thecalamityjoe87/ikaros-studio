@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/widgets/ClipLight.h"
 #include "ui/widgets/IconButton.h"
 #include "ui/widgets/MeterSlider.h"
 #include "ui/state/Selection.h"
@@ -27,8 +28,10 @@ public:
     void update (const TrackInfo&, bool isSelected);
     TrackId getTrackId() const noexcept     { return info.id; }
 
-    /** The track's level, for the meter in its volume slider (the ~30 Hz timer calls this). */
-    void setLevel (StereoLevel level)       { volume.setLevel (level); }
+    /** Updates the meter in the volume slider (the ~30 Hz timer calls this):
+        the track's level, or while it's armed to record audio, its input's
+        level, with a clip light beside it. */
+    void updateMeter();
 
     /** Shows the rename field over the name. */
     void startRenaming();
@@ -58,6 +61,7 @@ private:
     IconButton armButton  { "Arm for recording", Icon::record };
     IconButton automationButton { "Show automation", Icon::automation };
     MeterSlider volume;   // the track's level and volume in one, like the master's
+    ClipLight clipLight;  // armed audio tracks: the input has clipped
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::TextEditor nameEditor;
     bool renaming = false;

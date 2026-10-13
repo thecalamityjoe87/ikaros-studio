@@ -3,6 +3,7 @@
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/dialogs/MonitoringWarning.h"
 #include <map>
 #include <tuple>
 
@@ -50,8 +51,11 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
     monitorButton.setCornerRadius (size::radiusSmall);
     monitorButton.setIconSize (14.0f);
-    monitorButton.onClick = [this] { engine.getTracks().inputs().setMonitoring (info.id, ! info.monitoring); };
+    monitorButton.onClick = [this] { setMonitoringWithWarning (engine, info.id, ! info.monitoring, this); };
     addChildComponent (monitorButton);
+
+    clipLight.onClear = [this] { engine.getTracks().inputs().clearClipIndicator (info.id); };
+    addChildComponent (clipLight);
 
     // Automation: opens the lane under the track (amber while it's open).
     automationButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
@@ -166,15 +170,33 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
 
     const bool wasAudio = monitorButton.isVisible();
+    const bool hadClipLight = clipLight.isVisible();
     monitorButton.setVisible (t.kind == TrackKind::audio);
     monitorButton.setToggleState (t.monitoring, juce::dontSendNotification);
+    clipLight.setVisible (t.kind == TrackKind::audio && t.armed);
 
-    if (wasAudio != monitorButton.isVisible())
+    if (wasAudio != monitorButton.isVisible() || hadClipLight != clipLight.isVisible())
         resized();
     updateAccessibleNames();
 
     if (needsRepaint)
         repaint();
+}
+
+void TrackHeader::updateMeter()
+{
+    auto& tracks = engine.getTracks();
+
+    if (clipLight.isVisible())
+    {
+        auto reading = tracks.inputs().getInputMeter (info.id);
+        volume.setLevel (reading.level);
+        clipLight.setClipped (reading.clipped);
+    }
+    else
+    {
+        volume.setLevel (tracks.getTrackLevel (info.id));
+    }
 }
 
 void TrackHeader::mouseDown (const juce::MouseEvent& e)
@@ -417,6 +439,13 @@ void TrackHeader::resized()
     const auto volumeAndPan = volumeRow;
     pan.setBounds (volumeRow.removeFromRight (panSize).withSizeKeepingCentre (panSize, panSize));
     volumeRow.removeFromRight (6);
+
+    if (clipLight.isVisible())
+    {
+        clipLight.setBounds (volumeRow.removeFromRight (8).withSizeKeepingCentre (8, 8));
+        volumeRow.removeFromRight (5);
+    }
+
     volume.setBounds (volumeRow);
 
     // Under them, as wide as both: the automation picker (while it shows).

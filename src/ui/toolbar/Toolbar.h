@@ -26,6 +26,9 @@ public:
     /** Called by the owner's ~30 Hz timer. */
     void update (bool libraryVisible);
 
+    /** For hints about recording to point at. */
+    juce::Component& getRecordButton() noexcept     { return transport.getRecordButton(); }
+
     /** "+ New Track" was clicked: the owner shows the track-type menu. */
     std::function<void (juce::Component*)> onNewTrackRequested;
 

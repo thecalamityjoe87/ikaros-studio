@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/state/Selection.h"
+#include "ui/widgets/ClipLight.h"
 #include "ui/widgets/IconButton.h"
 #include "ui/widgets/LevelMeter.h"
 
@@ -12,6 +13,7 @@ namespace ikaros
     The "Recording" section of the track inspector.
 
       Audio track:      input, monitoring on/off, and an input level meter
+                        with a clip light
       Instrument track: which keyboards it records from
 */
 class RecordingView  : public juce::Component
@@ -38,6 +40,7 @@ private:
     juce::ComboBox inputBox;
     IconButton monitorButton { "Monitoring", std::nullopt, "Monitoring" };
     LevelMeter meter;
+    ClipLight clipLight;
     juce::Rectangle<int> inputLabelArea, hintArea;
 
     static constexpr int sidePadding = 12;

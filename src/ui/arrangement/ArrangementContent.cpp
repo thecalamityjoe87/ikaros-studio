@@ -131,8 +131,8 @@ double ArrangementView::Content::getEndBeat() const
 
 void ArrangementView::Content::updateMeters()
 {
-    for (auto& [id, header] : headers)
-        header->setLevel (owner.engine.getTracks().getTrackLevel (id));
+    for (auto& entry : headers)
+        entry.second->updateMeter();
 }
 
 TrackHeader* ArrangementView::Content::findHeader (TrackId id) const

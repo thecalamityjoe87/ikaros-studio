@@ -8,6 +8,8 @@ A saved session is a single `.iksession` file, like a GarageBand project: it hol
 
 While you work, the app keeps its own recovery copy of the session a few seconds after you stop making changes, and recordings go to disk as you play. Your saved file only changes when you save. If the app crashes, it offers to bring back your unsaved work the next time it starts, including a take that was cut short.
 
+Recordings line up with the music on their own: the app allows for the delay of your audio interface. If the audio device stops or changes, or the disk fills up, in the middle of a take, recording stops and keeps what you played so far, and the app tells you what happened. It also lets you know when your input was too loud.
+
 ## Sounds and plug-ins
 
 The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`.
