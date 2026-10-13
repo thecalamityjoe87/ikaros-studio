@@ -1,6 +1,7 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
 #include "engine/SoundLibrary.h"
+#include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -110,6 +111,9 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
 
     if (auto* track = clip.getClipTrack())
         r.trackId = track->itemID.getRawID();
+
+    r.takeCount = countTakes (clip);
+    r.currentTake = juce::jmax (0, currentTakeIndex (clip));
 
     if (clip.isLooping())
     {

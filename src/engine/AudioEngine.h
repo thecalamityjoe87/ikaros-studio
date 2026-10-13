@@ -186,7 +186,9 @@ public:
     /** Starts recording onto the armed track (arming the selected track for
         this take if none is armed), or stops recording. The take becomes a
         region when recording stops. With the count-in on, one bar of clicks
-        plays first.
+        plays first. With the loop on (cycle recording) it starts at the
+        loop's start and each pass becomes a take (see TakeEditor); a loop
+        under 2 seconds is refused (the report says loopTooShort).
 
         Takes are lined up with the music automatically: Tracktion moves each
         one back by the latency the audio device reports. If the device stops,
@@ -199,9 +201,22 @@ public:
     void setLoopRangeBeats (double startBeat, double endBeat);
     void setMetronomeEnabled (bool);
 
-    /** One bar of metronome clicks before recording starts. This is an app
-        preference (Tracktion stores it in its settings), not part of a session. */
+    /** MIDI cycle recording: keep each pass as a take of one region (true),
+        or merge every pass's notes into the region (false, the default).
+        An app preference, like the count-in. Audio passes are always takes. */
+    void setMidiCycleTakes (bool keepAsTakes);
+    bool getMidiCycleTakes() const;
+
+    /** Metronome clicks before recording starts (one or two bars, see
+        setCountInBars). This is an app preference (Tracktion stores it in
+        its settings), not part of a session. */
     void setCountInEnabled (bool);
+
+    /** How many bars the count-in plays: 0 (off), 1 or 2. Turning the
+        count-in on with setCountInEnabled uses the last length chosen here. */
+    void setCountInBars (int bars);
+    int getCountInBars() const;
+
     void setBpm (double bpm);
     void setTimeSignature (int numerator, int denominator);
 
@@ -297,6 +312,7 @@ private:
     friend class InputRouter;
     friend class RegionEditor;
     friend class NoteEditor;
+    friend class TakeEditor;
     friend class EffectsController;
     friend class EqController;
     friend class SendBuses;

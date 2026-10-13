@@ -99,6 +99,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             comp->onMouseUp     = [this] (RegionComponent& c, const juce::MouseEvent& e) { owner.regionMouseUp (c, e); };
             comp->onDoubleClick = [this] (RegionComponent& c, RegionComponent::Zone z)   { owner.regionDoubleClicked (c, z); };
             comp->onEscape      = [this] { return owner.regionDrag->cancel(); };
+            comp->onTakeBadge   = [this] (RegionComponent& c)                        { owner.showTakeMenu (c); };
 
             auto rid = info.id;
             comp->onRename = [this, rid] (const juce::String& name) { owner.engine.getTracks().regions().renameRegion (rid, name); };

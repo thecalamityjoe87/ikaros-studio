@@ -344,7 +344,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
                                    CommandIDs::renameRegion, CommandIDs::deleteRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
-                                   CommandIDs::toggleMetronome, CommandIDs::toggleCountIn,
+                                   CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
+                                   CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
@@ -539,9 +540,26 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (transport.metronome);
             info.addDefaultKeypress ('u', cmd);
             break;
-        case CommandIDs::toggleCountIn:
-            info.setInfo ("Count-in", "Play one bar of clicks before recording starts", "Transport", 0);
-            info.setTicked (transport.countIn);
+        // The Count-in submenu: one of the three is ticked.
+        case CommandIDs::countInOff:
+            info.setInfo ("Off", "Start recording straight away", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 0);
+            break;
+
+        case CommandIDs::countInOneBar:
+            info.setInfo ("1 Bar", "Play one bar of clicks before recording starts", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 1);
+            break;
+
+        case CommandIDs::countInTwoBars:
+            info.setInfo ("2 Bars", "Play two bars of clicks before recording starts", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 2);
+            break;
+
+        case CommandIDs::toggleMidiCycleTakes:
+            info.setInfo ("Keep MIDI Loop Passes as Takes",
+                          "When recording MIDI with the loop on, keep each pass as a take instead of merging them", "Transport", 0);
+            info.setTicked (engine.getMidiCycleTakes());
             break;
 
         case CommandIDs::toggleLibrary:
@@ -753,7 +771,10 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::goToStart:       engine.goToStart(); break;
         case CommandIDs::toggleLoop:      engine.setLooping (! engine.getTransportState().looping); break;
         case CommandIDs::toggleMetronome: engine.setMetronomeEnabled (! engine.getTransportState().metronome); break;
-        case CommandIDs::toggleCountIn:   engine.setCountInEnabled (! engine.getTransportState().countIn); break;
+        case CommandIDs::countInOff:      engine.setCountInBars (0); break;
+        case CommandIDs::countInOneBar:   engine.setCountInBars (1); break;
+        case CommandIDs::countInTwoBars:  engine.setCountInBars (2); break;
+        case CommandIDs::toggleMidiCycleTakes: engine.setMidiCycleTakes (! engine.getMidiCycleTakes()); break;
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
         case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
@@ -1117,6 +1138,12 @@ void MainComponent::showRecordingReport (const RecordingReport& report)
         case Reason::notStarted:
             showError ("Not Enough Disk Space",
                        "Recording needs at least 200 MB of free disk space. Free up some space, then try again.");
+            return;
+
+        case Reason::loopTooShort:
+            showError ("Loop Too Short",
+                       "Recording with the loop on needs a loop at least 2 seconds long. "
+                       "Make the loop longer, or turn the loop off to record.");
             return;
 
         case Reason::deviceStopped:

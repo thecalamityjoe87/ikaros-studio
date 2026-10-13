@@ -228,7 +228,7 @@ void Autosaver::sessionSaved()
 }
 
 //==============================================================================
-void Autosaver::recordingStarting (double startBeats)
+void Autosaver::recordingStarting (double startBeats, double loopEndBeats, bool midiTakes)
 {
     if (edit == nullptr)
         return;
@@ -236,6 +236,8 @@ void Autosaver::recordingStarting (double startBeats)
     autosaveNow();
     recording = true;
     recordStartBeats = startBeats;
+    recordLoopEndBeats = loopEndBeats;
+    recordMidiTakes = midiTakes;
     recordingSince = juce::Time::getMillisecondCounter();
     startTimer (100);   // often enough that Tracktion's queue of notes never fills up
 }
@@ -279,6 +281,8 @@ void Autosaver::pollRecording()
                 t->target = target;
                 t->take.track = target.getRawID();
                 t->take.startBeats = recordStartBeats;
+                t->take.loopEndBeats = recordLoopEndBeats;
+                t->take.midiTakes = recordMidiTakes;
                 t->take.recordedAfter = lastAutosaveId;
 
                 if (auto file = instance->getRecordingFile (target); file != juce::File())

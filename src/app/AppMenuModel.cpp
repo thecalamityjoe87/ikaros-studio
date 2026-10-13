@@ -90,7 +90,13 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::goToStart);
         add (CommandIDs::toggleLoop);
         add (CommandIDs::toggleMetronome);
-        add (CommandIDs::toggleCountIn);
+
+        juce::PopupMenu countIn;
+        countIn.addCommandItem (&commands, CommandIDs::countInOff);
+        countIn.addCommandItem (&commands, CommandIDs::countInOneBar);
+        countIn.addCommandItem (&commands, CommandIDs::countInTwoBars);
+        m.addSubMenu ("Count-in", countIn);
+        add (CommandIDs::toggleMidiCycleTakes);
         m.addSeparator();
         add (CommandIDs::showMixerTab);
         add (CommandIDs::toggleAutomation);

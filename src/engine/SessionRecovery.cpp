@@ -39,6 +39,8 @@ bool SessionRecovery::writeInfo (const juce::File& workFolder, const Info& info)
         t->setProperty ("track", juce::String::toHexString ((juce::int64) take.track));   // 64-bit IDs don't survive as JSON numbers
         t->setProperty ("path", take.path);
         t->setProperty ("startBeats", take.startBeats);
+        t->setProperty ("loopEndBeats", take.loopEndBeats);
+        t->setProperty ("midiTakes", take.midiTakes);
         t->setProperty ("recordedAfter", take.recordedAfter);
         takes.add (juce::var (t));
     }
@@ -81,6 +83,8 @@ std::optional<SessionRecovery::Info> SessionRecovery::readInfo (const juce::File
             take.track = (TrackId) t["track"].toString().getHexValue64();
             take.path = t["path"].toString();
             take.startBeats = (double) t["startBeats"];
+            take.loopEndBeats = (double) t.getProperty ("loopEndBeats", 0.0);
+            take.midiTakes = (bool) t.getProperty ("midiTakes", false);
             take.recordedAfter = t["recordedAfter"].toString();
 
             if (take.track != 0 && take.path.isNotEmpty())

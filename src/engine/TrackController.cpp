@@ -49,6 +49,7 @@ TrackController::TrackController (AudioEngine& o)
       // Importing audio may need a new audio track: RegionEditor gets a
       // function that makes one, instead of depending on this class.
       regionEditor (std::make_unique<RegionEditor> (o, [this] (const juce::String& name) { return createAudioTrack (name); })),
+      takeEditor (std::make_unique<TakeEditor> (o)),
       noteEditor (std::make_unique<NoteEditor> (o)),
       effectsController (std::make_unique<EffectsController> (o)),
       sendBuses (std::make_unique<SendBuses> (o)),

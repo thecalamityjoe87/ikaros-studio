@@ -13,7 +13,7 @@ namespace
 {
     constexpr float corner = 8.0f;
     constexpr int stripHeight = 20;
-    constexpr int loopCornerWidth = 14;    // the loop handle in the top-right corner
+    constexpr int loopCornerWidth = 18;    // the loop handle: the upper half of the right edge
     constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
     constexpr int fadeHandleReach = 7;        // how close the mouse has to be to grab one
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
@@ -62,21 +62,47 @@ RegionComponent::Zone RegionComponent::getZoneAt (juce::Point<int> p) const
     if (p.x < edge)
         return Zone::leftEdge;
 
-    // The top of the right edge loops; the rest of it trims.
-    if (getWidth() >= 32 && p.y < stripHeight && p.x >= getWidth() - loopCornerWidth)
-        return Zone::loopCorner;
-
     // An audio region's fade handles, at the top of the waveform. Near an
-    // edge they win over trimming, which the rest of the edge still does.
+    // edge they win over looping and trimming, which the rest of the edge
+    // still does.
     if (! info.isMidi && getWidth() >= 32 && p.y >= stripHeight && p.y < stripHeight + fadeHandleReach)
         for (bool fadeIn : { true, false })
             if (std::abs ((float) p.x - getFadeHandle (fadeIn).x) <= (float) fadeHandleReach)
                 return fadeIn ? Zone::fadeIn : Zone::fadeOut;
 
+    // As in GarageBand: the upper half of the right edge loops, the lower half trims.
+    if (getWidth() >= 32 && p.y < getHeight() / 2 && p.x >= getWidth() - loopCornerWidth)
+        return Zone::loopCorner;
+
     if (p.x >= getWidth() - edge)
         return Zone::rightEdge;
 
+    if (getTakeBadgeBounds().contains (p))
+        return Zone::takeBadge;
+
     return p.y < stripHeight ? Zone::nameStrip : Zone::body;
+}
+
+// "Take 2 ▾" at the start of the name strip, before the name (where it's
+// seen even when the region runs off the screen); just the number on a
+// narrow region; nothing on one too narrow for that.
+static juce::String takeBadgeText (const RegionInfo& info, bool full)
+{
+    const auto number = juce::String (info.currentTake + 1);
+    return full ? "Take " + number : number;
+}
+
+static constexpr int fullTakeBadgeMinWidth = 110;   // narrower regions show just the number
+
+juce::Rectangle<int> RegionComponent::getTakeBadgeBounds() const
+{
+    if (! info.hasTakes() || getWidth() < 32 + loopCornerWidth)
+        return {};
+
+    const bool full = getWidth() >= fullTakeBadgeMinWidth;
+    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (10.0f), takeBadgeText (info, full));
+    const int width = textWidth + (full ? 22 : 12);   // room for the arrow on the full one
+    return { 6, 3, width, stripHeight - 6 };
 }
 
 void RegionComponent::setFadePreview (std::optional<double> fadeInBeats, std::optional<double> fadeOutBeats)
@@ -178,9 +204,42 @@ void RegionComponent::paint (juce::Graphics& g)
         g.setColour (colour::regionStrip (colour));
         g.fillRect (strip);
 
+        // The take badge (if any) comes first; the name follows it.
+        const auto badge = getTakeBadgeBounds().toFloat();
+        auto nameArea = strip.reduced (8.0f, 0.0f);
+
+        if (! badge.isEmpty())
+            nameArea.setLeft (badge.getRight() + 5.0f);
+
+        if (getWidth() >= 32 && (hovering || loopPreview))
+            nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
+
         g.setColour (colour::regionStripText (colour));
         g.setFont (fonts::uiBold (11.0f));
-        g.drawText (info.name, strip.reduced (8.0f, 0.0f), juce::Justification::centredLeft, true);
+        g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+
+        if (! badge.isEmpty())
+        {
+            const bool full = getWidth() >= fullTakeBadgeMinWidth;
+            g.setColour (colour::regionStripText (colour).withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
+            g.fillRoundedRectangle (badge, badge.getHeight() * 0.5f);
+
+            auto text = badge.reduced (6.0f, 0.0f);
+            g.setColour (colour::regionStripText (colour));
+            g.setFont (fonts::uiBold (10.0f));
+
+            if (full)
+            {
+                // A small down arrow: it opens a menu.
+                auto arrow = text.removeFromRight (7.0f).withSizeKeepingCentre (7.0f, 4.0f);
+                juce::Path p;
+                p.addTriangle (arrow.getTopLeft(), arrow.getTopRight(), { arrow.getCentreX(), arrow.getBottom() });
+                g.fillPath (p);
+                text.removeFromRight (3.0f);
+            }
+
+            g.drawText (takeBadgeText (info, full), text, juce::Justification::centred, false);
+        }
 
         auto body = r.reduced (3.0f, 4.0f);
 
@@ -194,14 +253,21 @@ void RegionComponent::paint (juce::Graphics& g)
         if (! info.isMidi)
             paintFades (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
 
-        // The loop handle: a small loop arrow in the corner, while the mouse
-        // is over it or it's being dragged.
-        if (hoveringLoopCorner || loopPreview)
+        // The loop handle: a small loop arrow in the top-right corner. It
+        // shows faintly while the mouse is over the region (so it can be
+        // found), and lights up over the loop zone or while dragging.
+        if (getWidth() >= 32 && (hovering || loopPreview))
         {
-            auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth + 4.0f);
-            g.setColour (colour::regionStrip (colour).darker (0.3f));
-            g.fillRect (handle);
-            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour), 12.0f, 1.6f);
+            const bool active = hoveringLoopCorner || loopPreview;
+            auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth);
+
+            if (active)
+            {
+                g.setColour (colour::regionStrip (colour).darker (0.3f));
+                g.fillRect (handle);
+            }
+
+            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 12.0f, 1.6f);
         }
     }
 
@@ -448,26 +514,28 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
         hoveringLoopCorner = zone == Zone::loopCorner;
         repaint();
     }
+
+    if ((zone == Zone::takeBadge) != hoveringTakeBadge)
+    {
+        hoveringTakeBadge = zone == Zone::takeBadge;
+        repaint();
+    }
 }
 
 void RegionComponent::mouseEnter (const juce::MouseEvent&)
 {
     hovering = true;
-
-    if (! info.isMidi)
-        repaint();
+    repaint();   // the loop handle (and an audio region's fade handles) show while the mouse is over it
 }
 
 void RegionComponent::mouseExit (const juce::MouseEvent&)
 {
     hovering = false;
+    repaint();
 
-    if (! info.isMidi)
-        repaint();
-
-    if (hoveringLoopCorner)
+    if (hoveringLoopCorner || hoveringTakeBadge)
     {
-        hoveringLoopCorner = false;
+        hoveringLoopCorner = hoveringTakeBadge = false;
         repaint();
     }
 }
@@ -476,19 +544,28 @@ void RegionComponent::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
 
+    // The take badge is a button of its own, not the start of a drag.
+    pressedTakeBadge = e.mods.isLeftButtonDown() && getZoneAt (e.getPosition()) == Zone::takeBadge && onTakeBadge;
+
+    if (pressedTakeBadge)
+    {
+        onTakeBadge (*this);
+        return;
+    }
+
     if (onMouseDown)
         onMouseDown (*this, e);
 }
 
 void RegionComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (onMouseDrag)
+    if (onMouseDrag && ! pressedTakeBadge)
         onMouseDrag (*this, e);
 }
 
 void RegionComponent::mouseUp (const juce::MouseEvent& e)
 {
-    if (onMouseUp)
+    if (onMouseUp && ! std::exchange (pressedTakeBadge, false))
         onMouseUp (*this, e);
 }
 

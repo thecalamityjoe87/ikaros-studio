@@ -53,6 +53,10 @@ public:
         A report saying so is then waiting for the UI. */
     bool canStartTake();
 
+    /** Record was refused for another reason (e.g. loopTooShort): leaves a
+        report saying so. */
+    void refuseTake (RecordingStopReason);
+
     /** A take is starting. inputId is the audio input it records from
         (empty for a MIDI take). */
     void takeStarting (const juce::String& inputId);

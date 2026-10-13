@@ -49,7 +49,10 @@ namespace CommandIDs
         goToStart,
         toggleLoop,
         toggleMetronome,
-        toggleCountIn,
+        countInOff,
+        countInOneBar,
+        countInTwoBars,
+        toggleMidiCycleTakes,
 
         toggleLibrary,
         toggleBottomPanel,

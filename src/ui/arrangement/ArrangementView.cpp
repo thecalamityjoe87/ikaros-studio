@@ -504,6 +504,40 @@ void ArrangementView::regionDoubleClicked (RegionComponent& comp, RegionComponen
         onOpenRegionInEditor (info.id);
 }
 
+void ArrangementView::showTakeMenu (RegionComponent& comp)
+{
+    const auto info = comp.getInfo();
+    selection.selectRegion (info.trackId, info.id);
+
+    auto& takes = engine.getTracks().takes();
+    juce::PopupMenu menu;
+    int itemId = 1;   // PopupMenu item IDs must not be 0
+
+    // The takes first (ticked: the one playing), then what can be done with them.
+    for (auto& take : takes.getTakes (info.id))
+    {
+        const int index = itemId - 1;
+        menu.addItem (juce::PopupMenu::Item (take.name)
+                          .setID (itemId++)
+                          .setTicked (take.current)
+                          .setAction ([&takes, id = info.id, index] { takes.setCurrentTake (id, index); }));
+    }
+
+    menu.addSeparator();
+    menu.addItem (juce::PopupMenu::Item ("Delete Unused Takes")
+                      .setID (itemId++)
+                      .setEnabled (info.takeCount > 1)
+                      .setAction ([&takes, id = info.id] { takes.deleteUnusedTakes (id); }));
+    menu.addItem (juce::PopupMenu::Item ("Flatten (Keep Only This Take)")
+                      .setID (itemId++)
+                      .setAction ([&takes, id = info.id] { takes.flattenTakes (id); }));
+
+    // Async: menus must not block the message loop. The actions capture the
+    // region's ID, not the component, which may be rebuilt meanwhile.
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&comp)
+                                                  .withTargetScreenArea (comp.localAreaToGlobal (comp.getTakeBadgeBounds())));
+}
+
 void ArrangementView::showRegionMenu()
 {
     // The same commands as the Region menu, so names, shortcuts and enabled

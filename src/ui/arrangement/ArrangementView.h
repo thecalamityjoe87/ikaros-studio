@@ -195,6 +195,7 @@ private:
     void regionMouseUp (RegionComponent&, const juce::MouseEvent&);
     void regionDoubleClicked (RegionComponent&, RegionComponent::Zone);
     void showRegionMenu();
+    void showTakeMenu (RegionComponent&);   // the take badge's menu
 
     // Context menus for tracks. They act on the selected track, so the
     // header or lane selects its track before showing them.

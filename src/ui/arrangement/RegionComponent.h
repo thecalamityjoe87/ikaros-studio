@@ -21,10 +21,12 @@ class RegionComponent  : public juce::Component
 {
 public:
     /** The parts of a region that react differently to the mouse. The loop
-        corner is the top-right corner: dragging it repeats the content. The
-        fade handles sit on an audio region's waveform, at the top, where
-        each fade ends. */
-    enum class Zone { body, nameStrip, leftEdge, rightEdge, loopCorner, fadeIn, fadeOut };
+        "corner" is the upper half of the right edge, as in GarageBand (the
+        lower half trims): dragging it repeats the content. The fade handles
+        sit on an audio region's waveform, at the top, where each fade ends.
+        A region with takes has a take badge in its name strip, which opens
+        the take menu. */
+    enum class Zone { body, nameStrip, leftEdge, rightEdge, loopCorner, fadeIn, fadeOut, takeBadge };
 
     RegionComponent (const RegionInfo&, juce::Colour trackColour);
 
@@ -53,6 +55,12 @@ public:
     std::function<void (const juce::String& newName)> onRename;
     std::function<void()> onOpenEditor;
 
+    /** The take badge was clicked (the region has takes). */
+    std::function<void (RegionComponent&)> onTakeBadge;
+
+    /** Where the take badge is drawn (empty if the region has no takes or is too narrow). */
+    juce::Rectangle<int> getTakeBadgeBounds() const;
+
     /** Escape was pressed on the region. Return true if it was used (it
         cancelled a drag), so it doesn't go on to the app's shortcuts. */
     std::function<bool()> onEscape;
@@ -77,6 +85,8 @@ private:
     std::optional<juce::Range<double>> trimPreview;
     bool loopPreview = false;
     bool hoveringLoopCorner = false;
+    bool hoveringTakeBadge = false;
+    bool pressedTakeBadge = false;                  // the press went to the badge: no drag
     bool hovering = false;                          // the fade handles show while the mouse is over the region
     std::optional<double> fadeInPreview, fadeOutPreview;
 

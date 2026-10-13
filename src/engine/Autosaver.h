@@ -72,8 +72,10 @@ public:
 
     /** Recording: call just before it starts (it autosaves first, so a
         take always has a recovery copy to go back into) and just before it
-        stops (to write the last of the MIDI). */
-    void recordingStarting (double startBeats);
+        stops (to write the last of the MIDI). For a cycle recording,
+        loopEndBeats is where the loop ends (it starts at startBeats);
+        otherwise 0. midiTakes: MIDI passes are kept as takes. */
+    void recordingStarting (double startBeats, double loopEndBeats = 0.0, bool midiTakes = false);
     void recordingStopping();
 
     juce::Time getLastAutosaveTime() const     { return lastAutosaveTime; }
@@ -96,6 +98,8 @@ private:
 
     bool recording = false;
     double recordStartBeats = 0.0;
+    double recordLoopEndBeats = 0.0;
+    bool recordMidiTakes = false;
     juce::uint32 recordingSince = 0;
     std::vector<std::unique_ptr<LiveTake>> takes;
 

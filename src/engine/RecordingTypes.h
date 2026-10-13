@@ -30,7 +30,8 @@ enum class RecordingStopReason
     sampleRateChanged,      // the device switched sample rate mid-take
     diskFull,               // free disk space ran low; the take was stopped before it filled up
     diskWriteFailed,        // the take couldn't be written (Tracktion stopped it)
-    notStarted              // Record was pressed but there's too little disk space to start
+    notStarted,             // Record was pressed but there's too little disk space to start
+    loopTooShort            // Record was pressed with the loop on, but the loop is under 2 seconds
 };
 
 /** How a take went, handed to the UI once after it ends. */

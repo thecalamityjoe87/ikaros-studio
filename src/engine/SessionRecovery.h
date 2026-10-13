@@ -58,6 +58,11 @@ public:
         juce::String path;          // in the working copy: "Audio/....wav", or "Takes/....txt" for MIDI
         double startBeats = 0.0;    // where the take starts on the timeline
 
+        // A cycle recording: where the loop ends (it starts at startBeats),
+        // and whether MIDI passes were being kept as takes. 0 = not a cycle.
+        double loopEndBeats = 0.0;
+        bool midiTakes = false;
+
         /** The ID of the autosave written just before recording started. If
             the autosave found after a crash is still that one, the take
             isn't in it, and recovery adds it. A later autosave already has

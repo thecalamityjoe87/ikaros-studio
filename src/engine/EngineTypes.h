@@ -77,7 +77,14 @@ struct RegionInfo
     double fadeInBeats = 0.0;
     double fadeOutBeats = 0.0;
 
+    // Takes: other versions of the region recorded in the same place (see
+    // TakeEditor). 0 = an ordinary region; the notes and peaks above are the
+    // current take's.
+    int takeCount = 0;
+    int currentTake = 0;    // index into the takes
+
     double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
+    bool hasTakes() const noexcept          { return takeCount > 0; }
     bool isLooped() const noexcept          { return loopLengthBeats > 0.0; }
 
     /** The length of what the piano roll edits: one loop, or the whole region. */
@@ -399,8 +406,8 @@ struct TransportState
     double recordStartBeats = 0.0; // where the current take started
     bool looping = false;
     bool metronome = false;
-    bool countIn = false;          // one bar of clicks before recording starts
-    bool countingIn = false;       // recording has started but the count-in bar is still playing
+    bool countIn = false;          // clicks (one or two bars) before recording starts
+    bool countingIn = false;       // recording has started but the count-in is still playing
     double positionBeats = 0.0;
     double positionSeconds = 0.0;
     int bar = 1;                   // 1-based

@@ -7,6 +7,7 @@
 #include "engine/NoteEditor.h"
 #include "engine/RegionEditor.h"
 #include "engine/SendBuses.h"
+#include "engine/TakeEditor.h"
 #include <memory>
 #include <optional>
 
@@ -24,6 +25,7 @@ class AudioEngine;
         inputs()   - live MIDI/audio input routing, arming, input meters
         regions()  - regions, the region clipboard, audio file import
         notes()    - notes in a MIDI region (the piano roll)
+        takes()    - a region's takes: picking one, deleting unused ones, flattening
         effects()  - the Sound tab's knobs, the instrument and the effect chain
         sends()    - each track's sends to the shared Reverb and Delay buses
         eq()       - the EQ tab's 4-band EQ, on a track or the master
@@ -43,6 +45,8 @@ public:
     RegionEditor& regions() noexcept                        { return *regionEditor; }
     const RegionEditor& regions() const noexcept            { return *regionEditor; }
     NoteEditor& notes() noexcept                            { return *noteEditor; }
+    TakeEditor& takes() noexcept                            { return *takeEditor; }
+    const TakeEditor& takes() const noexcept                { return *takeEditor; }
     EffectsController& effects() noexcept                   { return *effectsController; }
     const EffectsController& effects() const noexcept       { return *effectsController; }
     SendBuses& sends() noexcept                             { return *sendBuses; }
@@ -123,6 +127,7 @@ private:
 
     std::unique_ptr<InputRouter> inputRouter;
     std::unique_ptr<RegionEditor> regionEditor;
+    std::unique_ptr<TakeEditor> takeEditor;
     std::unique_ptr<NoteEditor> noteEditor;
     std::unique_ptr<EffectsController> effectsController;
     std::unique_ptr<SendBuses> sendBuses;

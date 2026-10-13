@@ -150,6 +150,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
+    src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
+    src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
     src/engine/SoundControls.h
@@ -418,7 +420,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,longrecording)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -430,8 +432,10 @@ if(IKAROS_BUILD_TESTS)
     # Recording through a pretend audio interface (see src/engine/TestAudioDevice.h):
     # latency, device trouble, full disks. The long take is "slow" (minutes).
     add_test(NAME EngineSmokeTest.Recording COMMAND IkarosEngineSmokeTest --only=recording)
+    add_test(NAME EngineSmokeTest.Takes COMMAND IkarosEngineSmokeTest --only=takes)
     add_test(NAME EngineSmokeTest.LongRecording COMMAND IkarosEngineSmokeTest --only=longrecording)
     set_tests_properties(EngineSmokeTest.Recording PROPERTIES LABELS "recording")
+    set_tests_properties(EngineSmokeTest.Takes PROPERTIES LABELS "takes")
     set_tests_properties(EngineSmokeTest.LongRecording PROPERTIES LABELS "slow" TIMEOUT 1800)
 endif()
 

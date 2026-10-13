@@ -63,12 +63,17 @@ bool RecordingGuard::canStartTake()
     // itself if writing fails).
     if (free > 0 && free < minimumFreeSpace)
     {
-        report = RecordingReport { .reason = RecordingStopReason::notStarted };
-        reportTime = nowSeconds();
+        refuseTake (RecordingStopReason::notStarted);
         return false;
     }
 
     return true;
+}
+
+void RecordingGuard::refuseTake (RecordingStopReason reason)
+{
+    report = RecordingReport { .reason = reason };
+    reportTime = nowSeconds();
 }
 
 void RecordingGuard::takeStarting (const juce::String& inputId)

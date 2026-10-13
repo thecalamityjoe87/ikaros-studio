@@ -8,6 +8,7 @@
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
 #include "engine/SongExporter.h"
+#include "engine/TakeHelpers.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
@@ -16,6 +17,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 
 #include <regex>
+#include <set>
 
 namespace te = tracktion;   // the conventional short alias used in Tracktion's own examples
 using namespace std::literals;
@@ -405,7 +407,16 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // getChildFile handles absolute paths too: it just returns them.
         auto inWorkFolder = workFolder.getChildFile (path);
 
-        if (inWorkFolder.exists() || legacySessionFile == juce::File())
+        if (inWorkFolder.exists())
+            return inWorkFolder;
+
+        // Tracktion writes the paths of new recordings (and their takes)
+        // relative to the session *file* ("../Audio/Take 1.wav"), one ".."
+        // more than the folder. Saving rewrites them.
+        if (auto fromSessionFile = sessionFile.getChildFile (path); fromSessionFile.exists())
+            return fromSessionFile;
+
+        if (legacySessionFile == juce::File())
             return inWorkFolder;
 
         for (auto candidate : { legacySessionFile.getParentDirectory().getChildFile (path),
@@ -505,6 +516,12 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     // again when recording stops) and where the take started.
     TrackId autoArmedTrack = 0;
     double recordStartBeats = 0.0;
+
+    // The track being recorded onto and the regions it had before, so the
+    // take's new regions can be found when it ends (see TakeEditor).
+    TrackId takeTrack = 0;
+    std::set<RegionId> regionsBeforeTake;
+    bool midiTakesThisTake = false;
 
     //==============================================================================
     // After a session is created or opened, Tracktion finishes setting up on
@@ -1002,7 +1019,7 @@ static void prepareRegions (te::Edit& edit)
         for (auto* clip : track->getClips())
         {
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
-                detail::assignNoteIds (*midi);
+                detail::assignNoteIdsToEveryTake (*midi);   // the piano roll needs them on whichever take plays
             else if (auto* audio = dynamic_cast<te::AudioClipBase*> (clip))
                 detail::ensureEdgeFades (*audio);
         }
@@ -1019,6 +1036,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
         impl->edit->getTransport().stop (false, true);
         trackController->inputs().allNotesOff();
         recordingGuard->takeEnded();   // if a take was going (it stays in the old session)
+        impl->takeTrack = 0;
     }
 
     impl->detachMasterMeter();
@@ -1184,15 +1202,25 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
     if (! bundle.getParentDirectory().createDirectory() || ! audioFolder.createDirectory())
         return nullptr;
 
-    // Audio regions refer to their files by path. Find every region's file
-    // (while the paths still resolve as they did).
-    struct Source { te::Clip::Ptr clip; juce::File file; juce::var oldPath; };
+    // Audio regions, and each of their takes, refer to their files by path.
+    // Find every file (while the paths still resolve as they did). `node` is
+    // the clip's state or one of its TAKEs: the tree holding the path.
+    struct Source { juce::ValueTree node; juce::File file; juce::var oldPath; };
     std::vector<Source> sources;
 
     for (auto* track : te::getAudioTracks (edit))
+    {
         for (auto* clip : track->getClips())
-            if (dynamic_cast<te::WaveAudioClip*> (clip) != nullptr)
-                sources.push_back ({ clip, clip->getSourceFileReference().getFile(), clip->state[te::IDs::source] });
+        {
+            if (dynamic_cast<te::WaveAudioClip*> (clip) == nullptr)
+                continue;
+
+            sources.push_back ({ clip->state, clip->getSourceFileReference().getFile(), clip->state[te::IDs::source] });
+
+            for (auto take : detail::getTakesTree (*clip))
+                sources.push_back ({ take, te::SourceFileReference (edit, take, te::IDs::source).getFile(), take[te::IDs::source] });
+        }
+    }
 
     // Every file the session plays goes in its Audio folder, under a name
     // every system accepts. Each file is copied (or renamed) once, however
@@ -1236,7 +1264,7 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
         // nullptr = not an undo step: the user shouldn't be able to "undo" a save.
         const auto path = target.isAChildOf (workFolder) ? target.getRelativePathFrom (workFolder).replaceCharacter ('\\', '/')
                                                           : target.getFullPathName();
-        source.clip->state.setProperty (te::IDs::source, path, nullptr);
+        source.node.setProperty (te::IDs::source, path, nullptr);
     }
 
     // Writing the file first flushes every plug-in's settings into the state,
@@ -1256,7 +1284,7 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
         // Point everything back at the files it used before. (Copies made in
         // the Audio folder do no harm.)
         for (auto& source : sources)
-            source.clip->state.setProperty (te::IDs::source, source.oldPath, nullptr);
+            source.node.setProperty (te::IDs::source, source.oldPath, nullptr);
 
         return nullptr;
     }
@@ -1389,6 +1417,8 @@ static bool restoreTake (te::Edit& edit, const SessionRecovery::Take& take, cons
         return false;
 
     const auto start = beatToTime (edit, take.startBeats);
+    const bool cycle = take.loopEndBeats > take.startBeats;
+    const auto loopEnd = beatToTime (edit, cycle ? take.loopEndBeats : take.startBeats);
 
     if (! take.midi)
     {
@@ -1398,20 +1428,34 @@ static bool restoreTake (te::Edit& edit, const SessionRecovery::Take& take, cons
         if (seconds <= 0.0)
             return false;
 
-        return track->insertWaveClip ("Recovered Take", file, { { start, start + te::TimeDuration::fromSeconds (seconds) }, {} }, false) != nullptr;
+        auto clip = track->insertWaveClip ("Recovered Take", file, { { start, start + te::TimeDuration::fromSeconds (seconds) }, {} }, false);
+
+        // A cycle recording's file holds every pass, one after the other.
+        if (clip != nullptr && cycle)
+            detail::splitIntoPassTakes (*clip, loopEnd - start);
+
+        return clip != nullptr;
     }
 
     // Pair each note-on with its note-off. Times are seconds on the timeline.
-    struct Played { int pitch, velocity; double start, end; };
+    // During a cycle recording they're folded into the loop, so a time that
+    // jumps back to the loop's start begins the next pass.
+    struct Played { int pitch, velocity; double start, end; int pass; };
     std::vector<Played> notes;
     std::map<int, size_t> sounding;   // channel/pitch -> index in notes
     double lastTime = start.inSeconds();
+    const double loopSeconds = (loopEnd - start).inSeconds();
+    int pass = 0;
 
     for (auto& m : SessionRecovery::readJournal (file))
     {
         const auto t = m.getTimeStamp();
         const int key = m.getChannel() * 128 + m.getNoteNumber();
-        lastTime = juce::jmax (lastTime, t);
+
+        if (cycle && t + loopSeconds * 0.5 < lastTime)
+            ++pass;
+
+        lastTime = cycle ? t : juce::jmax (lastTime, t);
 
         if (m.isNoteOn())
         {
@@ -1419,7 +1463,7 @@ static bool restoreTake (te::Edit& edit, const SessionRecovery::Take& take, cons
                 notes[it->second].end = t;   // played again before it was let go
 
             sounding[key] = notes.size();
-            notes.push_back ({ m.getNoteNumber(), m.getVelocity(), t, t });
+            notes.push_back ({ m.getNoteNumber(), m.getVelocity(), t, t, pass });
         }
         else if (m.isNoteOff())
         {
@@ -1435,29 +1479,73 @@ static bool restoreTake (te::Edit& edit, const SessionRecovery::Take& take, cons
     for (auto& [key, index] : sounding)
         notes[index].end = lastTime;
 
+    // A note held over the end of the loop ends there.
+    for (auto& n : notes)
+        if (cycle && n.end < n.start)
+            n.end = loopEnd.inSeconds();
+
     if (notes.empty())
         return false;
 
     double startBeat = take.startBeats, endBeat = take.startBeats + 1.0;
 
-    for (auto& n : notes)
+    if (cycle)
     {
-        startBeat = juce::jmin (startBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.start)));
-        endBeat = juce::jmax (endBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.end)));
+        endBeat = take.loopEndBeats;
+    }
+    else
+    {
+        for (auto& n : notes)
+        {
+            startBeat = juce::jmin (startBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.start)));
+            endBeat = juce::jmax (endBeat, timeToBeat (edit, te::TimePosition::fromSeconds (n.end)));
+        }
+
+        endBeat = std::ceil (endBeat);
     }
 
-    endBeat = std::ceil (endBeat);
     auto clip = track->insertMIDIClip ("Recovered Take", { beatToTime (edit, startBeat), beatToTime (edit, endBeat) }, nullptr);
 
     if (clip == nullptr)
         return false;
 
+    // Merged, every note goes in the region; as takes, the first pass's notes
+    // do and each later pass becomes a take (Tracktion's addTake wants
+    // timeline seconds).
+    const int firstPass = notes.front().pass;
+
     for (auto& n : notes)
     {
+        if (take.midiTakes && n.pass != firstPass)
+            continue;
+
         const auto noteStart = timeToBeat (edit, te::TimePosition::fromSeconds (n.start));
         const auto length = juce::jmax (1.0 / 64.0, timeToBeat (edit, te::TimePosition::fromSeconds (n.end)) - noteStart);
         clip->getSequence().addNote (n.pitch, te::BeatPosition::fromBeats (noteStart - startBeat),
                                      te::BeatDuration::fromBeats (length), n.velocity, 0, nullptr);
+    }
+
+    if (take.midiTakes)
+    {
+        for (int p = firstPass + 1; p <= notes.back().pass; ++p)
+        {
+            juce::MidiMessageSequence played;
+
+            for (auto& n : notes)
+            {
+                if (n.pass == p)
+                {
+                    played.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity), n.start);
+                    played.addEvent (juce::MidiMessage::noteOff (1, n.pitch), n.end);
+                }
+            }
+
+            if (played.getNumEvents() > 0)   // Tracktion leaves out passes without notes too
+            {
+                played.updateMatchedPairs();
+                clip->addTake (played, te::MidiList::NoteAutomationType::none);
+            }
+        }
     }
 
     return true;
@@ -1571,6 +1659,19 @@ void AudioEngine::stop()
 
 void AudioEngine::finishTake()
 {
+    // The regions the take made: cycle passes become takes, and so does
+    // what was recorded over.
+    if (auto* track = detail::findTrack (impl->edit.get(), std::exchange (impl->takeTrack, TrackId {})))
+    {
+        std::vector<RegionId> recorded;
+
+        for (auto* clip : track->getClips())
+            if (impl->regionsBeforeTake.count (clip->itemID.getRawID()) == 0)
+                recorded.push_back (clip->itemID.getRawID());
+
+        trackController->takes().gatherRecordedTakes (recorded, impl->midiTakesThisTake);
+    }
+
     prepareRegions (*impl->edit);
 
     if (impl->autoArmedTrack != 0)
@@ -1578,6 +1679,9 @@ void AudioEngine::finishTake()
 
     recordingGuard->takeEnded();
 }
+
+// Tracktion's shortest loop for cycle recording.
+static constexpr auto minimumCycleSeconds = te::TimeDuration::fromSeconds (2.0);
 
 void AudioEngine::toggleRecord()
 {
@@ -1596,20 +1700,53 @@ void AudioEngine::toggleRecord()
     if (armed == 0)
         return;   // no track to record onto
 
-    if (! recordingGuard->canStartTake())
+    // Cycle recording always starts at the start of the loop: Tracktion cuts
+    // the recording into passes from there. It won't cycle-record a loop
+    // under 2 seconds (and would only say so through its own UI hooks).
+    const bool cycle = transport.looping && ! transport.getLoopRange().isEmpty();
+
+    const bool loopTooShort = cycle && transport.getLoopRange().getLength() < minimumCycleSeconds;
+
+    if (loopTooShort)
+        recordingGuard->refuseTake (RecordingStopReason::loopTooShort);
+
+    if (loopTooShort || ! recordingGuard->canStartTake())   // canStartTake checks the disk space
     {
-        // Too little disk space: the report explains.
+        // The report explains.
         if (impl->autoArmedTrack != 0)
             trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);
 
         return;
     }
 
+    if (cycle)
+        transport.setPosition (transport.getLoopRange().getStart());
+
+    // MIDI passes are merged into one region unless the user asked for takes.
+    // (Tracktion's setting is per MIDI input; recording without the loop
+    // always merges, as it did before takes.)
+    impl->midiTakesThisTake = cycle && getMidiCycleTakes();
+
+    for (auto& midiIn : impl->engine.getDeviceManager().getMidiInDevices())
+        midiIn->mergeRecordings = ! impl->midiTakesThisTake;
+
+    impl->takeTrack = armed;
+    impl->regionsBeforeTake.clear();
+
+    if (auto* track = detail::findTrack (impl->edit.get(), armed))
+        for (auto* clip : track->getClips())
+            impl->regionsBeforeTake.insert (clip->itemID.getRawID());
+
     // With the count-in on, Tracktion starts playback a bar early and clicks
     // through that bar (even with the metronome off); the take itself starts here.
-    impl->recordStartBeats = impl->edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
-    impl->autosaver.recordingStarting (impl->recordStartBeats);   // so a crash mid-take keeps the take
+    auto& tempo = impl->edit->tempoSequence;
+    impl->recordStartBeats = tempo.toBeats (transport.getPosition()).inBeats();
+    const double loopEndBeats = cycle ? tempo.toBeats (transport.getLoopRange().getEnd()).inBeats() : 0.0;
+    impl->autosaver.recordingStarting (impl->recordStartBeats, loopEndBeats, impl->midiTakesThisTake);   // so a crash mid-take keeps the take
     transport.record (false);
+
+    if (! transport.isRecording())
+        impl->takeTrack = 0;
 
     if (transport.isRecording())
     {
@@ -1666,9 +1803,43 @@ void AudioEngine::setMetronomeEnabled (bool enabled)
     impl->edit->clickTrackEnabled = enabled;
 }
 
+void AudioEngine::setMidiCycleTakes (bool keepAsTakes)
+{
+    impl->engine.getPropertyStorage().getPropertiesFile().setValue ("midiCycleTakes", keepAsTakes);
+}
+
+bool AudioEngine::getMidiCycleTakes() const
+{
+    return impl->engine.getPropertyStorage().getPropertiesFile().getBoolValue ("midiCycleTakes", false);
+}
+
 void AudioEngine::setCountInEnabled (bool enabled)
 {
-    impl->edit->setCountInMode (enabled ? te::Edit::CountIn::oneBar : te::Edit::CountIn::none);
+    // On: as many bars as were last chosen (one, until 2 is picked).
+    const int bars = impl->engine.getPropertyStorage().getPropertiesFile().getIntValue ("countInBars", 1);
+    setCountInBars (enabled ? bars : 0);
+}
+
+void AudioEngine::setCountInBars (int bars)
+{
+    bars = juce::jlimit (0, 2, bars);
+
+    if (bars > 0)
+        impl->engine.getPropertyStorage().getPropertiesFile().setValue ("countInBars", bars);   // remembered for the button
+
+    impl->edit->setCountInMode (bars == 2 ? te::Edit::CountIn::twoBar
+                              : bars == 1 ? te::Edit::CountIn::oneBar
+                                          : te::Edit::CountIn::none);
+}
+
+int AudioEngine::getCountInBars() const
+{
+    switch (impl->edit->getCountInMode())
+    {
+        case te::Edit::CountIn::oneBar:  return 1;
+        case te::Edit::CountIn::twoBar:  return 2;
+        default:                         return 0;
+    }
 }
 
 void AudioEngine::setBpm (double bpm)
