@@ -11,8 +11,15 @@ namespace ikaros::platform
     macOS and Windows tell JUCE about changes themselves, so there this does
     nothing. On Linux, JUCE lists the ALSA devices once and never again, so
     this watches /proc/asound/cards and has the list scanned afresh when it
-    changes. `lastSeen` is the caller's memory between calls (start it empty).
+    changes, and again for a few calls after, as a new card isn't always
+    usable right away. `watch` is the caller's memory between calls.
 */
-bool refreshAudioDeviceLists (juce::AudioDeviceManager&, juce::String& lastSeen);
+struct HardwareWatch
+{
+    juce::String cards;
+    int scansLeft = 0;
+};
+
+bool refreshAudioDeviceLists (juce::AudioDeviceManager&, HardwareWatch& watch);
 
 } // namespace ikaros::platform

@@ -15,6 +15,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Tracktion/JUCE translation units are huge (~3 GB each with -g), so cap Ninja's
+# parallelism by RAM instead of core count. Override with -DIKAROS_COMPILE_JOBS=N.
+cmake_host_system_information(RESULT IKAROS_TOTAL_MB QUERY TOTAL_PHYSICAL_MEMORY)
+cmake_host_system_information(RESULT IKAROS_CORES QUERY NUMBER_OF_LOGICAL_CORES)
+math(EXPR IKAROS_DEFAULT_JOBS "${IKAROS_TOTAL_MB} / 3072")
+if(IKAROS_DEFAULT_JOBS GREATER IKAROS_CORES)
+    set(IKAROS_DEFAULT_JOBS ${IKAROS_CORES})
+endif()
+if(IKAROS_DEFAULT_JOBS LESS 1)
+    set(IKAROS_DEFAULT_JOBS 1)
+endif()
+set(IKAROS_COMPILE_JOBS ${IKAROS_DEFAULT_JOBS} CACHE STRING "Max concurrent compile jobs (Ninja)")
+set_property(GLOBAL PROPERTY JOB_POOLS ikaros_compile=${IKAROS_COMPILE_JOBS} ikaros_link=1)
+set(CMAKE_JOB_POOL_COMPILE ikaros_compile)
+set(CMAKE_JOB_POOL_LINK ikaros_link)
+
 # Platform settings that must be decided *before* JUCE is added.
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
@@ -35,6 +51,28 @@ if(NOT EXISTS "${TE_DIR}/modules/juce/CMakeLists.txt")
         "Tracktion Engine / JUCE submodules are missing. Run:\n"
         "  git -c url.\"https://github.com/\".insteadOf=\"git@github.com:\" submodule update --init --recursive")
 endif()
+
+# Fixes to JUCE that aren't upstream: each patch is applied once (it's skipped
+# when it's already in).
+find_package(Git REQUIRED)
+set(JUCE_DIR "${TE_DIR}/modules/juce")
+file(GLOB IKAROS_JUCE_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/juce-*.patch")
+
+foreach(patch IN LISTS IKAROS_JUCE_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${JUCE_DIR}"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${JUCE_DIR}"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to JUCE")
+        endif()
+    endif()
+endforeach()
 
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).

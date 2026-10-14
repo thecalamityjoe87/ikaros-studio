@@ -1541,6 +1541,14 @@ static void runPreferencesSection (const juce::File& dir)
                      && prompt->inputName == scarlett && prompt->outputName == scarlett,
                    "an interface that appears is offered for both recording and playback, under its short name");
 
+            auto modes = before;
+            const juce::String front = "MiniFuse 2, USB Audio; Front output / input";
+            modes.outputs.addArray ({ "MiniFuse 2, USB Audio; Surround", front });
+            modes.inputs.add (front);
+            prompt = findDeviceChange (before, modes);
+            check (prompt && prompt->inputName == front && prompt->outputName == front,
+                   "of a card's modes, the one with both inputs and outputs is offered");
+
             auto dac = before;
             dac.outputs.add (headphones);
             prompt = findDeviceChange (before, dac);

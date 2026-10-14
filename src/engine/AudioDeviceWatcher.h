@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/RecordingTypes.h"
+#include "platform/AudioHardware.h"
 #include <functional>
 #include <optional>
 
@@ -47,20 +48,39 @@ public:
     /** Looks for a change now. */
     void check();
 
+    /** Opens what the prompt names. The old device is closed first, as a sound
+        server holds a new card for as long as the old stream runs through it,
+        and may still do so for a few seconds after: so it tries again until
+        it works or gives up. `done` gets the error, or empty. */
+    void switchTo (const AudioDevicePrompt&, std::function<void (juce::String error)> done);
+
     /** For tests: reads the devices from here instead of JUCE. */
     void setStateSource (std::function<AudioDeviceState()>);
 
 private:
-    void timerCallback() override       { check(); }
+    void timerCallback() override       { if (switching) trySwitch(); else check(); }
     void changeListenerCallback (juce::ChangeBroadcaster*) override   { check(); }
     AudioDeviceState readState() const;
+    void trySwitch();
+    void reopenIfBack (const AudioDeviceState& now);
 
     AudioEngine& owner;
     std::function<AudioDeviceState()> stateSource;   // empty: ask JUCE
     AudioDeviceState known;
     bool haveKnown = false;
-    juce::String lastHardware;                       // see platform::refreshAudioDeviceLists
+    platform::HardwareWatch hardware;                // see platform::refreshAudioDeviceLists
+    juce::String goneInput, goneOutput;              // the in-use device that left, until it's back or replaced
     std::optional<AudioDevicePrompt> pending;
+
+    struct Switching
+    {
+        AudioDevicePrompt prompt;
+        juce::AudioDeviceManager::AudioDeviceSetup previous;
+        std::function<void (juce::String)> done;
+        int tries = 0;
+    };
+
+    std::optional<Switching> switching;
 };
 
 } // namespace ikaros

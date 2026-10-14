@@ -2099,11 +2099,15 @@ std::optional<AudioDevicePrompt> AudioEngine::takeAudioDevicePrompt()
     return deviceWatcher->popPrompt();
 }
 
-juce::String AudioEngine::switchAudioDevice (const AudioDevicePrompt& prompt)
+void AudioEngine::switchAudioDevice (const AudioDevicePrompt& prompt, std::function<void (juce::String)> done)
+{
+    deviceWatcher->switchTo (prompt, std::move (done));
+}
+
+juce::String AudioEngine::openDevicesFor (const AudioDevicePrompt& prompt)
 {
     auto& adm = impl->engine.getDeviceManager().deviceManager;
-    const auto previous = adm.getAudioDeviceSetup();
-    auto setup = previous;
+    auto setup = adm.getAudioDeviceSetup();
 
     if (prompt.inputName.isNotEmpty())
     {
@@ -2117,13 +2121,7 @@ juce::String AudioEngine::switchAudioDevice (const AudioDevicePrompt& prompt)
         setup.useDefaultOutputChannels = true;
     }
 
-    auto error = adm.setAudioDeviceSetup (setup, true);
-
-    // A failed switch may leave the old device closed.
-    if (error.isNotEmpty())
-        adm.setAudioDeviceSetup (previous, true);
-
-    return error;
+    return adm.setAudioDeviceSetup (setup, true);
 }
 
 void AudioEngine::setMinimumFreeDiskSpace (juce::int64 bytes)
@@ -2141,6 +2139,7 @@ std::unique_ptr<juce::Component> AudioEngine::createAudioSettingsComponent()
                                                                       true,     // stereo pairs
                                                                       false);   // advanced options
     comp->setSize (500, 450);
+    audioSettings = comp.get();
     return comp;
 }
 

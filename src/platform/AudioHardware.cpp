@@ -1,18 +1,35 @@
 #include "platform/AudioHardware.h"
 
+#if JUCE_LINUX
+ #include <alsa/asoundlib.h>
+#endif
+
 namespace ikaros::platform
 {
 
-bool refreshAudioDeviceLists (juce::AudioDeviceManager& manager, juce::String& lastSeen)
+bool refreshAudioDeviceLists (juce::AudioDeviceManager& manager, HardwareWatch& watch)
 {
    #if JUCE_LINUX
     const auto cards = juce::File ("/proc/asound/cards").loadFileAsString();
 
-    const auto before = std::exchange (lastSeen, cards);
-
     // The first call only notes what's there.
-    if (before.isEmpty() || before == cards)
+    if (watch.cards.isEmpty())
+    {
+        watch.cards = cards;
         return false;
+    }
+
+    // A card is listed in /proc before its device files are usable, so one scan can miss it: scan again for a while.
+    if (cards != watch.cards)
+    {
+        watch.cards = cards;
+        watch.scansLeft = 6;
+    }
+
+    if (watch.scansLeft == 0)
+        return false;
+
+    --watch.scansLeft;
 
     juce::AudioIODeviceType* stale = nullptr;
 
@@ -29,13 +46,20 @@ bool refreshAudioDeviceLists (juce::AudioDeviceManager& manager, juce::String& l
     if (fresh == nullptr)
         return false;
 
+    // ALSA caches its configuration, so a card plugged in since wouldn't be listed.
+    snd_config_update_free_global();
     fresh->scanForDevices();
+
+    if (fresh->getDeviceNames (true) == stale->getDeviceNames (true)
+         && fresh->getDeviceNames (false) == stale->getDeviceNames (false))
+        return false;
+
     manager.removeAudioDeviceType (stale);
     manager.addAudioDeviceType (std::move (fresh));
     manager.sendChangeMessage();   // so an open device picker updates too
     return true;
    #else
-    juce::ignoreUnused (manager, lastSeen);
+    juce::ignoreUnused (manager, watch);
     return false;
    #endif
 }

@@ -257,11 +257,10 @@ void AboutDialog::paint (juce::Graphics& g)
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (14.0f));
-    g.drawFittedText ("An easy-first music studio for Linux, Windows and macOS. Pick a sound, play it on the "
-                      "on-screen or a MIDI keyboard, and build a song from regions on a timeline. Record your "
-                      "voice or instruments, shape each track with simple sound knobs, effects and a mixer, "
-                      "then export the result. Advanced controls stay tucked away until you ask for them.",
-                      r.removeFromTop (110), juce::Justification::centredTop, 6, 1.0f);
+    g.drawFittedText ("A digital audio workstation for Linux, Windows, and macOS. Record instruments and vocals, "
+                  "play virtual instruments, arrange tracks, add effects, mix, and export your music. "
+                  "Everything you need to make a song, without the unnecessary complexity.",
+                  r.removeFromTop (110), juce::Justification::centredTop, 6, 1.0f);
     r.removeFromTop (8);
 
     g.setFont (fonts::ui (12.5f));

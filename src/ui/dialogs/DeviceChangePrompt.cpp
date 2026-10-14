@@ -5,19 +5,47 @@ namespace ikaros
 
 namespace
 {
-    // An alert with a tick box under its message. The tick box is a member, so
-    // it goes away with the window (AlertWindow doesn't own custom components).
+    // The tick box's left edge lines up with the message text, which AlertWindow draws
+    // after its icon while placing custom components at a tenth of its width.
+    class RememberRow  : public juce::Component
+    {
+    public:
+        RememberRow()
+        {
+            setSize (360, 24);
+            addAndMakeVisible (remember);
+        }
+
+        void moved() override       { layoutBox(); }
+        void resized() override     { layoutBox(); }
+
+        juce::ToggleButton remember { "Remember my choice (change it in Preferences)" };
+
+    private:
+        void layoutBox()
+        {
+            constexpr int messageLeft = 81;   // AlertWindow's icon width, plus its border
+            constexpr int tickInset = 4;      // where the look and feel starts drawing the tick
+            const int offset = messageLeft - tickInset - getX();
+            remember.setBounds (offset, 0, getWidth() - offset, getHeight());
+        }
+    };
+
+    // An alert with a tick box under its message. The row is a member, so it
+    // goes away with the window (AlertWindow doesn't own custom components).
     class DeviceChangeWindow  : public juce::AlertWindow
     {
     public:
         DeviceChangeWindow (const juce::String& title, const juce::String& message, juce::Component* associated)
             : juce::AlertWindow (title, message, juce::MessageBoxIconType::QuestionIcon, associated)
         {
-            remember.setSize (360, 24);
-            addCustomComponent (&remember);
+            addCustomComponent (&row);
         }
 
-        juce::ToggleButton remember { "Remember my choice (change it in Preferences)" };
+        bool rememberChoice() const     { return row.remember.getToggleState(); }
+
+    private:
+        RememberRow row;
     };
 }
 
@@ -46,15 +74,19 @@ void showDeviceChangePrompt (AudioEngine& engine, const AudioDevicePrompt& promp
         {
             const bool doSwitch = result == 1;
 
-            if (safeWindow != nullptr && safeWindow->remember.getToggleState())
+            if (safeWindow != nullptr && safeWindow->rememberChoice())
                 engine.getPreferences().set (settings::deviceChange,
                                              doSwitch ? settings::DeviceChange::alwaysSwitch
                                                       : settings::DeviceChange::neverAsk);
 
-            if (doSwitch)
+            if (! doSwitch)
             {
-                const auto error = engine.switchAudioDevice (prompt);
+                onClosed();
+                return;
+            }
 
+            engine.switchAudioDevice (prompt, [prompt, onClosed] (const juce::String& error)
+            {
                 if (error.isNotEmpty())
                     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                                       .withIconType (juce::MessageBoxIconType::WarningIcon)
@@ -63,9 +95,9 @@ void showDeviceChangePrompt (AudioEngine& engine, const AudioDevicePrompt& promp
                                                                     + "\n\nAnother program may be using it. You can pick a device in Preferences > Audio & MIDI.")
                                                       .withButton ("OK"),
                                                   nullptr);
-            }
 
-            onClosed();
+                onClosed();
+            });
         }),
         true);
 }

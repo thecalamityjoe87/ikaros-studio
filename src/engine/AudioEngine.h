@@ -282,9 +282,10 @@ public:
         says otherwise). Each prompt is returned once. */
     std::optional<AudioDevicePrompt> takeAudioDevicePrompt();
 
-    /** Switches to the devices a prompt names. Returns what went wrong, or
-        an empty string. */
-    juce::String switchAudioDevice (const AudioDevicePrompt&);
+    /** Switches to the devices a prompt names. The sound server may hold a new
+        device for a few seconds, so this retries meanwhile; `done` then gets
+        what went wrong, or an empty string. */
+    void switchAudioDevice (const AudioDevicePrompt&, std::function<void (juce::String error)> done);
 
     /** For tests, to act out devices coming and going. */
     AudioDeviceWatcher& getDeviceWatcher() noexcept     { return *deviceWatcher; }
@@ -295,6 +296,10 @@ public:
 
     /** JUCE's standard audio/MIDI device picker, wired to Tracktion's device manager. */
     std::unique_ptr<juce::Component> createAudioSettingsComponent();
+
+    /** Whether a picker from createAudioSettingsComponent() exists. It holds on
+        to the device lists, so they must not be replaced meanwhile. */
+    bool isAudioSettingsOpen() const noexcept           { return audioSettings != nullptr; }
 
     //==============================================================================
     TrackController& getTracks() noexcept       { return *trackController; }
@@ -353,6 +358,9 @@ private:
     tracktion::Engine& getTeEngine() noexcept;
     tracktion::Edit* getEdit() const noexcept;
 
+    /** One try at opening what a prompt names; the old device is not restored if it fails. */
+    juce::String openDevicesFor (const AudioDevicePrompt&);
+
     /** Replaces the session. workFolder is its working copy; bundle the file
         it's saved as (empty while untitled); legacySessionFile, for a session
         from an earlier version, where its audio still is. */
@@ -403,6 +411,7 @@ private:
     std::unique_ptr<SongExporter> exporter;
     std::unique_ptr<RecordingGuard> recordingGuard;
     std::unique_ptr<AudioDeviceWatcher> deviceWatcher;
+    juce::Component::SafePointer<juce::Component> audioSettings;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

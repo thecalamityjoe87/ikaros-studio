@@ -23,6 +23,16 @@ static juce::String firstNew (const juce::StringArray& now, const juce::StringAr
     return {};
 }
 
+// Lower is better. A sound server usually holds the card, so only ALSA's shared modes open;
+// the direct hardware ones fail as busy.
+static int modeRank (const juce::String& name)
+{
+    if (name.containsIgnoreCase ("front output"))
+        return 0;
+
+    return name.containsIgnoreCase ("hardware device") ? 2 : 1;
+}
+
 std::optional<AudioDevicePrompt> findDeviceChange (const AudioDeviceState& before, const AudioDeviceState& now)
 {
     auto wentAway = [] (const juce::StringArray& was, const juce::StringArray& is, const juce::String& inUse)
@@ -51,6 +61,20 @@ std::optional<AudioDevicePrompt> findDeviceChange (const AudioDeviceState& befor
     {
         prompt.inputName = firstNew (now.inputs, before.inputs);
         prompt.outputName = firstNew (now.outputs, before.outputs);
+
+        // ALSA lists several modes per card, not all with inputs (and an input
+        // and output of different modes can't be opened together): take the best one that has both.
+        int bestRank = 99;
+
+        for (auto& name : now.outputs)
+        {
+            if (! before.outputs.contains (name) && now.inputs.contains (name) && ! before.inputs.contains (name)
+                 && modeRank (name) < bestRank)
+            {
+                bestRank = modeRank (name);
+                prompt.inputName = prompt.outputName = name;
+            }
+        }
 
         if (prompt.inputName == now.inUseInput)     prompt.inputName = {};
         if (prompt.outputName == now.inUseOutput)   prompt.outputName = {};
@@ -102,6 +126,43 @@ void AudioDeviceWatcher::setStateSource (std::function<AudioDeviceState()> sourc
     pending.reset();
 }
 
+void AudioDeviceWatcher::switchTo (const AudioDevicePrompt& prompt, std::function<void (juce::String)> done)
+{
+    auto& adm = owner.getTeEngine().getDeviceManager().deviceManager;
+
+    if (switching)
+    {
+        if (done)
+            done ("Already switching.");
+
+        return;
+    }
+
+    switching = Switching { prompt, adm.getAudioDeviceSetup(), std::move (done), 0 };
+    adm.closeAudioDevice();
+    trySwitch();
+}
+
+void AudioDeviceWatcher::trySwitch()
+{
+    constexpr int maxTries = 8;
+
+    auto error = owner.openDevicesFor (switching->prompt);
+
+    if (error.isNotEmpty() && ++switching->tries < maxTries)
+        return;
+
+    auto finished = std::move (*switching);
+    switching.reset();
+
+    // A failed switch leaves nothing open.
+    if (error.isNotEmpty())
+        owner.getTeEngine().getDeviceManager().deviceManager.setAudioDeviceSetup (finished.previous, true);
+
+    if (finished.done)
+        finished.done (error);
+}
+
 AudioDeviceState AudioDeviceWatcher::readState() const
 {
     auto& dm = owner.getTeEngine().getDeviceManager();
@@ -127,14 +188,55 @@ AudioDeviceState AudioDeviceWatcher::readState() const
     return state;
 }
 
+void AudioDeviceWatcher::reopenIfBack (const AudioDeviceState& now)
+{
+    auto left = [] (const juce::StringArray& was, const juce::StringArray& is, const juce::String& name)
+    {
+        return name.isNotEmpty() && was.contains (name) && ! is.contains (name);
+    };
+
+    if (left (known.inputs, now.inputs, known.inUseInput) || left (known.outputs, now.outputs, known.inUseOutput))
+    {
+        goneInput = known.inUseInput;
+        goneOutput = known.inUseOutput;
+        return;
+    }
+
+    if (goneInput.isEmpty() && goneOutput.isEmpty())
+        return;
+
+    // Moved to another device since: nothing to bring back.
+    if (now.inUseInput != goneInput || now.inUseOutput != goneOutput)
+    {
+        goneInput = goneOutput = {};
+        return;
+    }
+
+    auto back = [] (const juce::StringArray& list, const juce::String& name) { return name.isEmpty() || list.contains (name); };
+
+    if (! back (now.inputs, goneInput) || ! back (now.outputs, goneOutput))
+        return;
+
+    goneInput = goneOutput = {};
+
+    // The setup still names the device but its stream ended when it left, so no prompt would come either.
+    auto& adm = owner.getTeEngine().getDeviceManager().deviceManager;
+    adm.closeAudioDevice();
+    adm.restartLastAudioDevice();
+}
+
 void AudioDeviceWatcher::check()
 {
+    if (switching)
+        return;
+
     // Not while recording: nothing is lost by waiting, the change is still there afterwards.
     if (owner.getTransportState().recording)
         return;
 
-    if (! stateSource)
-        platform::refreshAudioDeviceLists (owner.getTeEngine().getDeviceManager().deviceManager, lastHardware);
+    // Not while the device picker is open: it keeps references to the lists being replaced.
+    if (! stateSource && ! owner.isAudioSettingsOpen())
+        platform::refreshAudioDeviceLists (owner.getTeEngine().getDeviceManager().deviceManager, hardware);
 
     const auto now = stateSource ? stateSource() : readState();
 
@@ -144,6 +246,9 @@ void AudioDeviceWatcher::check()
         haveKnown = true;
         return;
     }
+
+    if (! stateSource)
+        reopenIfBack (now);
 
     auto change = findDeviceChange (known, now);
     known = now;
@@ -157,9 +262,16 @@ void AudioDeviceWatcher::check()
     if (choice == settings::DeviceChange::neverAsk)
         return;
 
-    // A switch that fails is shown to the user as a question, which will show why.
-    if (choice == settings::DeviceChange::alwaysSwitch && owner.switchAudioDevice (*change).isEmpty())
+    if (choice == settings::DeviceChange::alwaysSwitch)
+    {
+        // A switch that fails is shown to the user as a question, which will show why.
+        owner.switchAudioDevice (*change, [this, prompt = *change] (juce::String error)
+                                 {
+                                     if (error.isNotEmpty())
+                                         pending = prompt;
+                                 });
         return;
+    }
 
     pending = std::move (change);
 }

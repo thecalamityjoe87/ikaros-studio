@@ -214,7 +214,10 @@ void PianoKeyboard::resized()
     octaveDown.setBounds (r.removeFromLeft (buttonWidth));
     octaveUp.setBounds (r.removeFromRight (buttonWidth));
     keys->setBounds (r);
-    keys->setKeyWidth ((float) r.getWidth() / (float) numWhiteKeys);
+
+    // JUCE asserts on a zero key width; we are resized before first layout.
+    if (r.getWidth() > 0)
+        keys->setKeyWidth ((float) r.getWidth() / (float) numWhiteKeys);
 }
 
 } // namespace ikaros
