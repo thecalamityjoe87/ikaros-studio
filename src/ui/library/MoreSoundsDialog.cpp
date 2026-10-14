@@ -413,6 +413,8 @@ void MoreSoundsDialog::refresh()
     }
 
     const bool offline = status == PackStore::IndexStatus::unavailable;
+    const bool nothingToDownload = status == PackStore::IndexStatus::loaded
+        && std::none_of (packs.begin(), packs.end(), [] (const StorePack& p) { return p.availableVersion.isNotEmpty(); });
 
     statusText = status == PackStore::IndexStatus::loading ? "Looking for sound packs..."
                : offline && welcome ? "Couldn't reach the sound library. Check your internet connection and try again, "
@@ -421,6 +423,7 @@ void MoreSoundsDialog::refresh()
                            "Your installed packs are below."
                : requestedPackUnavailable ? "The sound pack that track needs isn't available to download. "
                                             "Ask whoever shared the session with you for it."
+               : nothingToDownload ? "There are no sound packs to download yet. Your installed packs are below."
                : juce::String();
     retryButton.setVisible (offline);
 

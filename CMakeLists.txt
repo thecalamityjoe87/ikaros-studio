@@ -9,7 +9,7 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(IkarosStudio VERSION 0.1.0 LANGUAGES C CXX)
+project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -127,7 +127,8 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-SemiBold.ttf
         resources/fonts/Figtree-Bold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
-        resources/fonts/JetBrainsMono-Bold.ttf)
+        resources/fonts/JetBrainsMono-Bold.ttf
+        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
 
 # ------------------------------------------------------------------------------
 # Sources, grouped like the folders under src/. Headers are listed too so they
@@ -281,9 +282,10 @@ target_compile_definitions(IkarosStudio PRIVATE
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
-# (see src/engine/PackStore.h). Until the packs are hosted, a local test
-# index made by tools/make_pack.py. A web address or a file path.
-set(IKAROS_PACK_INDEX_URL "${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json"
+# (see src/engine/PackStore.h): a web address or a file path made by
+# tools/make_pack.py. Empty until the packs are hosted; the smoke test uses
+# its own index in tests/store.
+set(IKAROS_PACK_INDEX_URL ""
     CACHE STRING "The sound pack index the app downloads packs from")
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_PACK_INDEX_URL}")
 

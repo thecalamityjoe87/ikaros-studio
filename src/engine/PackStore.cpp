@@ -339,6 +339,13 @@ juce::String PackStore::getDefaultIndexUrl()
 
 void PackStore::refreshIndex()
 {
+    // A build with no index address has nothing to offer (not "offline").
+    if (indexUrl.isEmpty())
+    {
+        indexLoaded ({}, {}, true);
+        return;
+    }
+
     indexStatus = IndexStatus::loading;
     pool.addJob (new IndexJob (*this, toUrl (indexUrl)), true);   // true: the pool deletes the job when it's done
     sendChangeMessage();

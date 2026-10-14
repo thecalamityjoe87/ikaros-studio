@@ -147,6 +147,15 @@ juce::File SoundLibrary::getBundledSoundsFolder()
     //   ../Resources/Sounds (inside a macOS .app)
     //   ../share/ikaros-studio/Sounds (Linux install and Flatpak)
     auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+   #if JUCE_LINUX
+    // In an AppImage the program is started through the AppRun symlink in the
+    // mount's root, and that's the path JUCE reports. /proc/self/exe is the
+    // real file (<mount>/usr/bin/ikaros-studio).
+    if (auto real = juce::File ("/proc/self/exe").getLinkedTarget(); real.existsAsFile())
+        exe = real;
+   #endif
+
     auto dir = exe.getParentDirectory();
 
     for (auto candidate : { dir.getChildFile ("Sounds"),

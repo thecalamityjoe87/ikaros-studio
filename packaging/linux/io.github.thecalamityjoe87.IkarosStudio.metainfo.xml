@@ -62,9 +62,9 @@
   <!-- TODO(release): add screenshots before submitting to Flathub. -->
 
   <releases>
-    <release version="0.1.0" date="2026-10-10" type="development">
+    <release version="0.0.1" date="2026-10-13" type="development">
       <description>
-        <p>Milestone 1: main window, sessions, instrument tracks, MIDI regions and playback.</p>
+        <p>First alpha release.</p>
       </description>
     </release>
   </releases>
