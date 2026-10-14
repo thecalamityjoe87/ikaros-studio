@@ -14,7 +14,8 @@ namespace
     // The tabs are a segmented control, like the bottom panel's.
     constexpr int segmentInset = 3, tabHeight = 36;
     constexpr float segmentRadius = 7.0f, segmentOutlineRadius = 10.0f;
-    constexpr int tabWidths[] = { 90, 90, 140, 150 };
+    constexpr float tabFontSize = 13.0f;
+    constexpr int tabPadding = 22;   // each side of a label, so the gaps between labels are all equal
 
     const juce::String bullet = juce::String::fromUTF8 ("\xe2\x80\xa2  ");
 }
@@ -59,7 +60,7 @@ AboutDialog::AboutDialog (AudioEngine& e)
     {
         b->setColours (tabColours);
         b->setCornerRadius (segmentRadius);
-        b->setFont (fonts::uiBold (13.0f));
+        b->setFont (fonts::uiBold (tabFontSize));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
         b->onClick = [this, index] { showPage ((Page) index); };
         addAndMakeVisible (b);
@@ -78,12 +79,12 @@ void AboutDialog::showPage (Page newPage)
     page = newPage;
 
     aboutTab.setToggleState (page == Page::about, juce::dontSendNotification);
-    creditsTab.setToggleState (page == Page::credits, juce::dontSendNotification);
     releaseNotesTab.setToggleState (page == Page::releaseNotes, juce::dontSendNotification);
+    creditsTab.setToggleState (page == Page::credits, juce::dontSendNotification);
     acknowledgementsTab.setToggleState (page == Page::acknowledgements, juce::dontSendNotification);
 
     text.setVisible (page != Page::about);
-    text.setTitle (page == Page::credits ? "Credits" : page == Page::releaseNotes ? "Release Notes" : "Acknowledgements");
+    text.setTitle (page == Page::releaseNotes ? "Release Notes" : page == Page::credits ? "Credits" : "Acknowledgements");
     text.clear();
 
     if (page == Page::credits)               fillCredits();
@@ -274,17 +275,22 @@ void AboutDialog::resized()
                                                     juce::jmin (panelHeight, getHeight() - 32));
     auto r = panel.reduced (28, 24);
 
+    const std::array<IconButton*, 4> tabs { &aboutTab, &releaseNotesTab, &creditsTab, &acknowledgementsTab };
+    std::array<int, 4> tabWidths {};
     int tabsWidth = 2 * segmentInset;
 
-    for (auto w : tabWidths)
-        tabsWidth += w;
+    for (size_t i = 0; i < tabs.size(); ++i)
+    {
+        const auto labelWidth = juce::GlyphArrangement::getStringWidth (fonts::uiBold (tabFontSize), tabs[i]->getTitle());
+        tabWidths[i] = juce::roundToInt (std::ceil (labelWidth)) + 2 * tabPadding;
+        tabsWidth += tabWidths[i];
+    }
 
     tabsArea = r.removeFromTop (tabHeight).withSizeKeepingCentre (tabsWidth, tabHeight);
     auto t = tabsArea.reduced (segmentInset);
-    int index = 0;
 
-    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
-        b->setBounds (t.removeFromLeft (tabWidths[index++]));
+    for (size_t i = 0; i < tabs.size(); ++i)
+        tabs[i]->setBounds (t.removeFromLeft (tabWidths[i]));
 
     r.removeFromTop (16);
     doneButton.setBounds (r.removeFromBottom (36).removeFromRight (96));
