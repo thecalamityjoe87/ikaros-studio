@@ -3269,6 +3269,55 @@ int main (int argc, char* argv[])
                      && sounds.findPack ("ikaros-studio.store-bass").has_value(),
                    "installing a collection installs the packs it's missing");
 
+            // A Nota sample registry's index: the author's SFZ library, wrapped in a pack when it's installed.
+            useIndex (juce::String (IKAROS_TEST_STORE) + "/nota-index.json");
+            const juce::String notaId ("nota.nota-test");
+            auto nota = store.findPack (notaId);
+            check (nota && nota->category == "Brass" && nota->name == "Nota Test" && nota->state == State::notInstalled
+                     && ! store.findPack ("nota.nota-loops").has_value(),
+                   "a Nota registry index lists its SFZ packs, filed by their tags, and leaves out loop packs");
+            store.install (notaId);
+            waitForStore();
+            const juce::String notaSound ("sampler:nota.nota-test/Nota Test");
+            check (store.findPack (notaId)->state == State::installed && store.findPack (notaId)->error.isEmpty()
+                     && sounds.findSound (notaSound).has_value() && sounds.findSound (notaSound)->category == "Brass",
+                   "a Nota archive installs as a pack with one instrument for its main SFZ file");
+            engine.newSession();
+            pumpMessages();
+            pt = tracks.getTracks().front().id;
+            check (effects.setSound (pt, notaSound), "(a track plays the Nota instrument)");
+            tracks.regions().createChordRegion (pt, 0.0);
+            pumpMessages();
+            check (engine.renderPeak (0.0, 1.0) > 0.05f, "an instrument installed from a Nota registry plays");
+
+            // A pack of loose samples (no SFZ file) becomes a kit, one sample per key from C2.
+            const juce::String kitId ("nota.nota-kit"), kitSound ("sampler:nota.nota-kit/Nota Kit");
+            store.install (kitId);
+            waitForStore();
+            check (store.findPack (kitId)->state == State::installed && sounds.findSound (kitSound).has_value(),
+                   "a Nota pack with no SFZ file installs as a kit");
+            engine.newSession();
+            pumpMessages();
+            pt = tracks.getTracks().front().id;
+            check (effects.setSound (pt, kitSound), "(a track plays the kit)");
+
+            for (int i = 0; i < 100 && ! effects.isInstrumentReady (pt); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            auto kitKeys = effects.getInstrumentKeyRange (pt);
+            check (kitKeys && kitKeys->first == 36 && kitKeys->second == 37, "an instrument reports the keys it plays");
+            auto kitRegion = tracks.regions().createChordRegion (pt, 0.0);
+            pumpMessages();
+            std::vector<NoteId> kitNotes;
+
+            for (auto& n : tracks.regions().getRegion (kitRegion)->notes)
+                kitNotes.push_back (n.id);
+
+            tracks.notes().deleteNotes (kitRegion, kitNotes);
+            tracks.notes().addNote (kitRegion, { 37, 0.0, 1.0, 100 });   // the second folder's sample
+            pumpMessages();
+            check (engine.renderPeak (0.0, 1.0) > 0.05f, "the kit plays its samples on the keys from C2");
+
             engine.setAppSetting ("smokeTestSetting", true);
             check ((bool) engine.getAppSetting ("smokeTestSetting", false) && ! (bool) engine.getAppSetting ("noSuchSetting", false),
                    "app settings are kept");

@@ -44,6 +44,10 @@ public:
         the background (big SFZ instruments take a moment); true otherwise. */
     bool isInstrumentReady (TrackId) const;
 
+    /** The lowest and highest keys a sampled instrument plays, once it has
+        loaded (nothing for the built-in synth or plug-ins). */
+    std::optional<std::pair<int, int>> getInstrumentKeyRange (TrackId) const;
+
     //==============================================================================
     // Plug-ins: the track's instrument and its chain of effects (the
     // "Plug-ins" inspector). Effects are processed top to bottom. They can be

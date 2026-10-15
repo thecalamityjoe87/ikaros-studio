@@ -18,6 +18,16 @@ namespace
         return bytes > 0 ? juce::File::descriptionOfSizeInBytes (bytes) : juce::String();
     }
 
+    // "More Bass Sounds", "More Synth Sounds" (Synths, Drums: singular; Bass keeps its s).
+    juce::String titleFor (const juce::String& category)
+    {
+        if (category.isEmpty())
+            return "More Sounds";
+
+        const bool plural = category.endsWithChar ('s') && ! category.endsWith ("ss");
+        return "More " + (plural ? category.dropLastCharacters (1) : category) + " Sounds";
+    }
+
     juce::String joinFacts (juce::StringArray facts)
     {
         facts.removeEmptyStrings();
@@ -285,10 +295,11 @@ private:
 };
 
 //==============================================================================
-void MoreSoundsDialog::show (juce::Component& parent, AudioEngine& engine, const juce::String& downloadPackId)
+void MoreSoundsDialog::show (juce::Component& parent, AudioEngine& engine, const juce::String& downloadPackId,
+                             const juce::String& category)
 {
     // Owned by its parent from here on; it deletes itself in close().
-    auto* dialog = new MoreSoundsDialog (engine, false, downloadPackId, {});
+    auto* dialog = new MoreSoundsDialog (engine, false, downloadPackId, {}, category);
     parent.addAndMakeVisible (dialog);
     dialog->setBounds (parent.getLocalBounds());
     dialog->grabKeyboardFocus();
@@ -296,7 +307,7 @@ void MoreSoundsDialog::show (juce::Component& parent, AudioEngine& engine, const
 
 void MoreSoundsDialog::showWelcome (juce::Component& parent, AudioEngine& engine, std::function<void()> onClosed)
 {
-    auto* dialog = new MoreSoundsDialog (engine, true, {}, std::move (onClosed));
+    auto* dialog = new MoreSoundsDialog (engine, true, {}, std::move (onClosed), {});
     parent.addAndMakeVisible (dialog);
     dialog->setBounds (parent.getLocalBounds());
     dialog->grabKeyboardFocus();
@@ -308,10 +319,11 @@ bool MoreSoundsDialog::shouldOfferStarterSounds (AudioEngine& engine)
 }
 
 MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, bool isWelcome, const juce::String& downloadPackId,
-                                    std::function<void()> closed)
-    : engine (e), welcome (isWelcome), pendingDownload (downloadPackId), onClosed (std::move (closed))
+                                    std::function<void()> closed, const juce::String& categoryToShow)
+    : engine (e), welcome (isWelcome), category (isWelcome ? juce::String() : categoryToShow),
+      pendingDownload (downloadPackId), onClosed (std::move (closed))
 {
-    setTitle (welcome ? "Welcome" : "More Sounds");
+    setTitle (welcome ? "Welcome" : titleFor (category));
     setWantsKeyboardFocus (true);
     setAlwaysOnTop (true);
 
@@ -357,6 +369,10 @@ MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, bool isWelcome, const juce::
         close();
     };
     addAndMakeVisible (doneButton);
+
+    showAllButton.setColours (grey);
+    showAllButton.onClick = [this] { showAll = ! showAll; refresh(); };
+    addChildComponent (showAllButton);
 
     auto& store = engine.getPackStore();
     store.addChangeListener (this);
@@ -416,6 +432,11 @@ void MoreSoundsDialog::refresh()
     const bool nothingToDownload = status == PackStore::IndexStatus::loaded
         && std::none_of (packs.begin(), packs.end(), [] (const StorePack& p) { return p.availableVersion.isNotEmpty(); });
 
+    // Opened from a category: list only its packs, until Show All Sounds.
+    const bool filtered = category.isNotEmpty() && ! showAll;
+    const bool nothingInCategory = filtered && status == PackStore::IndexStatus::loaded
+        && std::none_of (packs.begin(), packs.end(), [this] (const StorePack& p) { return p.category == category; });
+
     statusText = status == PackStore::IndexStatus::loading ? "Looking for sound packs..."
                : offline && welcome ? "Couldn't reach the sound library. Check your internet connection and try again, "
                                       "or start with the sounds that come with the app. We'll offer these again next time."
@@ -424,8 +445,13 @@ void MoreSoundsDialog::refresh()
                : requestedPackUnavailable ? "The sound pack that track needs isn't available to download. "
                                             "Ask whoever shared the session with you for it."
                : nothingToDownload ? "There are no sound packs to download yet. Your installed packs are below."
+               : nothingInCategory ? "There are no " + category + " sounds to download yet. Choose Show All Sounds to see the rest."
                : juce::String();
     retryButton.setVisible (offline);
+    showAllButton.setVisible (category.isNotEmpty());
+    const auto showAllText = showAll ? "Show " + category + " Only" : juce::String ("Show All Sounds");
+    showAllButton.setText (showAllText);
+    showAllButton.setTitle (showAllText);
 
     // What's listed: collections first, then packs. The welcome shows just
     // the starter set and what's in it.
@@ -433,7 +459,7 @@ void MoreSoundsDialog::refresh()
 
     for (auto& c : collections)
     {
-        if (welcome && c.id != PackStore::starterCollectionId)
+        if ((welcome && c.id != PackStore::starterCollectionId) || filtered)
             continue;
 
         auto v = viewOf (c, packs);
@@ -447,6 +473,9 @@ void MoreSoundsDialog::refresh()
     for (auto& p : packs)
     {
         if (welcome && ! (starter.has_value() && std::find (starter->packIds.begin(), starter->packIds.end(), p.id) != starter->packIds.end()))
+            continue;
+
+        if (filtered && p.category != category)
             continue;
 
         auto v = viewOf (p);
@@ -603,9 +632,12 @@ void MoreSoundsDialog::paint (juce::Graphics& g)
     auto r = panel.reduced (28, 24);
     g.setColour (colour::text);
     g.setFont (fonts::uiBold (18.0f));
-    g.drawText (welcome ? "Welcome to Ikaros Studio" : "More Sounds", r.removeFromTop (26), juce::Justification::centredLeft);
+    g.drawText (welcome ? juce::String ("Welcome to Ikaros Studio") : titleFor (showAll ? juce::String() : category),
+                r.removeFromTop (26), juce::Justification::centredLeft);
 
-    const juce::String subtitle = ! welcome ? "Download instruments and loops. They appear in the library as soon as they're installed."
+    const juce::String subtitle = ! welcome ? (category.isNotEmpty() && ! showAll
+                                                   ? category + " sounds to download. They appear in the library as soon as they're installed."
+                                                   : juce::String ("Download instruments and loops. They appear in the library as soon as they're installed."))
                                 : starterRequested ? "The starter sounds are downloading. You can start making music now: "
                                                      "each pack appears in the library as soon as it's installed."
                                                    : "Start with the starter sounds: real instruments and loops to play and build "
@@ -634,6 +666,7 @@ void MoreSoundsDialog::resized()
     doneButton.setBounds (bottom.removeFromRight (doneWidth));
     bottom.removeFromRight (8);
     notNowButton.setBounds (bottom.removeFromRight (96));
+    showAllButton.setBounds (bottom.removeFromLeft (160));
     r.removeFromBottom (12);
 
     if (statusText.isNotEmpty())

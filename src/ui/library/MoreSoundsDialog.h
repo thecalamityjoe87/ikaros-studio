@@ -29,8 +29,11 @@ class MoreSoundsDialog  : public juce::Component,
 {
 public:
     /** Opens the dialog over `parent`. With a pack id, that pack starts
-        downloading straight away (the Sound tab's Download button). */
-    static void show (juce::Component& parent, AudioEngine&, const juce::String& downloadPackId = {});
+        downloading straight away (the Sound tab's Download button). With a
+        category (the library's current one), only that category's packs are
+        listed, until the user chooses Show All Sounds. */
+    static void show (juce::Component& parent, AudioEngine&, const juce::String& downloadPackId = {},
+                      const juce::String& category = {});
 
     /** The first-run welcome: offers the starter sounds, with "Not Now".
         Calls onClosed when it closes. */
@@ -50,10 +53,13 @@ public:
 private:
     class Row;
 
-    MoreSoundsDialog (AudioEngine&, bool welcome, const juce::String& downloadPackId, std::function<void()> onClosed);
+    MoreSoundsDialog (AudioEngine&, bool welcome, const juce::String& downloadPackId, std::function<void()> onClosed,
+                      const juce::String& category);
 
     AudioEngine& engine;
     const bool welcome;                // the first-run form
+    const juce::String category;       // list only this category's packs (empty: all)
+    bool showAll = false;              // the user chose Show All Sounds
     juce::String pendingDownload;      // the pack to download once the index has arrived
     bool requestedPackUnavailable = false;   // ...and it turned out not to be in the index
     bool starterRequested = false;     // welcome: the user chose to download the starter sounds
@@ -65,6 +71,7 @@ private:
     IconButton retryButton { "Try again", std::nullopt, "Try Again" };
     IconButton notNowButton { "Not now", std::nullopt, "Not Now" };
     IconButton doneButton { "Done", std::nullopt, "Done" };
+    IconButton showAllButton { "Show all sounds", std::nullopt, "Show All Sounds" };
     juce::String doneText { "Done" };  // what doneButton says (for its width)
     juce::Rectangle<int> panel, statusArea;
     juce::String statusText;

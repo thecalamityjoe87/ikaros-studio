@@ -24,6 +24,8 @@ namespace
         { "Synths",      0xffc78bff },
         { "Guitar",      0xffffd25a },
         { "Strings",     0xffff7aa8 },
+        { "Woodwinds",   0xff8fd9a8 },
+        { "Brass",       0xffe6b85c },
         { "Loops",       0xffffb547 },
         { "Audio Files", 0xffa3abb8 },
         { "Plug-ins",    0xff6fd6d0 },
@@ -275,7 +277,13 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     moreSoundsButton.setFont (fonts::uiSemiBold (13.0f));
     moreSoundsButton.setIconSize (16.0f);
     moreSoundsButton.setTooltip ("Download more instruments and loops");
-    moreSoundsButton.onClick = [this] { if (onMoreSoundsRequested) onMoreSoundsRequested(); };
+    moreSoundsButton.onClick = [this]
+    {
+        const bool noPacks = selectedCategory == "Audio Files" || selectedCategory == "Plug-ins";
+
+        if (onMoreSoundsRequested)
+            onMoreSoundsRequested (noPacks ? juce::String() : selectedCategory);
+    };
     addAndMakeVisible (moreSoundsButton);
 
     auto music = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
@@ -446,6 +454,7 @@ void LibrarySidebar::rebuildList()
         emptyText = "No sounds here yet.";
 
     knownPluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
+    knownSoundCount = (int) (engine.getSounds().getSounds().size() + engine.getSounds().getLoops().size());
     updateScanText();
     refresh();
     layoutList();
@@ -459,6 +468,15 @@ void LibrarySidebar::refresh()
     const auto pluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
 
     if (pluginCount != knownPluginCount && (selectedCategory == "Plug-ins" || searchField.getText().isNotEmpty()))
+    {
+        rebuildList();
+        return;
+    }
+
+    // A pack was installed or removed: show its sounds.
+    const auto soundCount = (int) (engine.getSounds().getSounds().size() + engine.getSounds().getLoops().size());
+
+    if (soundCount != knownSoundCount && selectedCategory != "Audio Files" && selectedCategory != "Plug-ins")
     {
         rebuildList();
         return;

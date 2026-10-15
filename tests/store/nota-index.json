@@ -1,0 +1,87 @@
+{
+    "schema": 1,
+    "packs": [
+        {
+            "id": "nota-test",
+            "name": "Nota Test",
+            "author": "Ikaros Studio",
+            "description": "A tiny library for testing the Nota registry format.",
+            "license": "CC0-1.0",
+            "kind": "multisample",
+            "tags": [
+                "brass",
+                "trumpet"
+            ],
+            "versions": [
+                {
+                    "version": "1.0",
+                    "asset": {
+                        "url": "nota-test.zip",
+                        "sha256": "264ca98881807dd21f821e3396919c7bae8b95ff3f1eaf52c2180b6957c811e9",
+                        "size": 22558,
+                        "root": "Nota_Test",
+                        "files": 3,
+                        "unpackedSize": 22184,
+                        "formats": [
+                            "wav"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "id": "nota-kit",
+            "name": "Nota Kit",
+            "author": "Ikaros Studio",
+            "description": "A tiny library for testing the Nota registry format.",
+            "license": "CC0-1.0",
+            "kind": "one-shots",
+            "tags": [
+                "drums"
+            ],
+            "versions": [
+                {
+                    "version": "1.0",
+                    "asset": {
+                        "url": "nota-kit.zip",
+                        "sha256": "7a2f7840c88f43196f2a1ac9927b899cffb33901fbbacc373993920da3246837",
+                        "size": 66654,
+                        "root": "Nota_Kit",
+                        "files": 3,
+                        "unpackedSize": 66282,
+                        "formats": [
+                            "wav"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "id": "nota-loops",
+            "name": "Nota Loops",
+            "author": "Ikaros Studio",
+            "description": "A tiny library for testing the Nota registry format.",
+            "license": "CC0-1.0",
+            "kind": "loops",
+            "tags": [
+                "drums"
+            ],
+            "versions": [
+                {
+                    "version": "1.0",
+                    "asset": {
+                        "url": "nota-test.zip",
+                        "sha256": "264ca98881807dd21f821e3396919c7bae8b95ff3f1eaf52c2180b6957c811e9",
+                        "size": 22558,
+                        "root": "Nota_Test",
+                        "files": 3,
+                        "unpackedSize": 22184,
+                        "formats": [
+                            "wav"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -36,8 +36,9 @@ public:
     /** ~30 Hz: scan progress and which file is previewing. */
     void update();
 
-    /** The "More Sounds..." button: the owner opens the More Sounds window. */
-    std::function<void()> onMoreSoundsRequested;
+    /** The "More Sounds..." button: the owner opens the More Sounds window,
+        with the category being browsed (empty for Audio Files and Plug-ins). */
+    std::function<void (const juce::String& category)> onMoreSoundsRequested;
 
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
@@ -80,6 +81,7 @@ private:
     IconButton moreSoundsButton { "More sounds", Icon::download, "More Sounds..." };
     juce::String scanText;
     int knownPluginCount = -1;
+    int knownSoundCount = -1;   // sounds and loops, so a pack installed or removed updates the list
 
     juce::String selectedCategory { "Keyboards" };
     juce::String heading, emptyText;

@@ -748,6 +748,17 @@ bool EffectsController::isInstrumentReady (TrackId id) const
     return true;
 }
 
+std::optional<std::pair<int, int>> EffectsController::getInstrumentKeyRange (TrackId id) const
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : t->pluginList)
+            if (auto* sfz = dynamic_cast<SfzPlugin*> (p))
+                if (int lowest = 0, highest = 0; sfz->getKeyRange (lowest, highest))
+                    return std::make_pair (lowest, highest);
+
+    return std::nullopt;
+}
+
 std::optional<PluginSlot> EffectsController::getInstrument (TrackId id) const
 {
     if (auto* t = findTrack (owner.getEdit(), id))

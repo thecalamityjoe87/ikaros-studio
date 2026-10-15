@@ -148,6 +148,25 @@ void PianoKeyboard::shiftOctave (int direction)
     updateRange();
 }
 
+void PianoKeyboard::showRange (int lowestPlayed, int highestPlayed)
+{
+    const auto floorC = lowestPlayed / 12 * 12;
+    auto start = floorC;
+
+    // Wider than the keyboard (a piano): the middle, as near C3 as the range allows.
+    if (highestPlayed - start >= numOctaves * 12)
+        start = juce::jlimit (floorC, juce::jmax (floorC, highestPlayed / 12 * 12 - (numOctaves - 1) * 12), defaultLowestNote);
+
+    start = juce::jlimit (minLowestNote, maxLowestNote, start);
+
+    if (start == lowestNote)
+        return;
+
+    releaseAll();
+    lowestNote = start;
+    updateRange();
+}
+
 void PianoKeyboard::updateRange()
 {
     const auto highest = lowestNote + numOctaves * 12 - 1;

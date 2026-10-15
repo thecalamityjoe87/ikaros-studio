@@ -6,7 +6,7 @@ namespace ikaros
 namespace
 {
     // The library's categories, in the order the sidebar shows them.
-    const char* const categoryOrder[] { "Keyboards", "Drums", "Bass", "Synths", "Guitar", "Strings" };
+    const char* const categoryOrder[] { "Keyboards", "Drums", "Bass", "Synths", "Guitar", "Strings", "Woodwinds", "Brass" };
 
     int categoryIndex (const juce::String& category)
     {

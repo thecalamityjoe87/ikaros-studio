@@ -30,6 +30,7 @@ until real packs are hosted (see src/engine/PackStore.h):
 """
 
 import json
+import hashlib
 import math
 import shutil
 import struct
@@ -37,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import wave
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -172,6 +174,53 @@ def make_store():
         p["sha256"] = "0" * 64
 
     (STORE / "index-damaged.json").write_text(json.dumps(index, indent=4) + "\n")
+
+    make_nota_store()
+
+
+def make_nota_store():
+    """A Nota sample registry's index.json: an SFZ library as the author would
+    publish it (main.sfz includes mappings/inc.sfz, a path relative to main.sfz),
+    a pack of loose samples with no SFZ file, and a loops pack the app leaves out."""
+    with tempfile.TemporaryDirectory() as tmp:
+        wav = Path(tmp) / "tone.wav"
+        write_sine(wav, 0.5)
+        tone = wav.read_bytes()
+
+    def make_zip(name, files):
+        path = STORE / name
+
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for entry_name, data in files.items():
+                entry = zipfile.ZipInfo(entry_name, date_time=(2020, 1, 1, 0, 0, 0))
+                entry.external_attr = 0o644 << 16
+                z.writestr(entry, data)
+
+        return path.read_bytes()
+
+    sfz_files = {
+        "Nota_Test/main.sfz": b'#include "mappings/inc.sfz"\n',
+        "Nota_Test/mappings/inc.sfz": b"<region> sample=tone.wav lokey=0 hikey=127 pitch_keycenter=60\n",
+        "Nota_Test/tone.wav": tone,
+    }
+    kit_files = {"Nota_Kit/kick/K1.WAV": tone, "Nota_Kit/kick/K2.WAV": tone, "Nota_Kit/snare/S1.WAV": tone}   # upper case, like real ones
+    zips = {"nota-test.zip": (make_zip("nota-test.zip", sfz_files), sfz_files, "Nota_Test"),
+            "nota-kit.zip": (make_zip("nota-kit.zip", kit_files), kit_files, "Nota_Kit")}
+
+    def pack(pack_id, kind, tags, zip_name):
+        data, files, root = zips[zip_name]
+        return {"id": pack_id, "name": pack_id.replace("-", " ").title(), "author": "Ikaros Studio",
+                "description": "A tiny library for testing the Nota registry format.", "license": "CC0-1.0",
+                "kind": kind, "tags": tags,
+                "versions": [{"version": "1.0", "asset": {
+                    "url": zip_name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                    "root": root, "files": len(files), "unpackedSize": sum(len(d) for d in files.values()),
+                    "formats": ["wav"]}}]}
+
+    (STORE / "nota-index.json").write_text(json.dumps(
+        {"schema": 1, "packs": [pack("nota-test", "multisample", ["brass", "trumpet"], "nota-test.zip"),
+                                pack("nota-kit", "one-shots", ["drums"], "nota-kit.zip"),
+                                pack("nota-loops", "loops", ["drums"], "nota-test.zip")]}, indent=4) + "\n")
 
 
 if __name__ == "__main__":

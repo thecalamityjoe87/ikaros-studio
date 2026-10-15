@@ -48,7 +48,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
-    library.onMoreSoundsRequested = [this] { MoreSoundsDialog::show (*this, engine); };
+    library.onMoreSoundsRequested = [this] (const juce::String& category) { MoreSoundsDialog::show (*this, engine, {}, category); };
     setUpResizers();
 
     // Commands: register everything this component can do, make it the

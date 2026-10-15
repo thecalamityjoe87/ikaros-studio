@@ -85,6 +85,14 @@ public:
         isAudioTrack = track.has_value() && track->kind == TrackKind::audio;
         keyboard.setVisible (! isAudioTrack);
 
+        const auto soundKey = juce::String ((juce::int64) id) + "|" + (track.has_value() ? track->soundId : juce::String());
+
+        if (soundKey != shownSound)
+        {
+            shownSound = soundKey;
+            rangePending = ! isAudioTrack;
+        }
+
         auto controls = tc.effects().getSoundControls (id);
         automated = track.has_value() ? track->automated : juce::StringArray();
         instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
@@ -115,6 +123,56 @@ public:
         details = tc.getDetails (id);
         resized();
         repaint();
+    }
+
+    // ~30 Hz. A newly chosen sampled instrument loads in the background (big ones take a while, and
+    // are silent until then): say so, and once it has loaded, move the keyboard to the keys it
+    // plays, so the first key a user presses makes a sound.
+    void update()
+    {
+        auto id = selection.getTrack();
+        auto& effects = engine.getTracks().effects();
+        const bool nowLoading = ! isAudioTrack && ! effects.isInstrumentReady (id);
+
+        if (nowLoading || loading)
+        {
+            loading = nowLoading;
+            ++loadingTicks;
+            repaint (keyboard.getBounds());
+        }
+
+        if (! rangePending)
+            return;
+
+        if (auto range = effects.getInstrumentKeyRange (id))
+        {
+            keyboard.showRange (range->first, range->second);
+            rangePending = false;
+        }
+        else if (effects.isInstrumentReady (id))
+        {
+            rangePending = false;   // not a sampled instrument, or it plays nothing
+        }
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! loading || ! keyboard.isVisible())
+            return;
+
+        auto area = keyboard.getBounds().toFloat();
+        g.setColour (colour::toolbarBg.withAlpha (0.82f));
+        g.fillRoundedRectangle (area, 8.0f);
+
+        const auto dots = juce::String ("...").substring (0, 1 + (loadingTicks / 10) % 3);
+        g.setColour (colour::text);
+        g.setFont (fonts::uiSemiBold (15.0f));
+        g.drawText ("Loading " + (soundName.isNotEmpty() ? soundName : juce::String ("sound")) + dots,
+                    area.removeFromTop (area.getHeight() * 0.55f), juce::Justification::centredBottom);
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (13.0f));
+        g.drawText ("Big sounds can take a little while. You can play as soon as this goes away.",
+                    area, juce::Justification::centredTop);
     }
 
     void paint (juce::Graphics& g) override
@@ -236,6 +294,10 @@ private:
     Selection& selection;
     juce::OwnedArray<Knob> knobs;
     PianoKeyboard keyboard;
+    juce::String shownSound;       // the track and sound the keyboard's range was last set for
+    bool rangePending = false;     // a new sound is waiting to load, then the keyboard moves to its keys
+    bool loading = false;          // the selected track's instrument is still loading its samples
+    int loadingTicks = 0;          // counts updates while loading, to animate the dots
     static constexpr int gap = 14;            // between knob tiles
     static constexpr int detailsWidth = 300;  // room kept for the Details card
 
@@ -639,6 +701,7 @@ void BottomPanel::update()
         return;
 
     inspector.update();
+    soundPage->update();
 
     if (mixerShown)
         mixer.updateMeters();

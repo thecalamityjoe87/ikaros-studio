@@ -320,10 +320,11 @@ target_compile_definitions(IkarosStudio PRIVATE
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
-# (see src/engine/PackStore.h): a web address or a file path made by
-# tools/make_pack.py. Empty until the packs are hosted; the smoke test uses
-# its own index in tests/store.
-set(IKAROS_PACK_INDEX_URL ""
+# (see src/engine/PackStore.h): a web address or a file path, in the app's own
+# index format or a Nota sample registry's. The default is the registry fork,
+# which publishes its index.json with GitHub Pages; the smoke test uses its
+# own index in tests/store.
+set(IKAROS_PACK_INDEX_URL "https://thecalamityjoe87.github.io/nota-samples-registry/index.json"
     CACHE STRING "The sound pack index the app downloads packs from")
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_PACK_INDEX_URL}")
 

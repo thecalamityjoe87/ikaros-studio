@@ -36,6 +36,10 @@ public:
     /** Moves the keyboard up (+1) or down (-1) an octave. */
     void shiftOctave (int direction);
 
+    /** Shows the keys an instrument plays (lowest to highest MIDI note): from the C
+        below its lowest key, or around the middle if it's wider than the keyboard. */
+    void showRange (int lowestPlayed, int highestPlayed);
+
 private:
     class Keys;
 

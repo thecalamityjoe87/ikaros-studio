@@ -57,6 +57,14 @@ public:
     /** How many sample regions the loaded file has (0 if it failed to load). */
     int getNumRegions() const noexcept     { return numRegions.load(); }
 
+    /** The lowest and highest MIDI keys that make a sound, or false if the file isn't loaded or none do. */
+    bool getKeyRange (int& lowest, int& highest) const noexcept
+    {
+        lowest = lowestKey.load();
+        highest = highestKey.load();
+        return isLoaded() && lowest >= 0;
+    }
+
     //==============================================================================
     // tracktion::Plugin
     juce::String getName() const override                   { return "SFZ Instrument"; }
@@ -96,6 +104,7 @@ private:
     // records it, so isLoaded() knows whether the latest has finished.
     std::atomic<int> requestCounter { 0 }, loadedRequest { 0 };
     std::atomic<int> numRegions { 0 };
+    std::atomic<int> lowestKey { -1 }, highestKey { -1 };
 
     // The audio settings new synths are made for.
     std::atomic<double> currentSampleRate { 44100.0 };

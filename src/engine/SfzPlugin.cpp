@@ -71,6 +71,36 @@ public:
                 const bool ok = file.existsAsFile() && synth->loadSfzFile (file.getFullPathName().toStdString());
                 owner.numRegions = ok ? synth->getNumRegions() : 0;
 
+                // Which keys make a sound: the on-screen keyboard shows that range. (Each key is played
+                // for one block on this new synth, which the audio thread doesn't have yet.)
+                int lowest = -1, highest = -1;
+
+                if (ok)
+                {
+                    juce::AudioBuffer<float> probe (2, 256);
+                    float* channels[2] { probe.getWritePointer (0), probe.getWritePointer (1) };
+
+                    for (int key = 0; key < 128; ++key)
+                    {
+                        synth->noteOn (0, key, 100);
+                        synth->renderBlock (channels, 256, 1);
+
+                        if (synth->getNumActiveVoices() > 0)
+                        {
+                            if (lowest < 0)
+                                lowest = key;
+
+                            highest = key;
+                        }
+
+                        synth->allSoundOff();
+                        synth->renderBlock (channels, 256, 1);
+                    }
+                }
+
+                owner.lowestKey = lowest;
+                owner.highestKey = highest;
+
                 // Hand it over. If an earlier one is still waiting (never
                 // played), it's out of date: delete it.
                 delete owner.incoming.exchange (synth.release());

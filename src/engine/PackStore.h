@@ -30,6 +30,13 @@ class SoundLibrary;
     holding one pack folder (see SoundLibrary for what's in it).
     tools/make_pack.py makes the zip and its index entry.
 
+    The index may instead be a Nota sample registry's (nota-samples-registry):
+    packs with "versions"[0]."asset" {url, sha256, size, unpackedSize} and
+    "tags", whose zips are the authors' own SFZ libraries. Those are unpacked
+    into a pack's Library folder, and the pack.json and one instrument.json
+    per SFZ program are written here. Their ids get a "nota." prefix, and
+    only multisample and one-shots packs are listed.
+
     Downloads run in the background: download, check the
     SHA-256, unpack into a hidden folder next to the installed packs, then
     swap it in (replacing an older version). The library is then rescanned
@@ -109,6 +116,8 @@ private:
         StorePack info;            // id, name, description, category, author, license, sizes, availableVersion
         juce::URL url;
         juce::String sha256;       // lowercase hex
+        bool rawArchive = false;   // a Nota registry entry: an SFZ library to wrap in a pack when installed
+        juce::String source, attribution;   // (raw archives) where the author publishes it, and the credit line
     };
 
     struct CollectionListing
