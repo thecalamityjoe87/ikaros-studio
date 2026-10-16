@@ -12,6 +12,12 @@ AudioPreview::AudioPreview (juce::AudioDeviceManager& dm, juce::AudioFormatManag
     deviceManager.addAudioCallback (&player);
 }
 
+void AudioPreview::reattach()
+{
+    deviceManager.removeAudioCallback (&player);
+    deviceManager.addAudioCallback (&player);
+}
+
 AudioPreview::~AudioPreview()
 {
     deviceManager.removeAudioCallback (&player);

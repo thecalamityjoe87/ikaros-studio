@@ -24,6 +24,8 @@ namespace
         { "Synths",      0xffc78bff },
         { "Guitar",      0xffffd25a },
         { "Strings",     0xffff7aa8 },
+        { "Woodwinds",   0xff8fd9a8 },
+        { "Brass",       0xffe6b85c },
         { "Loops",       0xffffb547 },
         { "Audio Files", 0xffa3abb8 },
         { "Plug-ins",    0xff6fd6d0 },
@@ -216,7 +218,7 @@ private:
 
 //==============================================================================
 LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
-    : engine (e), selection (s)
+    : engine (e), selection (s), loopBrowser (e)
 {
     setTitle ("Sound library");
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
@@ -233,7 +235,13 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     for (auto& c : categories)
     {
         auto* tile = tiles.add (new CategoryTile (c.name, juce::Colour (c.colour)));
-        tile->onClick = [this, n = juce::String (c.name)] { selectCategory (n); };
+        tile->onClick = [this, n = juce::String (c.name)]
+        {
+            if (n == "Loops")
+                openLoopBrowser();
+            else
+                selectCategory (n);
+        };
         addAndMakeVisible (tile);
     }
 
@@ -275,11 +283,20 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     moreSoundsButton.setFont (fonts::uiSemiBold (13.0f));
     moreSoundsButton.setIconSize (16.0f);
     moreSoundsButton.setTooltip ("Download more instruments and loops");
-    moreSoundsButton.onClick = [this] { if (onMoreSoundsRequested) onMoreSoundsRequested(); };
+    moreSoundsButton.onClick = [this]
+    {
+        const bool noPacks = selectedCategory == "Audio Files" || selectedCategory == "Plug-ins";
+
+        if (onMoreSoundsRequested)
+            onMoreSoundsRequested (noPacks ? juce::String() : selectedCategory);
+    };
     addAndMakeVisible (moreSoundsButton);
 
     auto music = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
     audioFolder = music.isDirectory() ? music : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+
+    loopBrowser.onFreesoundSetupRequested = [this] { if (onFreesoundSetupRequested) onFreesoundSetupRequested(); };
+    addChildComponent (loopBrowser);
 
     selectCategory (selectedCategory);
 }
@@ -301,6 +318,13 @@ void LibrarySidebar::selectCategory (const juce::String& name)
     searchField.clear();
     rebuildList();
     resized();
+}
+
+void LibrarySidebar::openLoopBrowser()
+{
+    engine.getPreview().stop();
+    loopBrowser.open();
+    repaint();
 }
 
 bool LibrarySidebar::hasTools() const
@@ -405,10 +429,6 @@ std::vector<LibrarySidebar::Item> LibrarySidebar::collectItems() const
         addPlugins (true);
         addPlugins (false);
     }
-    else if (selectedCategory == "Loops")
-    {
-        addLoops (false);
-    }
     else if (selectedCategory == "Plug-ins")
     {
         addPlugins (true);
@@ -422,6 +442,7 @@ std::vector<LibrarySidebar::Item> LibrarySidebar::collectItems() const
     return items;
 }
 
+//==============================================================================
 void LibrarySidebar::rebuildList()
 {
     rows.clear();
@@ -446,6 +467,7 @@ void LibrarySidebar::rebuildList()
         emptyText = "No sounds here yet.";
 
     knownPluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
+    knownSoundCount = (int) (engine.getSounds().getSounds().size() + engine.getSounds().getLoops().size());
     updateScanText();
     refresh();
     layoutList();
@@ -455,10 +477,21 @@ void LibrarySidebar::rebuildList()
 
 void LibrarySidebar::refresh()
 {
+    loopBrowser.refresh();
+
     // New plug-ins arrived (a scan found some): show them.
     const auto pluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
 
     if (pluginCount != knownPluginCount && (selectedCategory == "Plug-ins" || searchField.getText().isNotEmpty()))
+    {
+        rebuildList();
+        return;
+    }
+
+    // A pack was installed or removed: show its sounds.
+    const auto soundCount = (int) (engine.getSounds().getSounds().size() + engine.getSounds().getLoops().size());
+
+    if (soundCount != knownSoundCount && selectedCategory != "Audio Files" && selectedCategory != "Plug-ins")
     {
         rebuildList();
         return;
@@ -478,6 +511,8 @@ void LibrarySidebar::update()
 {
     if (! isShowing())
         return;
+
+    loopBrowser.update();
 
     auto playing = engine.getPreview().getPlayingFile();
 
@@ -642,6 +677,9 @@ void LibrarySidebar::chooseFolder()
 //==============================================================================
 void LibrarySidebar::paintOverChildren (juce::Graphics& g)
 {
+    if (loopBrowser.isVisible())
+        return;
+
     // Magnifier inside the search field (its left indent leaves room). Drawn
     // over the children: the TextEditor fills its own background, so
     // anything paint() drew there would be hidden.
@@ -675,6 +713,8 @@ void LibrarySidebar::paint (juce::Graphics& g)
 
 void LibrarySidebar::resized()
 {
+    loopBrowser.setBounds (getLocalBounds());
+
     auto r = getLocalBounds().withTrimmedRight (1).reduced (12);
 
     searchField.setBounds (r.removeFromTop (36));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/Preferences.h"
 #include "ui/widgets/IconButton.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -19,7 +20,8 @@ class AudioEngine;
     the keys and forward note events to the engine.
 */
 class PianoKeyboard  : public juce::Component,
-                       private juce::MidiKeyboardState::Listener
+                       private juce::MidiKeyboardState::Listener,
+                       private Preferences::Listener
 {
 public:
     explicit PianoKeyboard (AudioEngine&);
@@ -34,6 +36,10 @@ public:
     /** Moves the keyboard up (+1) or down (-1) an octave. */
     void shiftOctave (int direction);
 
+    /** Shows the keys an instrument plays (lowest to highest MIDI note): from the C
+        below its lowest key, or around the middle if it's wider than the keyboard. */
+    void showRange (int lowestPlayed, int highestPlayed);
+
 private:
     class Keys;
 
@@ -45,6 +51,8 @@ private:
     int lowestNote = 48;   // C3; always a C
 
     void updateRange();
+    void preferenceChanged (const juce::String& key) override;
+    void applyVelocityPreference();
 
     // MidiKeyboardState::Listener. Called on the message thread for mouse and
     // computer-keyboard input.

@@ -71,6 +71,36 @@ public:
                 const bool ok = file.existsAsFile() && synth->loadSfzFile (file.getFullPathName().toStdString());
                 owner.numRegions = ok ? synth->getNumRegions() : 0;
 
+                // Which keys make a sound: the on-screen keyboard shows that range. (Each key is played
+                // for one block on this new synth, which the audio thread doesn't have yet.)
+                int lowest = -1, highest = -1;
+
+                if (ok)
+                {
+                    juce::AudioBuffer<float> probe (2, 256);
+                    float* channels[2] { probe.getWritePointer (0), probe.getWritePointer (1) };
+
+                    for (int key = 0; key < 128; ++key)
+                    {
+                        synth->noteOn (0, key, 100);
+                        synth->renderBlock (channels, 256, 1);
+
+                        if (synth->getNumActiveVoices() > 0)
+                        {
+                            if (lowest < 0)
+                                lowest = key;
+
+                            highest = key;
+                        }
+
+                        synth->allSoundOff();
+                        synth->renderBlock (channels, 256, 1);
+                    }
+                }
+
+                owner.lowestKey = lowest;
+                owner.highestKey = highest;
+
                 // Hand it over. If an earlier one is still waiting (never
                 // played), it's out of date: delete it.
                 delete owner.incoming.exchange (synth.release());
@@ -94,6 +124,22 @@ private:
 //==============================================================================
 SfzPlugin::SfzPlugin (te::PluginCreationInfo info) : te::Plugin (info)
 {
+    // A parameter for each controller the instrument's knobs use, so they
+    // can be automated. (Which controllers those are was stored in the
+    // state when the instrument was picked: see createSfzInstrument.)
+    for (int cc = 0; cc < (int) ccValues.size(); ++cc)
+    {
+        if (! state.hasProperty (ccProperty (cc)))
+            continue;
+
+        CcParameter p;
+        p.cc = cc;
+        p.value = std::make_unique<juce::CachedValue<float>> (state, ccProperty (cc), getUndoManager(), 0.5f);
+        p.parameter = addParam (ccProperty (cc).toString(), "CC " + juce::String (cc), { 0.0f, 1.0f });
+        p.parameter->attachToCurrentValue (*p.value);
+        ccParameters.push_back (std::move (p));
+    }
+
     readCcValues();
     loader = std::make_unique<Loader> (*this);
     requestLoad();
@@ -103,11 +149,23 @@ SfzPlugin::~SfzPlugin()
 {
     notifyListenersOfDeletion();
 
+    for (auto& p : ccParameters)
+        p.parameter->detachFromCurrentValue();
+
     // Stop the loader first, so nothing hands over a synth while we tidy up.
     loader.reset();
     delete active;
     delete incoming.exchange (nullptr);
     delete outgoing.exchange (nullptr);
+}
+
+te::AutomatableParameter* SfzPlugin::getCcParameter (int controllerNumber) const
+{
+    for (auto& p : ccParameters)
+        if (p.cc == controllerNumber)
+            return p.parameter.get();
+
+    return nullptr;
 }
 
 juce::File SfzPlugin::getSfzFile() const

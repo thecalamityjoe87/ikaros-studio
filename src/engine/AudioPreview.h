@@ -20,6 +20,10 @@ public:
     AudioPreview (juce::AudioDeviceManager&, juce::AudioFormatManager&);
     ~AudioPreview() override;
 
+    /** Moves its device callback to the back of the queue (see
+        AudioEngine::reattachAudioCallbacks). */
+    void reattach();
+
     /** Starts playing a file from the beginning (stopping any other). */
     bool play (const juce::File&);
     void stop();

@@ -1,4 +1,5 @@
 #include "ui/bottompanel/RecordingView.h"
+#include "ui/dialogs/MonitoringWarning.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -27,11 +28,14 @@ RecordingView::RecordingView (AudioEngine& e, Selection& s) : engine (e), select
     monitorButton.setTooltip ("Hear the input through your speakers or headphones");
     monitorButton.onClick = [this]
     {
-        engine.getTracks().inputs().setMonitoring (trackId, ! monitorButton.getToggleState());
+        setMonitoringWithWarning (engine, trackId, ! monitorButton.getToggleState(), this);
     };
     addChildComponent (monitorButton);
 
     addChildComponent (meter);
+
+    clipLight.onClear = [this] { engine.getTracks().inputs().clearClipIndicator (trackId); };
+    addChildComponent (clipLight);
 }
 
 void RecordingView::refresh()
@@ -46,6 +50,7 @@ void RecordingView::refresh()
     inputBox.setVisible (isAudio);
     monitorButton.setVisible (isAudio);
     meter.setVisible (isAudio);
+    clipLight.setVisible (isAudio);
 
     if (isAudio)
     {
@@ -83,7 +88,11 @@ void RecordingView::refresh()
 void RecordingView::updateMeter()
 {
     if (isAudio && isShowing())
-        meter.setLevel (engine.getTracks().inputs().getInputLevel (trackId));
+    {
+        auto reading = engine.getTracks().inputs().getInputMeter (trackId);
+        meter.setLevel (reading.level);
+        clipLight.setClipped (reading.clipped);
+    }
 }
 
 int RecordingView::getIdealHeight() const
@@ -132,7 +141,10 @@ void RecordingView::resized()
     monitorButton.setBounds (r.removeFromTop (30).withWidth (130));
     r.removeFromTop (10);
 
-    meter.setBounds (r.removeFromTop (12));
+    auto meterRow = r.removeFromTop (12);
+    clipLight.setBounds (meterRow.removeFromRight (12));
+    meterRow.removeFromRight (6);
+    meter.setBounds (meterRow);
     r.removeFromTop (10);
 
     hintArea = r.removeFromTop (36);

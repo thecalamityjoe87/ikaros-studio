@@ -71,6 +71,11 @@ public:
 
     void renameRegion (RegionId, const juce::String& newName);
 
+    /** Sets how long an audio region fades in (fadeIn) or out, in beats, as
+        one "Fade In" or "Fade Out" undo step. Never shorter than the
+        automatic edge fade, and never running into the other fade. */
+    void setFade (RegionId, bool fadeIn, double lengthBeats);
+
     /** Region clipboard. Pasting puts the earliest copied region at `beat` on
         `track`, keeping the regions' spacing and track layout. A region whose
         target track is the wrong kind goes back to the track it came from.

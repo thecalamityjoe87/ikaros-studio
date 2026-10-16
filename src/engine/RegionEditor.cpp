@@ -1,6 +1,7 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
 #include "engine/SoundLibrary.h"
+#include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -111,6 +112,9 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
     if (auto* track = clip.getClipTrack())
         r.trackId = track->itemID.getRawID();
 
+    r.takeCount = countTakes (clip);
+    r.currentTake = juce::jmax (0, currentTakeIndex (clip));
+
     if (clip.isLooping())
     {
         r.loopLengthBeats = clip.getLoopLengthBeats().inBeats();
@@ -122,8 +126,8 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
         r.isMidi = true;
         auto contentOffset = contentOffsetBeats (clip);
 
-        // Recorded notes (and ones from older sessions) get their IDs the
-        // first time anyone looks at them.
+        // Notes get their IDs when they're made, recorded or loaded (see
+        // AudioEngine::assignAllNoteIds); this only catches anything missed.
         assignNoteIds (*midi);
 
         for (auto* n : midi->getSequence().getNotes())
@@ -139,6 +143,15 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
 
         if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
             r.peaks = waveforms.computePeaks (*wave, 256);
+
+        // Fades are stored in seconds; the UI works in beats.
+        if (auto* audio = dynamic_cast<te::AudioClipBase*> (&clip))
+        {
+            auto& edit = clip.edit;
+            const auto range = clip.getPosition().time;
+            r.fadeInBeats = timeToBeat (edit, range.getStart() + audio->getFadeIn()) - r.startBeat;
+            r.fadeOutBeats = r.startBeat + r.lengthBeats - timeToBeat (edit, range.getEnd() - audio->getFadeOut());
+        }
     }
 
     return r;
@@ -232,6 +245,9 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
                              te::BeatDuration::fromBeats (half - 0.15), hit == 0.0 ? 92 : 76, 0, um);
     }
 
+    // IDs now, as part of the new region (so undo and redo keep them), rather
+    // than the first time someone reads the region.
+    assignNoteIds (*clip);
     return clip->itemID.getRawID();
 }
 
@@ -441,7 +457,15 @@ std::vector<RegionId> RegionEditor::splitRegions (const std::vector<RegionId>& i
     for (auto* clip : toSplit)
         if (auto* track = clip->getClipTrack())
             if (auto* right = track->splitClip (*clip, beatToTime (*edit, beat)))
+            {
+                // Tracktion takes the fades away where it cuts, which is
+                // exactly where a click would be.
+                for (auto* half : { clip, right })
+                    if (auto* audio = dynamic_cast<te::AudioClipBase*> (half))
+                        ensureEdgeFades (*audio);
+
                 rightHalves.push_back (right);
+            }
 
     return idsOf (rightHalves);
 }
@@ -496,6 +520,41 @@ void RegionEditor::renameRegion (RegionId id, const juce::String& newName)
             clip->setName (name);
         }
     }
+}
+
+void RegionEditor::setFade (RegionId id, bool fadeIn, double lengthBeats)
+{
+    auto* edit = owner.getEdit();
+    auto* clip = dynamic_cast<te::AudioClipBase*> (findClip (edit, id));
+
+    if (clip == nullptr)
+        return;
+
+    // The length in seconds, measured from the region's edge (the tempo can
+    // differ along the way).
+    const auto range = clip->getPosition().time;
+    const double startBeat = timeToBeat (*edit, range.getStart());
+    const double endBeat = timeToBeat (*edit, range.getEnd());
+    lengthBeats = juce::jlimit (0.0, endBeat - startBeat, lengthBeats);
+
+    double seconds = fadeIn ? (beatToTime (*edit, startBeat + lengthBeats) - range.getStart()).inSeconds()
+                            : (range.getEnd() - beatToTime (*edit, endBeat - lengthBeats)).inSeconds();
+
+    // It stops where the other fade starts.
+    const auto other = (fadeIn ? clip->getFadeOut() : clip->getFadeIn()).inSeconds();
+    seconds = juce::jlimit (minFadeSeconds, juce::jmax (minFadeSeconds, range.getLength().inSeconds() - other), seconds);
+
+    const auto current = (fadeIn ? clip->getFadeIn() : clip->getFadeOut()).inSeconds();
+
+    if (std::abs (seconds - current) < 1.0e-6)
+        return;   // no undo step for a drag that ends where it started
+
+    owner.beginUndoStep (fadeIn ? "Fade In" : "Fade Out");
+
+    if (fadeIn)
+        clip->setFadeIn (te::TimeDuration::fromSeconds (seconds));
+    else
+        clip->setFadeOut (te::TimeDuration::fromSeconds (seconds));
 }
 
 void RegionEditor::copyRegions (const std::vector<RegionId>& ids)
@@ -646,6 +705,7 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
                 clip->setAutoTempo (true);
             }
 
+            ensureEdgeFades (*clip);
             added.push_back (clip.get());
             start = start + length;
         }

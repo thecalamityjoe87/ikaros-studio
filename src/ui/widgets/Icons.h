@@ -10,10 +10,10 @@ namespace ikaros
 enum class Icon
 {
     library, plus, undo, redo, toStart, play, pause, record, loop, metronome, search,
-    keyboards, drums, bass, synths, guitar, strings, loops, mic,
+    keyboards, drums, bass, synths, guitar, strings, woodwinds, brass, loops, mic,
     windowMinimise, windowMaximise, windowRestore, windowClose,
     power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
-    plugin, folder, stop, warning, openWindow, chevronLeft, clock, download
+    plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash
 };
 
 namespace icons

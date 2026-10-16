@@ -16,11 +16,11 @@ namespace ikaros
     regions, the dashed drop zone, and the playhead.
 
     Layout:
-        ┌─────────── 260 ───────────┬──────────── lanes ────────────┐
-        │ TRACKS  [Snap: Beat] ⌕──○ │ ruler  1   2   3   4 ...      │  30px
+        ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
+        │ TRACKS [Snap: Beat] ⟋ ⌕─○ │ ruler  1   2   3   4 ...      │  30px
         ├───────────────────────────┼───────────────────────────────┤
-        │ TrackHeader               │ lane  [region] [region]       │  76px
-        │ TrackHeader               │ lane                          │  each
+        │ TrackHeader               │ lane  [region] [region]       │ 100px
+        │ TrackHeader               │ lane                          │ (118 w/ automation)
         │                           │ ┌ drop zone ┐                 │
         │                           │ ◀═══════ scroll bar ═══════▶  │  12px
         └───────────────────────────┴───────────────────────────────┘
@@ -32,6 +32,10 @@ namespace ikaros
     move (to another track of the same kind too), drag an edge to trim,
     double-click the name to rename. Audio files can be dropped on a lane or
     the drop zone.
+
+    Each track can show its automation over its lane (the button under its
+    icon, or "Show Automation" above the headers for every track): see
+    AutomationLane.
 
     Right-click a track header for the track menu (duplicate, rename, colour,
     reorder, delete...), or an empty part of a lane for the lane menu (add or
@@ -69,6 +73,9 @@ public:
     void setSnap (Snap);
     Snap getSnap() const noexcept               { return snap; }
 
+    /** Takes the snap setting from the Preferences (on or off, and its grid). */
+    void applySnapPreference();
+
     /** The nearest grid line to a beat (or the beat itself with snap off). */
     double snapBeat (double beat) const;
 
@@ -83,6 +90,10 @@ public:
 
     /** Shows the rename field on a track header (scrolling it into view first). */
     void startRenamingTrack (TrackId);
+
+    /** A track's record-arm button (scrolling its row into view first), or
+        nullptr if there's no such track. */
+    juce::Component* getArmButton (TrackId);
 
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
@@ -135,6 +146,7 @@ private:
     class Overlay;
     class Content;
     class RegionDrag;
+    class AutomationLane;
 
     AudioEngine& engine;
     Selection& selection;
@@ -150,6 +162,7 @@ private:
     juce::ScrollBar timeScrollBar { false };   // false = horizontal
 
     IconButton snapButton { "Snap to grid", std::nullopt, "Snap: Beat" };
+    IconButton automationButton { "Show automation", Icon::automation };
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Rectangle<int> zoomIconArea;
 
@@ -171,8 +184,10 @@ private:
     void updateScrollBar();
     void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
     void showSnapMenu();
+    void updateAutomationButton();   // on while every track's automation shows
 
-    /** Mouse wheel over the timeline: Ctrl/Cmd zooms, Shift (or a sideways
+    /** Mouse wheel over the timeline: Ctrl/Cmd zooms (unless the Preferences
+        say the wheel only scrolls), Shift (or a sideways
         swipe) scrolls in time. Returns false to let the wheel scroll vertically. */
     bool handleWheel (const juce::MouseEvent&, const juce::MouseWheelDetails&, bool wheelScrollsTime);
 
@@ -188,6 +203,7 @@ private:
     void regionMouseUp (RegionComponent&, const juce::MouseEvent&);
     void regionDoubleClicked (RegionComponent&, RegionComponent::Zone);
     void showRegionMenu();
+    void showTakeMenu (RegionComponent&);   // the take badge's menu
 
     // Context menus for tracks. They act on the selected track, so the
     // header or lane selects its track before showing them.
@@ -205,6 +221,12 @@ private:
     int rowOf (TrackId) const;
     int rowAt (int y) const;   // y in this component's coordinates
     juce::Rectangle<float> rowAreaInOverlay (int row) const;
+
+    // A row is taller while its track's automation shows (room for the
+    // picker in its header), so rows can differ in height.
+    int rowTop (int row) const;          // in the content's coordinates
+    int rowHeightOf (int row) const;
+    int getTracksHeight() const;         // all the rows
 
     // Audio file drops
     struct DropTarget { TrackId track = 0; int row = -1; double beat = 0.0; };

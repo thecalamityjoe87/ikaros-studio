@@ -68,6 +68,14 @@ miniz, which reads and writes .iksession files
   The full license text is in external/miniz/LICENSE.
 
 
+LAME, which encodes MP3 exports
+  https://lame.sourceforge.io
+  GNU Lesser General Public License, version 2 or later
+  Copyright the LAME project contributors (version 3.100)
+  The full license text is in external/lame/COPYING. Ikaros Studio uses
+  LAME's encoder library unchanged; its source is in external/lame.
+
+
 Fonts
   Figtree and JetBrains Mono, SIL Open Font License 1.1 (see resources/fonts).
 

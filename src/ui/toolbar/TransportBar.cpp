@@ -41,9 +41,10 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     metronomeButton.setClickingTogglesState (true);
     countInButton.setClickingTogglesState (true);
 
-    // "1234", like a count-in: one bar of clicks before recording starts.
+    // "1234", like a count-in: clicks before recording starts. It turns on
+    // the length last chosen in the Mix menu (1 bar to begin with).
     countInButton.setFont (fonts::monoBold (11.0f));
-    countInButton.setTooltip ("Count-in: one bar of clicks before recording starts");
+    countInButton.setTooltip ("Count-in: clicks before recording starts (1 or 2 bars: Mix > Count-in)");
 
     toStartButton.onClick   = [this] { engine.goToStart(); };
     playButton.onClick      = [this] { engine.togglePlay(); };

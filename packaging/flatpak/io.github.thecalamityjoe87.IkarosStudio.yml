@@ -39,4 +39,4 @@ modules:
       # allow network access during the build, so submodules must be fetched here):
       # - type: git
       #   url: https://github.com/thecalamityjoe87/ikaros-studio.git
-      #   tag: v0.1.0
+      #   tag: v0.0.1

@@ -141,6 +141,10 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
                                           juce::Slider::SliderStyle style, juce::Slider& s)
 {
     const bool vertical = style == juce::Slider::LinearVertical;
+
+    // An automated control (see setAutomatedLook) has an amber thumb: the
+    // automation moves it, not the user.
+    const bool automated = s.getProperties()["automated"];
     auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
     auto trackColour = s.findColour (juce::Slider::trackColourId);
 
@@ -152,7 +156,7 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         g.fillRoundedRectangle (slot, 3.0f);
 
         auto cap = juce::Rectangle<float> (26.0f, 14.0f).withCentre ({ slot.getCentreX(), sliderPos });
-        g.setColour (juce::Colour (0xffc9d0da));
+        g.setColour (automated ? colour::accent : juce::Colour (0xffc9d0da));
         g.fillRoundedRectangle (cap, 4.0f);
         g.setColour (colour::lcdLabel);
         g.fillRect (cap.removeFromBottom (2.0f).reduced (3.0f, 0.0f));
@@ -168,7 +172,7 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         g.fillRoundedRectangle (track.withRight (sliderPos), 2.0f);
 
         auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ sliderPos, track.getCentreY() });
-        g.setColour (colour::text);
+        g.setColour (automated ? colour::accent : colour::text);
         g.fillEllipse (thumb);
     }
 
@@ -230,7 +234,8 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     // getPointOnCircumference measures angles clockwise from 12 o'clock, like the slider does.
     auto inner = centre.getPointOnCircumference (capRadius * 0.27f, valueAngle);
     auto outer = centre.getPointOnCircumference (capRadius * 0.8f, valueAngle);
-    g.setColour (colour::text);
+    // An automated knob's needle is amber (see drawLinearSlider).
+    g.setColour ((bool) s.getProperties()["automated"] ? colour::accent : colour::text);
     g.drawLine ({ inner, outer }, size * 0.055f);
 
     if (s.hasKeyboardFocus (false))

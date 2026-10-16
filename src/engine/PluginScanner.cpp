@@ -243,6 +243,12 @@ void PluginScanner::saveRecord()
     xml.writeTo (recordFile);
 }
 
+void PluginScanner::setSearchOptions (const juce::StringArray& extra, const juce::StringArray& disabled)
+{
+    extraFolders = extra;
+    disabledFormats = disabled;
+}
+
 void PluginScanner::start (const juce::StringArray& folders, bool rescanEverything)
 {
     if (isThreadRunning())
@@ -255,11 +261,15 @@ void PluginScanner::start (const juce::StringArray& folders, bool rescanEverythi
 
     for (auto* format : formats.getFormats())
     {
-        if (! format->canScanForPlugins())
+        if (! format->canScanForPlugins() || disabledFormats.contains (format->getName()))
             continue;
 
         auto path = folders.isEmpty() ? format->getDefaultLocationsToSearch()
                                       : juce::FileSearchPath (folders.joinIntoString (";"));
+
+        if (folders.isEmpty())
+            for (auto& extra : extraFolders)
+                path.addIfNotAlreadyThere (juce::File (extra));
 
         for (auto& file : format->searchPathsForPlugins (path, true, false))
         {

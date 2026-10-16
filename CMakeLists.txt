@@ -9,11 +9,27 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(IkarosStudio VERSION 0.1.0 LANGUAGES C CXX)
+project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Tracktion/JUCE translation units are huge (~3 GB each with -g), so cap Ninja's
+# parallelism by RAM instead of core count. Override with -DIKAROS_COMPILE_JOBS=N.
+cmake_host_system_information(RESULT IKAROS_TOTAL_MB QUERY TOTAL_PHYSICAL_MEMORY)
+cmake_host_system_information(RESULT IKAROS_CORES QUERY NUMBER_OF_LOGICAL_CORES)
+math(EXPR IKAROS_DEFAULT_JOBS "${IKAROS_TOTAL_MB} / 3072")
+if(IKAROS_DEFAULT_JOBS GREATER IKAROS_CORES)
+    set(IKAROS_DEFAULT_JOBS ${IKAROS_CORES})
+endif()
+if(IKAROS_DEFAULT_JOBS LESS 1)
+    set(IKAROS_DEFAULT_JOBS 1)
+endif()
+set(IKAROS_COMPILE_JOBS ${IKAROS_DEFAULT_JOBS} CACHE STRING "Max concurrent compile jobs (Ninja)")
+set_property(GLOBAL PROPERTY JOB_POOLS ikaros_compile=${IKAROS_COMPILE_JOBS} ikaros_link=1)
+set(CMAKE_JOB_POOL_COMPILE ikaros_compile)
+set(CMAKE_JOB_POOL_LINK ikaros_link)
 
 # Platform settings that must be decided *before* JUCE is added.
 if(APPLE)
@@ -35,6 +51,28 @@ if(NOT EXISTS "${TE_DIR}/modules/juce/CMakeLists.txt")
         "Tracktion Engine / JUCE submodules are missing. Run:\n"
         "  git -c url.\"https://github.com/\".insteadOf=\"git@github.com:\" submodule update --init --recursive")
 endif()
+
+# Fixes to JUCE that aren't upstream: each patch is applied once (it's skipped
+# when it's already in).
+find_package(Git REQUIRED)
+set(JUCE_DIR "${TE_DIR}/modules/juce")
+file(GLOB IKAROS_JUCE_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/juce-*.patch")
+
+foreach(patch IN LISTS IKAROS_JUCE_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${JUCE_DIR}"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${JUCE_DIR}"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to JUCE")
+        endif()
+    endif()
+endforeach()
 
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
@@ -89,6 +127,10 @@ endif()
 
 add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
 
+# LAME's MP3 encoder (libmp3lame 3.100, LGPL), kept in the repo since LAME
+# has no official git repository; see external/lame/README.ikaros.
+add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_ALL)
+
 # Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
 # Units on macOS. JUCE ships everything needed to host them.
 if(APPLE)
@@ -123,7 +165,8 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-SemiBold.ttf
         resources/fonts/Figtree-Bold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
-        resources/fonts/JetBrainsMono-Bold.ttf)
+        resources/fonts/JetBrainsMono-Bold.ttf
+        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
 
 # ------------------------------------------------------------------------------
 # Sources, grouped like the folders under src/. Headers are listed too so they
@@ -146,23 +189,38 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/WaveformCache.h      src/engine/WaveformCache.cpp
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
+    src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
+    src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
+    src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
+    src/engine/SoundControls.h
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
+    src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
+    src/engine/Autosaver.h          src/engine/Autosaver.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PackStore.h          src/engine/PackStore.cpp
+    src/engine/FreesoundStore.h     src/engine/FreesoundStore.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
-    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp)
+    src/engine/AudioPreview.h       src/engine/AudioPreview.cpp
+    src/engine/SongExporter.h       src/engine/SongExporter.cpp
+    src/engine/Mp3Format.h          src/engine/Mp3Format.cpp
+    src/engine/RecordingTypes.h
+    src/engine/Preferences.h        src/engine/Preferences.cpp
+    src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
+    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
     src/platform/WindowManagerHints.h  src/platform/WindowManagerHints.cpp
     src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
-    src/platform/AppFolders.h          src/platform/AppFolders.cpp)
+    src/platform/AppFolders.h          src/platform/AppFolders.cpp
+    src/platform/FileLock.h            src/platform/FileLock.cpp
+    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
@@ -175,9 +233,12 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
     src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
+    src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
+    src/ui/widgets/FolderField.h            src/ui/widgets/FolderField.cpp
 
     # state: UI state shared between areas
     src/ui/state/Selection.h
@@ -187,6 +248,17 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
+    src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
+    src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
+    src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
+    src/ui/dialogs/DeviceChangePrompt.h     src/ui/dialogs/DeviceChangePrompt.cpp
+
+    # the Preferences window and its pages
+    src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp
+    src/ui/preferences/PreferencesPage.h    src/ui/preferences/PreferencesPage.cpp
+    src/ui/preferences/PreferencesPages.h   src/ui/preferences/PreferencesPages.cpp
+    src/ui/preferences/SoundsPluginsPage.cpp
+    src/ui/preferences/AudioSettingsPanel.h src/ui/preferences/AudioSettingsPanel.cpp
 
     # windows of their own
     src/ui/pluginwindow/PluginWindow.h      src/ui/pluginwindow/PluginWindow.cpp
@@ -199,10 +271,13 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
+    src/ui/library/FreesoundSetupDialog.h   src/ui/library/FreesoundSetupDialog.cpp
+    src/ui/library/LoopBrowser.h            src/ui/library/LoopBrowser.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
     src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
+    src/ui/arrangement/ArrangementAutomation.h src/ui/arrangement/ArrangementAutomation.cpp
     src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
     src/ui/arrangement/ArrangementOverlays.h    src/ui/arrangement/ArrangementOverlays.cpp
     src/ui/arrangement/ArrangementRegionDrag.h  src/ui/arrangement/ArrangementRegionDrag.cpp
@@ -248,9 +323,11 @@ target_compile_definitions(IkarosStudio PRIVATE
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
-# (see src/engine/PackStore.h). Until the packs are hosted, a local test
-# index made by tools/make_pack.py. A web address or a file path.
-set(IKAROS_PACK_INDEX_URL "${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json"
+# (see src/engine/PackStore.h): a web address or a file path, in the app's own
+# index format or a Nota sample registry's. The default is the registry fork,
+# which publishes its index.json with GitHub Pages; the smoke test uses its
+# own index in tests/store.
+set(IKAROS_PACK_INDEX_URL "https://thecalamityjoe87.github.io/nota-samples-registry/index.json"
     CACHE STRING "The sound pack index the app downloads packs from")
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_PACK_INDEX_URL}")
 
@@ -258,6 +335,7 @@ target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
         miniz
+        mp3lame
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
@@ -349,6 +427,9 @@ if(IKAROS_BUILD_TESTS)
     target_sources(IkarosEngineSmokeTest PRIVATE
         tests/EngineSmokeTest.cpp
         src/platform/AppFolders.cpp      # the engine keeps open sessions there
+        src/platform/FileLock.cpp        # and marks them as open with a lock
+        src/platform/AudioHardware.cpp   # and the audio device watcher notices new sound cards
+        src/engine/TestAudioDevice.cpp   # a pretend audio interface the test drives
         ${IKAROS_ENGINE_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
@@ -362,6 +443,7 @@ if(IKAROS_BUILD_TESTS)
 
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1        # for runDispatchLoopUntil() in the test
+        JUCE_USE_MP3AUDIOFORMAT=1           # to read exported MP3s back
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
@@ -370,6 +452,7 @@ if(IKAROS_BUILD_TESTS)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
         miniz
+        mp3lame
         sfizz::sfizz
         tracktion::tracktion_core
         tracktion::tracktion_engine
@@ -391,7 +474,29 @@ if(IKAROS_BUILD_TESTS)
     ikaros_copy_sounds(IkarosEngineSmokeTest)
 
     # The test scans the test plug-ins when they've been built.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins")
+    # One test per section (see main() in the test), so `ctest -L export`
+    # runs just that section.
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences)
+    add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
+    add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
+    add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
+    set_tests_properties(EngineSmokeTest PROPERTIES LABELS "engine")
+    set_tests_properties(EngineSmokeTest.Export PROPERTIES LABELS "export")
+    set_tests_properties(EngineSmokeTest.Undo PROPERTIES LABELS "undo")
+    set_tests_properties(EngineSmokeTest.Recovery PROPERTIES LABELS "recovery")
+
+    # App-wide settings (see src/engine/Preferences.h), and what they change.
+    add_test(NAME EngineSmokeTest.Preferences COMMAND IkarosEngineSmokeTest --only=preferences)
+    set_tests_properties(EngineSmokeTest.Preferences PROPERTIES LABELS "preferences")
+
+    # Recording through a pretend audio interface (see src/engine/TestAudioDevice.h):
+    # latency, device trouble, full disks. The long take is "slow" (minutes).
+    add_test(NAME EngineSmokeTest.Recording COMMAND IkarosEngineSmokeTest --only=recording)
+    add_test(NAME EngineSmokeTest.Takes COMMAND IkarosEngineSmokeTest --only=takes)
+    add_test(NAME EngineSmokeTest.LongRecording COMMAND IkarosEngineSmokeTest --only=longrecording)
+    set_tests_properties(EngineSmokeTest.Recording PROPERTIES LABELS "recording")
+    set_tests_properties(EngineSmokeTest.Takes PROPERTIES LABELS "takes")
+    set_tests_properties(EngineSmokeTest.LongRecording PROPERTIES LABELS "slow" TIMEOUT 1800)
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

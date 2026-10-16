@@ -186,6 +186,24 @@ inline void assignNoteIds (te::MidiClip& clip)
                 n->state.setProperty (noteIdProp, (juce::int64) ++highest, nullptr);
 }
 
+// Every audio region fades in and out over at least this long, so cutting
+// into the middle of a sound doesn't click. Too short to hear as a fade.
+inline constexpr double minFadeSeconds = 0.005;
+
+// Gives an audio region at least the minimum fade at both edges. Tracktion
+// writes fades through the undo manager, so this is part of the current
+// undo step.
+inline void ensureEdgeFades (te::AudioClipBase& clip)
+{
+    const auto minimum = te::TimeDuration::fromSeconds (minFadeSeconds);
+
+    if (clip.getFadeIn() < minimum)
+        clip.setFadeIn (minimum);
+
+    if (clip.getFadeOut() < minimum)
+        clip.setFadeOut (minimum);
+}
+
 inline te::MidiNote* findNote (te::MidiClip& clip, NoteId id)
 {
     for (auto* n : clip.getSequence().getNotes())

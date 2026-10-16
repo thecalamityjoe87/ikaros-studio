@@ -6,7 +6,7 @@ namespace ikaros
 namespace
 {
     // The library's categories, in the order the sidebar shows them.
-    const char* const categoryOrder[] { "Keyboards", "Drums", "Bass", "Synths", "Guitar", "Strings" };
+    const char* const categoryOrder[] { "Keyboards", "Drums", "Bass", "Synths", "Guitar", "Strings", "Woodwinds", "Brass" };
 
     int categoryIndex (const juce::String& category)
     {
@@ -114,7 +114,8 @@ namespace
 const juce::String SoundLibrary::defaultSoundId ("synth:Basic Synth");
 
 //==============================================================================
-SoundLibrary::SoundLibrary()
+SoundLibrary::SoundLibrary (const juce::File& userSoundsFolder)
+    : userFolder (userSoundsFolder)
 {
     rescan();
 }
@@ -146,6 +147,15 @@ juce::File SoundLibrary::getBundledSoundsFolder()
     //   ../Resources/Sounds (inside a macOS .app)
     //   ../share/ikaros-studio/Sounds (Linux install and Flatpak)
     auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+   #if JUCE_LINUX
+    // In an AppImage the program is started through the AppRun symlink in the
+    // mount's root, and that's the path JUCE reports. /proc/self/exe is the
+    // real file (<mount>/usr/bin/ikaros-studio).
+    if (auto real = juce::File ("/proc/self/exe").getLinkedTarget(); real.existsAsFile())
+        exe = real;
+   #endif
+
     auto dir = exe.getParentDirectory();
 
     for (auto candidate : { dir.getChildFile ("Sounds"),
@@ -176,7 +186,7 @@ void SoundLibrary::rescan()
     // The packs that come with the app first, so if a user's pack has the
     // same id as one of them, the app's own wins.
     const auto bundledRoot = getBundledSoundsFolder();
-    std::vector<juce::File> roots { bundledRoot, getUserSoundsFolder() };
+    std::vector<juce::File> roots { bundledRoot, userFolder };
     roots.insert (roots.end(), extraPackFolders.begin(), extraPackFolders.end());
 
     for (auto& root : roots)
@@ -409,6 +419,10 @@ void SoundLibrary::readPack (const juce::File& pack, bool bundled)
             loop.file = loopFolder.getChildFile (l["file"].toString());
             loop.name = l.getProperty ("name", loop.file.getFileNameWithoutExtension()).toString();
             loop.bpm = l.getProperty ("bpm", 0.0);
+
+            if (auto* tags = l["tags"].getArray())
+                for (auto& t : *tags)
+                    loop.tags.add (t.toString().toLowerCase());
 
             juce::StringArray detail;
 

@@ -32,7 +32,6 @@ public:
         setScrollButtonsVisible (false);
         setBlackNoteWidthProportion (0.55f);
         setBlackNoteLengthProportion (0.6f);
-        setVelocity (0.8f, true);                 // velocity follows how low on the key you click
         setOctaveForMiddleC (4);
         setTitle ("On-screen keyboard");
         setColour (juce::MidiKeyboardComponent::shadowColourId, juce::Colours::transparentBlack);
@@ -120,6 +119,8 @@ PianoKeyboard::PianoKeyboard (AudioEngine& e) : engine (e)
     keys->onOctaveShift = [this] (int direction) { shiftOctave (direction); };
     addAndMakeVisible (*keys);
     state.addListener (this);
+    engine.getPreferences().addListener (this);
+    applyVelocityPreference();
 
     for (auto* b : { &octaveDown, &octaveUp })
     {
@@ -147,6 +148,25 @@ void PianoKeyboard::shiftOctave (int direction)
     updateRange();
 }
 
+void PianoKeyboard::showRange (int lowestPlayed, int highestPlayed)
+{
+    const auto floorC = lowestPlayed / 12 * 12;
+    auto start = floorC;
+
+    // Wider than the keyboard (a piano): the middle, as near C3 as the range allows.
+    if (highestPlayed - start >= numOctaves * 12)
+        start = juce::jlimit (floorC, juce::jmax (floorC, highestPlayed / 12 * 12 - (numOctaves - 1) * 12), defaultLowestNote);
+
+    start = juce::jlimit (minLowestNote, maxLowestNote, start);
+
+    if (start == lowestNote)
+        return;
+
+    releaseAll();
+    lowestNote = start;
+    updateRange();
+}
+
 void PianoKeyboard::updateRange()
 {
     const auto highest = lowestNote + numOctaves * 12 - 1;
@@ -166,8 +186,23 @@ void PianoKeyboard::updateRange()
 
 PianoKeyboard::~PianoKeyboard()
 {
+    engine.getPreferences().removeListener (this);
     state.removeListener (this);
     releaseAll();
+}
+
+void PianoKeyboard::preferenceChanged (const juce::String& key)
+{
+    if (key.isEmpty() || key == settings::keyboardVelocity.key)
+        applyVelocityPreference();
+}
+
+// The top velocity the keys play (a click lower on a key plays harder, up to this).
+void PianoKeyboard::applyVelocityPreference()
+{
+    const float velocities[] { 0.55f, 0.8f, 1.0f };   // soft, normal, hard
+    const auto choice = juce::jlimit (0, 2, engine.getPreferences().get (settings::keyboardVelocity));
+    keys->setVelocity (velocities[choice], true);
 }
 
 void PianoKeyboard::releaseAll()
@@ -198,7 +233,10 @@ void PianoKeyboard::resized()
     octaveDown.setBounds (r.removeFromLeft (buttonWidth));
     octaveUp.setBounds (r.removeFromRight (buttonWidth));
     keys->setBounds (r);
-    keys->setKeyWidth ((float) r.getWidth() / (float) numWhiteKeys);
+
+    // JUCE asserts on a zero key width; we are resized before first layout.
+    if (r.getWidth() > 0)
+        keys->setKeyWidth ((float) r.getWidth() / (float) numWhiteKeys);
 }
 
 } // namespace ikaros

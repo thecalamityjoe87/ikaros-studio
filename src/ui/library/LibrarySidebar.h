@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/widgets/IconButton.h"
+#include "ui/library/LoopBrowser.h"
 #include "ui/state/Selection.h"
 
 namespace ikaros
@@ -14,8 +15,10 @@ namespace ikaros
       Sound categories   click a sound to use it on the selected track (on an
                          audio track, or with nothing selected, it makes a new
                          instrument track)
-      Loops, Audio Files click to preview, drag onto the timeline to make a
-                         region. Audio Files browses folders on the computer.
+      Audio Files        click to preview, drag onto the timeline to make a
+                         region. It browses folders on the computer.
+      Loops              opens the loop browser, a page over the whole
+                         sidebar (see LoopBrowser)
       Plug-ins           third-party instruments (click to use) and effects
                          (click to add to the selected track), with the scan's
                          progress and a button to scan again
@@ -36,8 +39,12 @@ public:
     /** ~30 Hz: scan progress and which file is previewing. */
     void update();
 
-    /** The "More Sounds..." button: the owner opens the More Sounds window. */
-    std::function<void()> onMoreSoundsRequested;
+    /** The "More Sounds..." button: the owner opens the More Sounds window,
+        with the category being browsed (empty for Audio Files and Plug-ins). */
+    std::function<void (const juce::String& category)> onMoreSoundsRequested;
+
+    /** The loop browser needs an API key (or a new one): the owner opens the setup window. */
+    std::function<void()> onFreesoundSetupRequested;
 
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
@@ -80,12 +87,17 @@ private:
     IconButton moreSoundsButton { "More sounds", Icon::download, "More Sounds..." };
     juce::String scanText;
     int knownPluginCount = -1;
+    int knownSoundCount = -1;   // sounds and loops, so a pack installed or removed updates the list
 
     juce::String selectedCategory { "Keyboards" };
     juce::String heading, emptyText;
     juce::Rectangle<int> headingArea, toolsArea;
     juce::File playingFile;
 
+    // Drawn over everything else while it's open. Declared last, so it's on top.
+    LoopBrowser loopBrowser;
+
+    void openLoopBrowser();
     void selectCategory (const juce::String&);
     void rebuildList();
     std::vector<Item> collectItems() const;

@@ -1,6 +1,7 @@
 #include "engine/PackStore.h"
 #include "engine/SoundLibrary.h"
 #include <juce_cryptography/juce_cryptography.h>
+#include <set>
 
 namespace ikaros
 {
@@ -26,6 +27,35 @@ namespace
     juce::String readPackId (const juce::File& packFolder)
     {
         return juce::JSON::parse (packFolder.getChildFile ("pack.json"))["id"].toString();
+    }
+
+    // The library tile a Nota registry pack belongs under, from its tags (first match wins).
+    juce::String categoryFromTags (const juce::var& tags)
+    {
+        struct Rule { const char* category; const char* words; };
+        static const Rule rules[] {
+            { "Drums",     "drum drums percussion kit cymbal cymbals snare steel-drum" },
+            { "Bass",      "bass double-bass upright-bass" },
+            { "Keyboards", "piano keys keyboard organ harpsichord rhodes electric-piano" },
+            { "Guitar",    "guitar ukulele banjo mandolin" },
+            { "Synths",    "synth synthesizer pad lead" },
+            { "Strings",   "strings violin viola cello orchestra harp" },
+            { "Woodwinds", "woodwind woodwinds wind flute saxophone sax clarinet oboe bassoon recorder pipes" },
+            { "Brass",     "brass trumpet trombone tuba horn french-horn" },
+        };
+
+        juce::StringArray have;
+
+        if (auto* list = tags.getArray())
+            for (auto& t : *list)
+                have.add (t.toString().toLowerCase());
+
+        for (auto& rule : rules)
+            for (auto& word : juce::StringArray::fromTokens (rule.words, " ", {}))
+                if (have.contains (word))
+                    return rule.category;
+
+        return "Other";
     }
 
     constexpr int connectionTimeoutMs = 15000;
@@ -70,7 +100,35 @@ public:
                 l.sha256 = p["sha256"].toString().toLowerCase();
 
                 // A relative address is next to the index.
-                const auto address = p["url"].toString();
+                auto address = p["url"].toString();
+
+                // A Nota registry entry: the pack's zip is the author's own SFZ library.
+                const auto versions = p["versions"];
+                const auto newest = versions.size() > 0 ? versions[0] : juce::var();
+                const auto asset = newest["asset"];
+
+                if (address.isEmpty() && asset.isObject())
+                {
+                    const auto kind = p["kind"].toString();
+                    const auto archive = asset["archive"].toString();
+                    address = asset["url"].toString();
+
+                    // Only SFZ instrument libraries, in zips (the loop and mixed packs aren't supported).
+                    if ((kind != "multisample" && kind != "one-shots")
+                         || ! (archive == "zip" || (archive.isEmpty() && address.endsWithIgnoreCase (".zip"))))
+                        continue;
+
+                    l.rawArchive = true;
+                    l.info.id = "nota." + p["id"].toString().toLowerCase();
+                    l.info.category = categoryFromTags (p["tags"]);
+                    l.info.availableVersion = newest["version"].toString();
+                    l.info.downloadSize = (juce::int64) asset["size"];
+                    l.info.installedSize = (juce::int64) asset["unpackedSize"];
+                    l.sha256 = asset["sha256"].toString().toLowerCase();
+                    l.source = p["source"].toString();
+                    l.attribution = p["attribution"].toString();
+                }
+
                 l.url = address.contains (":") || address.startsWith ("/") ? toUrl (address)
                                                                            : url.getParentURL().getChildURL (address);
 
@@ -126,7 +184,7 @@ class PackStore::InstallJob  : public juce::ThreadPoolJob
 public:
     InstallJob (PackStore& s, const Listing& l, const juce::File& folder)
         : juce::ThreadPoolJob ("Install " + l.info.id), packId (l.info.id), store (s), weakStore (&s),
-          url (l.url), sha256 (l.sha256), expectedSize (l.info.downloadSize), installFolder (folder)
+          url (l.url), sha256 (l.sha256), expectedSize (l.info.downloadSize), installFolder (folder), listing (l)
     {
     }
 
@@ -156,6 +214,7 @@ private:
     juce::String sha256;
     juce::int64 expectedSize;
     juce::File installFolder, downloadFile, stagingFolder;
+    Listing listing;
 
     // Returns an error to show the user, "cancelled", or empty on success.
     juce::String install()
@@ -242,6 +301,9 @@ private:
     // Unpacks into the hidden staging folder and finds the pack in it.
     juce::String unpack (juce::File& packFolder)
     {
+        if (listing.rawArchive)
+            return unpackRaw (packFolder);
+
         juce::ZipFile zip (downloadFile);
         juce::String top;
 
@@ -276,6 +338,175 @@ private:
 
         if (readPackId (packFolder) != packId)
             return "This download isn't the pack it should be.";
+
+        return {};
+    }
+
+    // A Nota archive is the author's SFZ library: it goes in the pack's Library
+    // folder, and the pack.json and instrument.json files are written here.
+    juce::String unpackRaw (juce::File& packFolder)
+    {
+        juce::ZipFile zip (downloadFile);
+
+        // No absolute paths, no "..", no links (which could point anywhere on the computer).
+        for (int i = 0; i < zip.getNumEntries(); ++i)
+        {
+            auto* entry = zip.getEntry (i);
+            const auto name = entry->filename.replaceCharacter ('\\', '/');
+
+            if (entry->isSymbolicLink || name.startsWith ("/") || (name.length() > 1 && name[1] == ':')
+                 || name.contains ("../") || name.endsWith (".."))
+                return "This pack's download isn't laid out the way it should be.";
+        }
+
+        stagingFolder.deleteRecursively();
+        packFolder = stagingFolder.getChildFile (juce::File::createLegalFileName (listing.info.name));
+        auto library = packFolder.getChildFile ("Library");
+
+        if (zip.getNumEntries() == 0 || ! library.createDirectory())
+            return "This pack's download is empty.";
+
+        if (shouldExit())
+            return "cancelled";
+
+        if (auto result = zip.uncompressTo (library); result.failed())
+            return "Couldn't unpack the pack: " + result.getErrorMessage();
+
+        return writePackFiles (packFolder, library);
+    }
+
+    // Every file in the library with one of the extensions (";"-separated), ignoring case and macOS's resource-fork copies.
+    static juce::Array<juce::File> findFilesWithExtension (const juce::File& library, const juce::String& extensions)
+    {
+        juce::Array<juce::File> found;
+
+        for (auto& f : library.findChildFiles (juce::File::findFiles | juce::File::ignoreHiddenFiles, true))
+            if (f.hasFileExtension (extensions) && ! f.getFullPathName().contains ("/__MACOSX/"))
+                found.add (f);
+
+        return found;
+    }
+
+    // A kit of one-shots: the first sample of each folder (or every sample, if it's all one folder) on
+    // consecutive keys from C2, played as they are. Returns no file if there's no audio.
+    static juce::File writeKit (const juce::File& library)
+    {
+        auto audio = findFilesWithExtension (library, "wav;flac;mp3");
+        audio.sort();
+
+        std::map<juce::String, juce::File> firstInFolder;
+
+        for (auto& f : audio)
+            firstInFolder.emplace (f.getParentDirectory().getFullPathName(), f);
+
+        std::vector<juce::File> picks;
+
+        if (firstInFolder.size() > 1)
+            for (auto& entry : firstInFolder)
+                picks.push_back (entry.second);
+        else
+            picks.assign (audio.begin(), audio.end());
+
+        if (picks.empty())
+            return {};
+
+        constexpr int firstKey = 36, lastKey = 127;
+        juce::String sfz ("<group> loop_mode=one_shot\n");
+
+        for (int i = 0; i < (int) picks.size() && firstKey + i <= lastKey; ++i)
+            sfz << "<region> key=" << (firstKey + i) << " sample=" << picks[(size_t) i].getRelativePathFrom (library).replaceCharacter ('\\', '/') << "\n";
+
+        auto kit = library.getChildFile ("kit.sfz");
+        return kit.replaceWithText (sfz) ? kit : juce::File();
+    }
+
+    // One instrument per SFZ program: the SFZ files no other SFZ file includes.
+    // A pack with no SFZ files (loose one-shots) gets a kit that maps one sample per key.
+    juce::String writePackFiles (const juce::File& packFolder, const juce::File& library)
+    {
+        auto sfzFiles = findFilesWithExtension (library, "sfz");
+        sfzFiles.sort();
+
+        // Include paths are relative to the program that includes them (not the fragment holding the
+        // line), so a file counts as included if its path ends with one.
+        std::set<juce::String> includePaths;
+
+        for (auto& f : sfzFiles)
+            for (auto& line : juce::StringArray::fromLines (f.loadFileAsString()))
+                if (auto text = line.trim(); text.startsWith ("#include"))
+                    if (auto path = text.fromFirstOccurrenceOf ("\"", false, false).upToFirstOccurrenceOf ("\"", false, false); path.isNotEmpty())
+                        includePaths.insert (path.replaceCharacter ('\\', '/'));
+
+        juce::Array<juce::File> programs;
+
+        for (auto& f : sfzFiles)
+        {
+            const auto relative = f.getRelativePathFrom (library).replaceCharacter ('\\', '/');
+            const bool included = std::any_of (includePaths.begin(), includePaths.end(), [&] (const juce::String& p)
+            {
+                return relative == p || relative.endsWith ("/" + p);
+            });
+
+            if (! included)
+                programs.add (f);
+        }
+
+        if (programs.isEmpty())
+            if (auto kit = writeKit (library); kit.existsAsFile())
+                programs.add (kit);
+
+        if (programs.isEmpty())
+            return "This pack has no instruments Ikaros Studio can play.";
+
+        std::set<juce::String> usedFolders;
+
+        for (auto& program : programs)
+        {
+            // A pack with one program is named for the pack; otherwise each is named for its file.
+            const auto name = programs.size() == 1 ? listing.info.name : program.getFileNameWithoutExtension();
+            auto folderName = juce::File::createLegalFileName (name);
+
+            if (folderName.isEmpty())
+                folderName = "Instrument";
+
+            const auto base = folderName;
+
+            for (int n = 2; ! usedFolders.insert (folderName.toLowerCase()).second; ++n)
+                folderName = base + " " + juce::String (n);
+
+            auto info = std::make_unique<juce::DynamicObject>();
+            info->setProperty ("name", name);
+            info->setProperty ("category", listing.info.category);
+            info->setProperty ("sfz", "../../Library/" + program.getRelativePathFrom (library).replaceCharacter ('\\', '/'));
+
+            auto folder = packFolder.getChildFile ("Instruments").getChildFile (folderName);
+
+            if (! folder.createDirectory()
+                 || ! folder.getChildFile ("instrument.json").replaceWithText (juce::JSON::toString (juce::var (info.release()))))
+                return "Couldn't save the pack in " + installFolder.getFullPathName() + ".";
+        }
+
+        const auto license = listing.info.license;
+        auto credit = std::make_unique<juce::DynamicObject>();
+        credit->setProperty ("what", listing.info.name);
+        credit->setProperty ("who", listing.info.author);
+        credit->setProperty ("license", license);
+        credit->setProperty ("url", listing.source);
+        credit->setProperty ("attributionRequired", license.startsWith ("CC-BY") || license == "MIT" || listing.attribution.isNotEmpty());
+
+        auto pack = std::make_unique<juce::DynamicObject>();
+        pack->setProperty ("format", 2);
+        pack->setProperty ("id", packId);
+        pack->setProperty ("name", listing.info.name);
+        pack->setProperty ("version", listing.info.availableVersion.isNotEmpty() ? listing.info.availableVersion : "1.0.0");
+        pack->setProperty ("description", listing.info.description);
+        pack->setProperty ("author", listing.info.author);
+        pack->setProperty ("license", license);
+        pack->setProperty ("installedSize", listing.info.installedSize);
+        pack->setProperty ("credits", juce::Array<juce::var> { juce::var (credit.release()) });
+
+        if (! packFolder.getChildFile ("pack.json").replaceWithText (juce::JSON::toString (juce::var (pack.release()))))
+            return "Couldn't save the pack in " + installFolder.getFullPathName() + ".";
 
         return {};
     }
@@ -316,7 +547,7 @@ private:
 
 //==============================================================================
 PackStore::PackStore (SoundLibrary& s)
-    : sounds (s), indexUrl (getDefaultIndexUrl()), installFolder (SoundLibrary::getUserSoundsFolder())
+    : sounds (s), indexUrl (getDefaultIndexUrl()), installFolder (s.getUserFolder())
 {
 }
 
@@ -339,6 +570,13 @@ juce::String PackStore::getDefaultIndexUrl()
 
 void PackStore::refreshIndex()
 {
+    // A build with no index address has nothing to offer (not "offline").
+    if (indexUrl.isEmpty())
+    {
+        indexLoaded ({}, {}, true);
+        return;
+    }
+
     indexStatus = IndexStatus::loading;
     pool.addJob (new IndexJob (*this, toUrl (indexUrl)), true);   // true: the pool deletes the job when it's done
     sendChangeMessage();

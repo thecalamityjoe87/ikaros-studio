@@ -49,12 +49,27 @@ public:
     /** Forgets the skipped plug-ins and scans again. */
     void retrySkippedPlugins();
 
+    /** Forgets the skipped plug-ins, so the next scan tries them again. */
+    void clearSkippedPlugins();
+
+    /** The plug-in formats this app hosts, as the lists name them ("VST3", "LV2", "AudioUnit"). */
+    juce::StringArray getFormatNames() const;
+
+    /** The plug-in folders or formats in the Preferences changed: lists
+        leave out disabled formats, and a scan picks up the new folders. */
+    void preferencesChanged();
+
     /** For main(): see PluginScanner::runWorkerIfRequested. */
     static bool runScanWorkerIfRequested (const juce::String& commandLine);
 
 private:
     AudioEngine& owner;
     std::unique_ptr<PluginScanner> scanner;
+    bool rescanWhenDone = false;   // preferences changed during a scan
+    juce::String appliedSearch = "|";   // the folders and formats the last scan used (none, at first)
+
+    /** The extra folders and the disabled formats, from the Preferences. */
+    std::pair<juce::StringArray, juce::StringArray> getSearchSettings() const;
 
     std::vector<PluginInfo> list (bool instruments) const;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;

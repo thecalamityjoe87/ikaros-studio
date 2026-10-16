@@ -3,15 +3,25 @@
 // IkarosEngineSmokeTest binary directly.
 
 #include "engine/AudioEngine.h"
+#include "engine/AudioDeviceWatcher.h"
 #include "engine/PackStore.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
+#include "engine/SessionRecovery.h"
+#include "engine/RecordingGuard.h"
+#include "engine/TestAudioDevice.h"
+#include "platform/AppFolders.h"
+#include "engine/SongExporter.h"
+#include "ui/state/Selection.h"                    // plain logic, no components
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
 #include <cstdlib>                                    // setenv
+#include <functional>                                  // std::function
+#include <map>
+#include <tuple>
 #include <iostream>
 
 using namespace ikaros;
@@ -49,6 +59,1658 @@ static void waitForPluginScan (AudioEngine& engine)
     pumpMessages();
 }
 
+// Checks two session snapshots (AudioEngine::getStateSnapshot) are the same,
+// and if not prints the first line that differs, to make it easy to track down.
+// A session snapshot as one line per attribute, e.g.
+// "EDIT/TRACK[1007]/PLUGIN[1008]@volume=0.3", sorted, so attribute and
+// element order don't matter and a difference is easy to read.
+static void flatten (const juce::XmlElement& e, const juce::String& path, juce::StringArray& lines)
+{
+    // Not part of the song: Tracktion stamps the time of the last edit, a
+    // reopened session gets a new project ID, and recording arms whichever
+    // track is selected. "parameters" is written by saving only (each
+    // automated setting's hand-set value, which the live session already
+    // knows), so it's in a reopened session but not the one that was saved.
+    if (e.hasTagName ("INPUTDEVICEDESTINATION"))
+        return;
+
+    static const juce::StringArray ignored { "lastSignificantChange", "projectID", "base64:parameters" };
+
+    for (int i = 0; i < e.getNumAttributes(); ++i)
+        if (! ignored.contains (e.getAttributeName (i)))
+            lines.add (path + "@" + e.getAttributeName (i) + "=" + e.getAttributeValue (i));
+
+    // Children are named by their id, or numbered per tag name.
+    std::map<juce::String, int> counts;
+
+    for (auto* child : e.getChildIterator())
+    {
+        const auto n = counts[child->getTagName()]++;
+        flatten (*child, path + "/" + child->getTagName()
+                           + (child->hasAttribute ("id") ? "[" + child->getStringAttribute ("id") + "]" : "#" + juce::String (n)),
+                 lines);
+    }
+}
+
+static juce::StringArray flatten (const juce::String& xml)
+{
+    juce::StringArray lines;
+
+    if (auto parsed = juce::parseXML (xml))
+        flatten (*parsed, parsed->getTagName(), lines);
+
+    lines.sort (false);
+    return lines;
+}
+
+// Checks a session snapshot (AudioEngine::getStateSnapshot) is the same as
+// the expected one, and if not prints what differs. After an undo, a
+// plug-in setting that wasn't stored before may now be stored,
+// at its old value: Ikaros stores a setting's value before the first change
+// to it (see setParameterUndoably) so undo has a value to go back to. It must
+// not still have the edited value, though (pass the edited snapshot as
+// "edited" to check that).
+static void checkSameState (const juce::String& expected, const juce::String& actual, const juce::String& what,
+                            const juce::String& edited = {})
+{
+    const auto want = flatten (expected), got = flatten (actual), editedLines = flatten (edited);
+    juce::StringArray missing, extra;
+
+    auto attributeOf = [] (const juce::String& line) { return line.upToFirstOccurrenceOf ("=", true, false); };
+
+    for (auto& line : want)
+        if (! got.contains (line))
+            missing.add (line);
+
+    for (auto& line : got)
+    {
+        if (want.contains (line))
+            continue;
+
+        const auto element = line.upToFirstOccurrenceOf ("@", false, false).fromLastOccurrenceOf ("/", false, false);
+        const bool storedNow = element.startsWith ("PLUGIN");
+        const bool wasStored = std::any_of (want.begin(), want.end(),
+                                            [&] (const juce::String& w) { return attributeOf (w) == attributeOf (line); });
+
+        // The transport (loop range, playhead) is never undoable in Tracktion,
+        // and a tempo change stores its defaults.
+        const bool transport = element.startsWith ("TRANSPORT");
+
+        if (! (edited.isNotEmpty() && (transport || (storedNow && ! wasStored && ! editedLines.contains (line)))))
+            extra.add (line);
+    }
+
+    check (missing.isEmpty() && extra.isEmpty(), what.toRawUTF8());
+
+    for (int i = 0; i < juce::jmin (3, missing.size()); ++i)
+        std::cout << "         missing: " << missing[i].substring (0, 240) << "\n";
+
+    for (int i = 0; i < juce::jmin (3, extra.size()); ++i)
+        std::cout << "         extra:   " << extra[i].substring (0, 240) << "\n";
+}
+
+// Does one edit and checks it's a single undo step with the given name, that
+// undo puts the session back exactly as it was and redo exactly as the edit
+// left it (twice, since a second round is where stale state shows up).
+static void checkUndoRoundTrip (AudioEngine& engine, const juce::String& stepName, const std::function<void()>& edit)
+{
+    std::cout << stepName << "\n";
+    pumpMessages();
+    const auto before = engine.getStateSnapshot();
+
+    edit();
+    pumpMessages();
+    const auto after = engine.getStateSnapshot();
+    check (after != before, "changes the session");
+    check (engine.getUndoDescription() == stepName, "is one named undo step");
+
+    if (engine.getUndoDescription() != stepName)
+        std::cout << "         got: \"" << engine.getUndoDescription() << "\"\n";
+
+    for (int round = 0; round < 2; ++round)
+    {
+        engine.undo();
+        pumpMessages();
+        checkSameState (before, engine.getStateSnapshot(), "undo restores the session exactly", after);
+
+        engine.redo();
+        pumpMessages();
+        checkSameState (after, engine.getStateSnapshot(), "redo restores the edit exactly");
+    }
+}
+
+// Saves, reopens, and checks the session reads back exactly as it was.
+static void checkSaveAndReopen (AudioEngine& engine, const juce::File& file)
+{
+    // Undo the last edit first, so there's something to redo.
+    engine.undo();
+    pumpMessages();
+    const auto undoName = engine.getUndoDescription(), redoName = engine.getRedoDescription();
+    check (engine.saveSessionAs (file), "(save)");
+    pumpMessages();
+    check (engine.getUndoDescription() == undoName && engine.getRedoDescription() == redoName,
+           "saving leaves undo and redo as they were");
+    engine.redo();
+    pumpMessages();
+
+    // Saving copies outside audio files into the session (and points the
+    // regions at the copies), so compare with the session as saved.
+    check (engine.saveSession(), "(save again)");
+    const auto saved = engine.getStateSnapshot();
+    check (engine.openSession (AudioEngine::getSessionFileFor (file)), "(reopen)");
+    pumpMessages();
+    checkSameState (saved, engine.getStateSnapshot(), "the reopened session is the same");
+}
+
+//==============================================================================
+// Crash recovery helpers
+
+// A WAV file as a crash leaves it: the audio is there, but the header still
+// says it holds none (the sizes are only filled in when recording stops),
+// and the last sample frame is half written. Returns the whole frames in it.
+static int writeCutOffWav (const juce::File& f, double seconds)
+{
+    f.deleteFile();
+    const int frames = (int) (seconds * 44100.0);
+
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+
+        // Like Tracktion's takes: a "bext" chunk (the recording's start time) before the audio.
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                    .withNumChannels (1)
+                                                                                    .withBitsPerSample (16)
+                                                                                    .withMetadata (juce::WavAudioFormat::bwavTimeReference, "0"));
+        juce::AudioBuffer<float> buffer (1, frames);
+
+        for (int i = 0; i < frames; ++i)
+            buffer.setSample (0, i, 0.5f * std::sin ((float) i * 0.05f));
+
+        if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (buffer, 0, frames))
+            return 0;
+    }
+
+    // Find the "data" chunk and zero its size and the file's.
+    juce::MemoryBlock data;
+    f.loadFileAsData (data);
+    auto* bytes = static_cast<char*> (data.getData());
+
+    for (size_t i = 12; i + 8 <= data.getSize(); ++i)
+    {
+        if (std::memcmp (bytes + i, "data", 4) == 0)
+        {
+            std::memset (bytes + 4, 0, 4);
+            std::memset (bytes + i + 4, 0, 4);
+            break;
+        }
+    }
+
+    data.append ("\x01", 1);   // half of the next 16-bit sample
+    return f.replaceWithData (data.getData(), data.getSize()) ? frames : 0;
+}
+
+static juce::int64 lengthOfWav (const juce::File& f)
+{
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (f.createInputStream().release(), true));
+    return reader != nullptr ? reader->lengthInSamples : -1;
+}
+
+// The child process the recovery test kills: it saves a session, makes more
+// changes, waits for the autosave, then records MIDI and says so on stdout.
+// Then it waits to be killed, mid-take.
+static int runRecoveryChild (const juce::File& bundle)
+{
+    AudioEngine engine { testSettings + "Child" };   // settings of its own: it runs beside the test
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+
+    engine.saveSessionAs (bundle);
+
+    // Work the saved session doesn't have.
+    auto a1 = tracks.addAudioTrack();
+    auto t2 = tracks.addInstrumentTrack();
+    engine.beginUndoStep ("Rename");
+    tracks.renameTrack (t2, "After Save");
+    tracks.regions().createChordRegion (t2, 16.0);   // bars 5 to 8
+
+    // The autosave, on a short schedule (normally a few seconds after the
+    // last change).
+    engine.setAutosaveTiming (200, 0, 2000);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (1500);
+
+    if (engine.getLastAutosaveTime() == juce::Time())
+        std::cout << "CHILD: no autosave" << std::endl;
+
+    // A MIDI take from the start; the last note is still held when it dies.
+    // (No count-in: notes played during it aren't part of the take.)
+    tracks.setSelectedTrack (t2);
+    engine.setCountInEnabled (false);
+    engine.goToStart();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (500);
+    engine.toggleRecord();
+
+    for (int note : { 60, 64, 67 })
+    {
+        tracks.inputs().noteOn (note, 0.8f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+        tracks.inputs().noteOff (note);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+    }
+
+    tracks.inputs().noteOn (72, 0.8f);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (600);   // long enough for the notes to reach the disk
+
+    // std::endl flushes, so the test sees the line straight away.
+    std::cout << "RECORDING " << (engine.getTransportState().recording ? 1 : 0) << " " << (juce::int64) a1 << std::endl;
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (120000);   // killed long before this
+    return 0;
+}
+
+//==============================================================================
+// Recording through a pretend audio interface (TestAudioDevice): the test
+// plays generated audio into it, block by block. Never a real microphone.
+
+// A mono WAV of silence with a 1 ms click (a burst at `level`) at each of clickTimes.
+static bool writeClickWav (const juce::File& f, double sampleRate, double seconds,
+                           const std::vector<double>& clickTimes, float level)
+{
+    f.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (sampleRate)
+                                                                                .withNumChannels (1)
+                                                                                .withBitsPerSample (24));
+    juce::AudioBuffer<float> buffer (1, (int) (seconds * sampleRate));
+    buffer.clear();
+
+    for (auto t : clickTimes)
+        for (int i = 0; i < (int) (sampleRate * 0.001); ++i)
+            buffer.setSample (0, (int) std::round (t * sampleRate) + i, level);
+
+    return writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+}
+
+// The session's takes (the WAVs in its Audio folder). Note them before a
+// take, then newTake() finds the one it added.
+static juce::Array<juce::File> listTakes (AudioEngine& engine)
+{
+    return engine.getWorkingCopyFolder().getChildFile (SessionBundle::audioFolder)
+                 .findChildFiles (juce::File::findFiles, false, "*.wav");
+}
+
+static juce::File newTake (AudioEngine& engine, const juce::Array<juce::File>& before)
+{
+    for (auto& f : listTakes (engine))
+        if (! before.contains (f))
+            return f;
+
+    return {};
+}
+
+// Where the clicks in a WAV start (sample index of the first sample over
+// `threshold` after at least `minGap` quiet samples). Reads in chunks, so
+// long takes don't need to fit in memory.
+struct Clicks { std::vector<juce::int64> starts; juce::int64 length = 0; double sampleRate = 0.0; };
+
+static Clicks findClicks (const juce::File& f, float threshold = 0.1f, int minGap = 1000)
+{
+    Clicks result;
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+    if (reader == nullptr)
+        return result;
+
+    result.length = reader->lengthInSamples;
+    result.sampleRate = reader->sampleRate;
+    juce::AudioBuffer<float> chunk (1, 65536);
+    juce::int64 quiet = minGap;
+
+    for (juce::int64 pos = 0; pos < reader->lengthInSamples; pos += chunk.getNumSamples())
+    {
+        const auto num = (int) juce::jmin ((juce::int64) chunk.getNumSamples(), reader->lengthInSamples - pos);
+        reader->read (&chunk, 0, num, pos, true, false);
+
+        for (int i = 0; i < num; ++i)
+        {
+            if (std::abs (chunk.getSample (0, i)) > threshold)
+            {
+                if (quiet >= minGap)
+                    result.starts.push_back (pos + i);
+
+                quiet = 0;
+            }
+            else
+            {
+                ++quiet;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Runs the pretend device for `seconds`, in ~100 ms chunks, letting the
+// message loop run between them (the engine's timers and checks).
+// input (start sample, length) makes each chunk's input; looping back
+// feeds the output back in instead; neither = silence. Normally faster than
+// real time; realTime paces it like a real device (for timer-based checks).
+using InputMaker = std::function<juce::AudioBuffer<float> (juce::int64, int)>;
+
+static void runAudio (TestAudioDevice& device, double seconds, const InputMaker& input = {},
+                      bool loopBack = false, bool realTime = false)
+{
+    const auto rate = device.getSettings().sampleRate;
+    const auto total = (juce::int64) (seconds * rate);
+    const int chunk = (int) (rate * 0.1);
+
+    for (juce::int64 done = 0; done < total; done += chunk)
+    {
+        const auto num = (int) juce::jmin ((juce::int64) chunk, total - done);
+
+        if (loopBack)       device.processLoopedBack (num);
+        else if (input)     device.process (input (done, num));
+        else                device.process (num);
+
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (realTime ? 100 : 1);
+    }
+}
+
+// A steady tone on every input channel, at `level` (1.0 = full scale, which clips).
+static InputMaker tone (const TestAudioDevice& device, float level, bool square = false)
+{
+    const auto channels = device.getSettings().numInputs;
+    const auto rate = device.getSettings().sampleRate;
+
+    return [=] (juce::int64 start, int num)
+    {
+        juce::AudioBuffer<float> b (channels, num);
+
+        for (int i = 0; i < num; ++i)
+        {
+            auto s = std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * (double) (start + i) / rate);
+            auto v = level * (float) (square ? (s >= 0.0 ? 1.0 : -1.0) : s);
+
+            for (int ch = 0; ch < channels; ++ch)
+                b.setSample (ch, i, v);
+        }
+
+        return b;
+    };
+}
+
+static float peakOf (const juce::AudioBuffer<float>& b)
+{
+    return b.getNumSamples() > 0 ? b.getMagnitude (0, b.getNumSamples()) : 0.0f;
+}
+
+// Memory the process is using (resident), in MB. Linux only; 0 elsewhere.
+static double residentMB()
+{
+   #if JUCE_LINUX
+    juce::StringArray lines;
+    juce::File ("/proc/self/status").readLines (lines);
+
+    for (auto& line : lines)
+        if (line.startsWith ("VmRSS:"))
+            return line.fromFirstOccurrenceOf (":", false, false).trim().getDoubleValue() / 1024.0;   // kB
+   #endif
+
+    return 0.0;
+}
+
+static void runRecordingSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+
+    // 10 ms of input latency and 5 ms of output latency, as a USB interface
+    // might report. (Replaced by one without latency after the loopback test.)
+    TestAudioDevice::Settings settings;
+    settings.inputLatency = 480;
+    settings.outputLatency = 240;
+    auto device = std::make_unique<TestAudioDevice> (engine, settings);
+    const auto rate = settings.sampleRate;
+    const auto block = settings.blockSize;
+
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    engine.setBpm (120.0);              // 2 beats a second
+    engine.setCountInEnabled (false);
+    engine.setMetronomeEnabled (false);
+
+    std::cout << "Audio device and latency\n";
+    {
+        auto s = engine.getAudioDeviceStatus();
+        check (s.running && s.sampleRate == rate && s.bufferSize == block, "the pretend device is running");
+        check (std::abs (s.inputLatencyMs - 10.0) < 0.01 && std::abs (s.outputLatencyMs - 5.0) < 0.01,
+               "its input and output latency are reported");
+        check (std::abs (s.monitoringLatencyMs - 15.0) < 0.01, "the monitoring delay is input + output latency");
+        check (std::abs (s.recordingCompensationMs - 15.0) < 0.01, "and recordings are moved back by as much");
+        check (s.dropouts == 0, "no dropouts yet");
+    }
+
+    // The track that records, from Input 1 (mono, the first input).
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (inputs.size() == 3 && inputs[0].name == "Input 1", "the device's inputs are offered (1, 2, 1+2)");
+
+    if (inputs.empty())
+        return;
+
+    auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, inputs[0].id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (*device, 0.3);
+
+    // Each take starts 20 beats after the last, so they don't overlap.
+    double nextTakeBeat = 40.0;
+
+    auto startTake = [&]
+    {
+        engine.setPositionBeats (nextTakeBeat);
+        nextTakeBeat += 20.0;
+        engine.toggleRecord();
+        return engine.getTransportState().recording;
+    };
+
+    auto lastRegion = [&]() -> std::optional<RegionInfo>
+    {
+        auto regions = tracks.regions().getRegions (rec);
+
+        if (regions.empty())
+            return std::nullopt;
+
+        return *std::max_element (regions.begin(), regions.end(),
+                                  [] (auto& a, auto& b) { return a.startBeat < b.startBeat; });
+    };
+
+    auto regionCount = [&] { return tracks.regions().getRegions (rec).size(); };
+
+    std::cout << "Monitoring\n";
+    {
+        tracks.inputs().setMonitoring (rec, true);
+        runAudio (*device, 0.2);
+        auto heard = device->process (tone (*device, 0.5f) (0, (int) rate / 2));
+        check (peakOf (heard) > 0.1f, "with monitoring on, the input is heard");
+
+        tracks.inputs().setMonitoring (rec, false);
+        runAudio (*device, 0.2);
+        heard = device->process (tone (*device, 0.5f) (0, (int) rate / 2));
+        check (peakOf (heard) < 0.001f, "with it off, it isn't");
+    }
+
+    std::cout << "Loopback: recordings line up with the music\n";
+    {
+        // Another track plays a click at 2.5 s; a cable takes the outputs
+        // back to the inputs, and the armed track records it. The click
+        // comes back late by the input and output latency plus the cable's
+        // block. Tracktion moves takes back by the reported latency plus one
+        // block (see the report in RecordingGuard.h), so the recorded click
+        // should land at 2.5 s exactly.
+        auto clickFile = dir.getChildFile ("Click.wav");
+        check (writeClickWav (clickFile, rate, 2.0, { 0.5 }, 0.5f), "(wrote a click)");
+
+        auto player = tracks.addAudioTrack();
+        tracks.regions().importAudioFiles (player, { clickFile.getFullPathName() }, 4.0);   // beat 4 = 2 s
+        tracks.setSelectedTrack (rec);
+        tracks.inputs().setArmed (rec, true);
+        runAudio (*device, 0.3, {}, true);
+
+        // From 1 s in: moved back by the latency, the take still starts
+        // after 0, where it can be placed exactly.
+        const auto takesBefore = listTakes (engine);
+        engine.setPositionBeats (2.0);
+        engine.toggleRecord();
+        check (engine.getTransportState().recording, "recording");
+        runAudio (*device, 3.0, {}, true);
+        engine.toggleRecord();
+        pumpMessages();
+
+        auto region = lastRegion();
+        auto clicks = findClicks (newTake (engine, takesBefore));
+        check (region.has_value() && clicks.starts.size() == 1, "the take holds the click");
+
+        if (region && clicks.starts.size() == 1)
+        {
+            // minStartBeat = where the take's first sample sits on the timeline.
+            const auto heardAt = region->minStartBeat / 2.0 + (double) clicks.starts[0] / rate;
+            const auto offBy = juce::roundToInt ((heardAt - 2.5) * rate);
+            std::cout << "    (round trip " << settings.inputLatency + settings.outputLatency + block
+                      << " samples; recorded click " << offBy << " samples off)\n";
+            check (std::abs (offBy) <= 2, "the recorded click lines up with the played one, to the sample");
+        }
+
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::user && report->audio, "a report on the take");
+        check (report && ! report->clipped && report->dropouts == 0, "it didn't clip or drop out");
+        check (! engine.takeRecordingReport(), "each report is handed over once");
+
+        tracks.deleteTrack (player);
+        pumpMessages();
+    }
+
+    // The rest on a device without simulated latency (so it can change
+    // sample rate, see TestAudioDevice::setSampleRate).
+    device.reset();
+    device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+    runAudio (*device, 0.3);
+
+    std::cout << "Clipping\n";
+    {
+        tracks.inputs().getInputMeter (rec);   // the UI's meters keep reading it
+        check (startTake(), "recording a too-loud input");
+        runAudio (*device, 1.0, tone (*device, 1.0f, true));
+        check (tracks.inputs().getInputMeter (rec).clipped, "the input meter's clip light comes on");
+        engine.toggleRecord();
+        auto report = engine.takeRecordingReport();
+        check (report && report->clipped, "the take is reported as clipped");
+
+        tracks.inputs().clearClipIndicator (rec);
+        check (! tracks.inputs().getInputMeter (rec).clipped, "clicking the clip light turns it off");
+
+        check (startTake(), "recording a comfortable level");
+        runAudio (*device, 1.0, tone (*device, 0.5f));
+        auto meter = tracks.inputs().getInputMeter (rec);
+        check (! meter.clipped && meter.level.leftDb > -12.0f && meter.level.leftDb < -3.0f, "the meter shows it (-6 dB), no clip");
+        engine.toggleRecord();
+        report = engine.takeRecordingReport();
+        check (report && ! report->clipped && report->dropouts == 0, "no clipping, no dropouts");
+    }
+
+    std::cout << "Dropouts\n";
+    {
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        juce::Thread::sleep (400);   // the computer falls behind: 400 ms of audio never arrive
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.toggleRecord();
+        auto report = engine.takeRecordingReport();
+        check (report && report->dropouts >= 1, "the gap is counted as a dropout");
+        check (engine.getAudioDeviceStatus().dropouts >= 1, "and in the device's count");
+    }
+
+    std::cout << "The device stops responding mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);   // no more audio arrives
+        check (! engine.getTransportState().recording, "recording stops by itself");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::deviceStopped, "the report says the device stopped");
+        auto region = lastRegion();
+        check (regionCount() == before + 1 && region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6,
+               "what was recorded (1 s) is kept");
+        runAudio (*device, 0.3);
+    }
+
+    std::cout << "The device is closed mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        device->close();
+        check (! engine.getTransportState().recording, "recording stops straight away");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::deviceStopped, "the report says the device stopped");
+        check (regionCount() == before + 1, "what was recorded is kept");
+
+        device->reopen();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        runAudio (*device, 0.3);
+        check (engine.getAudioDeviceStatus().running, "the device comes back");
+    }
+
+    std::cout << "The sample rate changes mid-take\n";
+    {
+        const auto before = regionCount();
+        check (startTake(), "recording at 48 kHz");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        device->setSampleRate (44100.0);
+        check (! engine.getTransportState().recording, "recording stops");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::sampleRateChanged, "the report says the sample rate changed");
+        auto region = lastRegion();
+        check (regionCount() == before + 1 && region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6,
+               "what was recorded is kept, and still lasts 1 s");
+
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        runAudio (*device, 0.3);
+        const auto takesBefore = listTakes (engine);
+        check (startTake(), "recording again at 44.1 kHz");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.toggleRecord();
+        region = lastRegion();
+        check (region && region->lengthBeats > 1.8 && region->lengthBeats < 2.6, "works");
+        check (findClicks (newTake (engine, takesBefore)).sampleRate == 44100.0, "at the new rate");
+        engine.takeRecordingReport();
+    }
+
+    std::cout << "Two bars of count-in\n";
+    {
+        // 4/4 at 120 bpm: two bars = 8 beats = 4 seconds of clicks first.
+        // (Tracktion starts half a beat before the first click: 4.25 s.)
+        engine.setCountInBars (2);
+        const auto takeBeat = nextTakeBeat;
+        check (startTake(), "recording");
+        runAudio (*device, 3.0, tone (*device, 0.3f));
+        auto state = engine.getTransportState();
+        check (state.countingIn && state.positionBeats < takeBeat && state.positionBeats > takeBeat - 8.0,
+               "it counts in for two bars, from two bars before the take");
+        runAudio (*device, 2.25, tone (*device, 0.3f));   // then a second of recording
+        check (! engine.getTransportState().countingIn, "then records");
+        engine.toggleRecord();
+        pumpMessages();
+
+        auto region = lastRegion();
+        check (region && std::abs (region->startBeat - takeBeat) < 0.05 && region->lengthBeats > 1.5 && region->lengthBeats < 2.5,
+               "the take starts where Record was pressed, without the count-in");
+        engine.takeRecordingReport();
+        engine.setCountInEnabled (false);
+    }
+
+    std::cout << "Disk full\n";
+    {
+        engine.setMinimumFreeDiskSpace (std::numeric_limits<juce::int64>::max());   // act out a full disk
+        const auto before = regionCount();
+        engine.toggleRecord();
+        check (! engine.getTransportState().recording, "Record won't start without enough disk space");
+        auto report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::notStarted, "and says why");
+
+        engine.setMinimumFreeDiskSpace (RecordingGuard::defaultMinimumFreeSpace);
+        check (startTake(), "recording");
+        runAudio (*device, 1.0, tone (*device, 0.3f));
+        engine.setMinimumFreeDiskSpace (std::numeric_limits<juce::int64>::max());   // the disk fills up
+        runAudio (*device, 1.5, tone (*device, 0.3f), false, true);   // in real time: it's checked once a second
+        check (! engine.getTransportState().recording, "recording stops when the disk fills up");
+        report = engine.takeRecordingReport();
+        check (report && report->reason == RecordingStopReason::diskFull, "the report says the disk is full");
+        check (regionCount() == before + 1, "what was recorded is kept");
+        engine.setMinimumFreeDiskSpace (RecordingGuard::defaultMinimumFreeSpace);
+    }
+}
+
+// A long take of generated clicks, one a second: the take must hold every
+// one exactly a second apart (no drift, no lost samples), and memory must
+// stay flat. IKAROS_LONG_TAKE_MINUTES sets the length (default 20).
+//==============================================================================
+// Takes: cycle recording, recording over regions, choosing, deleting and
+// flattening takes, and takes in saved, exported and recovered sessions.
+// Through the pretend audio interface, with generated tones whose level
+// steps up each pass, so every take can be told apart by how loud it is.
+
+// A mono WAV of a 440 Hz tone, `levels[i]` loud for `secondsEach` apiece,
+// `totalSeconds` long (the last level carries on).
+static bool writeStepsWav (const juce::File& f, double rate, double secondsEach,
+                           const std::vector<float>& levels, double totalSeconds)
+{
+    const int length = (int) (totalSeconds * rate);
+    juce::AudioBuffer<float> audio (1, length);
+
+    for (int i = 0; i < length; ++i)
+    {
+        const auto step = juce::jmin ((size_t) (i / (secondsEach * rate)), levels.size() - 1);
+        audio.setSample (0, i, levels[step] * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * i / rate));
+    }
+
+    f.getParentDirectory().createDirectory();
+    f.deleteFile();
+    std::unique_ptr<juce::OutputStream> out = f.createOutputStream();
+    auto writer = juce::WavAudioFormat().createWriterFor (out, juce::AudioFormatWriterOptions()
+                                                               .withSampleRate (rate).withNumChannels (1).withBitsPerSample (24));
+    return writer != nullptr && writer->writeFromAudioSampleBuffer (audio, 0, length);
+}
+
+static void runTakesSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice::Settings settings;
+    auto device = std::make_unique<TestAudioDevice> (engine, settings);
+    const auto rate = settings.sampleRate;
+
+    auto& tracks = engine.getTracks();
+    auto& takes = tracks.takes();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    engine.setBpm (120.0);              // 2 beats a second
+    engine.setCountInEnabled (false);
+    engine.setMetronomeEnabled (false);
+
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (! inputs.empty(), "(the pretend device has inputs)");
+
+    if (inputs.empty())
+        return;
+
+    auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, inputs[0].id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (*device, 0.3);
+
+    // A tone that starts at `first` and gets 0.1 louder every pass.
+    auto steps = [&] (float first, double secondsEach) -> InputMaker
+    {
+        const auto channels = settings.numInputs;
+
+        return [=] (juce::int64 start, int num)
+        {
+            juce::AudioBuffer<float> b (channels, num);
+
+            for (int i = 0; i < num; ++i)
+            {
+                const auto pos = (double) (start + i);
+                const auto level = first + 0.1f * (float) std::floor (pos / (secondsEach * rate));
+                const auto v = level * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * pos / rate);
+
+                for (int ch = 0; ch < channels; ++ch)
+                    b.setSample (ch, i, v);
+            }
+
+            return b;
+        };
+    };
+
+    // Beats 8 to 12 = 2 seconds a pass.
+    auto recordCycle = [&] (float firstLevel, double seconds)
+    {
+        engine.setLooping (true);
+        engine.setLoopRangeBeats (8.0, 12.0);
+        engine.setPositionBeats (2.0);   // cycle recording starts at the loop's start anyway
+        engine.toggleRecord();
+        const bool started = engine.getTransportState().recording;
+        runAudio (*device, seconds, steps (firstLevel, 2.0));
+        engine.toggleRecord();
+        pumpMessages();
+        return started;
+    };
+
+    auto regionsOn = [&] (TrackId t) { return tracks.regions().getRegions (t); };
+    auto loudness = [&] { return engine.renderPeak (8.5, 11.5); };   // the middle of a pass
+    auto near = [] (float a, float b) { return std::abs (a - b) < 0.1f * b; };
+
+    std::cout << "Cycle recording\n";
+    RegionId cycle = 0;
+    float take1 = 0.0f;
+    {
+        // Three passes and a moment of a fourth.
+        check (recordCycle (0.1f, 6.2), "(recording)");
+        auto regions = regionsOn (rec);
+        check (regions.size() == 1, "a cycle recording makes one region");
+
+        if (regions.size() == 1)
+        {
+            auto& r = regions[0];
+            cycle = r.id;
+            check (std::abs (r.startBeat - 8.0) < 0.01 && std::abs (r.lengthBeats - 4.0) < 0.01, "covering the loop");
+            check (r.takeCount == 3, "with a take per pass (a last pass of a moment is left out)");
+            check (r.currentTake == 2, "playing the newest");
+            std::cout << "    (" << r.takeCount << " takes, playing " << r.currentTake + 1 << ")\n";
+
+            auto list = takes.getTakes (cycle);
+            check (list.size() == 3 && list[0].name == "Take 1" && list[2].current && ! list[0].current,
+                   "the take menu lists them, with the current one ticked");
+        }
+
+        const auto take3 = loudness();
+        takes.setCurrentTake (cycle, 0);
+        pumpMessages();
+        take1 = loudness();
+        check (take1 > 0.01f && near (take3 / take1, 3.0f), "each take plays what its pass recorded");
+        std::cout << "    (take 1 peaks at " << take1 << ", take 3 at " << take3 << ")\n";
+        engine.undo();
+        pumpMessages();
+        check (near (loudness(), take3), "(undo)");
+
+        engine.undo();   // the recording
+        pumpMessages();
+        check (regionsOn (rec).empty(), "undoing the recording removes the region, takes and all");
+        engine.redo();
+        pumpMessages();
+        check (regionsOn (rec).size() == 1 && regionsOn (rec)[0].takeCount == 3, "and redo brings it back");
+    }
+
+    checkUndoRoundTrip (engine, "Choose Take", [&] { takes.setCurrentTake (cycle, 0); });
+    check (tracks.regions().getRegion (cycle)->currentTake == 0, "choosing a take makes it current");
+    check (! takes.setCurrentTake (cycle, 0) && ! takes.setCurrentTake (cycle, 7), "(choosing the current take, or one that isn't there, does nothing)");
+
+    std::cout << "The same cycle again\n";
+    {
+        check (recordCycle (0.4f, 4.1), "(recording)");
+        auto regions = regionsOn (rec);
+        check (regions.size() == 1 && regions[0].id == cycle, "the new passes join the region");
+        check (! regions.empty() && regions[0].takeCount == 5 && regions[0].currentTake == 4,
+               "as takes 4 and 5, playing the newest");
+        check (near (loudness() / take1, 5.0f), "(which is take 5's audio)");
+        engine.setLooping (false);
+    }
+
+    std::cout << "Export plays the current take\n";
+    {
+        takes.setCurrentTake (cycle, 1);
+        pumpMessages();
+        const auto take2 = loudness();
+        check (near (take2 / take1, 2.0f), "(take 2 chosen)");
+
+        // The loudest sample of the cycle, exported.
+        auto exportPeak = [&]
+        {
+            ExportSettings s;
+            s.cycleOnly = true;
+            s.destination = dir.getChildFile ("Takes Export.wav");
+            s.destination.deleteFile();
+            bool done = false, ok = false;
+
+            if (engine.getExporter().start (s, [&] (const ExportResult& r) { ok = r.ok; done = true; }).failed())
+                return 0.0f;
+
+            for (int i = 0; i < 1200 && ! done; ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            float peak = 0.0f;
+
+            if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (s.destination) }; ok && reader != nullptr)
+            {
+                juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+                peak = audio.getMagnitude (0, audio.getNumSamples());
+            }
+
+            return peak;
+        };
+
+        const auto exported2 = exportPeak();
+        takes.setCurrentTake (cycle, 3);
+        pumpMessages();
+        const auto exported4 = exportPeak();
+        check (exported2 > 0.01f && near (exported4 / exported2, 2.0f), "the exported song has the current take in it");
+        std::cout << "    (exported peaks: take 2 " << exported2 << ", take 4 " << exported4 << ")\n";
+    }
+
+    std::cout << "Saving and reopening\n";
+    {
+        auto file = dir.getChildFile ("Takes.iksession");
+        takes.setCurrentTake (cycle, 3);
+        pumpMessages();
+        checkSaveAndReopen (engine, file);
+        auto regions = regionsOn (rec);
+        check (regions.size() == 1 && regions[0].takeCount == 5 && regions[0].currentTake == 3, "the takes are saved");
+
+        if (! regions.empty())
+            cycle = regions[0].id;
+
+        // A bundle is a zip file: count the audio in it.
+        auto wavsIn = [] (const juce::File& bundle)
+        {
+            juce::ZipFile zip (bundle);
+            int wavs = 0;
+
+            for (int i = 0; i < zip.getNumEntries(); ++i)
+                wavs += zip.getEntry (i)->filename.endsWith (".wav") ? 1 : 0;
+
+            return wavs;
+        };
+
+        check (wavsIn (AudioEngine::getSessionFileFor (file)) == 5, "every take's file is in the saved session");
+
+        auto copy = dir.getChildFile ("Takes Copy.iksession");
+        check (engine.saveSessionAs (copy) && wavsIn (AudioEngine::getSessionFileFor (copy)) == 5, "and in a copy saved with Save As");
+        std::cout << "    (" << wavsIn (AudioEngine::getSessionFileFor (copy)) << " files in the copy)\n";
+        check (near (loudness() / take1, 4.0f), "the reopened region plays its current take");
+        takes.setCurrentTake (cycle, 0);
+        pumpMessages();
+        check (near (loudness(), take1), "and its other takes can be chosen");
+        takes.setCurrentTake (cycle, 3);
+        pumpMessages();
+    }
+
+    // An instrument track for the MIDI tests (and for a recovered MIDI take).
+    auto keys = tracks.addInstrumentTrack();
+
+    std::cout << "Autosave and recovery\n";
+    {
+        // After a crash: the autosave (with the takes region in it) and a
+        // cycle recording cut off by the crash. The crash is acted out on a
+        // copy of this session's working copy: its lock isn't held, which is
+        // what a crash leaves.
+        engine.autosaveNow();
+        engine.waitForAutosave();
+        auto work = engine.getWorkingCopyFolder();
+        auto crashed = work.getSiblingFile (work.getFileName() + "-crashed");
+        check (work.copyDirectoryTo (crashed), "(copied the working copy)");
+
+        auto info = SessionRecovery::readInfo (crashed).value_or (SessionRecovery::Info {});
+        info.name = "Crashed Cycle";
+        info.takes.clear();
+        juce::String autosaveId;
+
+        if (auto xml = juce::parseXML (crashed.getChildFile (SessionRecovery::autosaveFile)))
+            autosaveId = xml->getStringAttribute (SessionRecovery::autosaveIdProperty);
+
+        check (autosaveId.isNotEmpty(), "(the autosave has its ID)");
+
+        // Audio: three passes of beats 24 to 28 and a moment of a fourth, all in one file.
+        SessionRecovery::Take audio;
+        audio.track = rec;
+        audio.path = "Audio/Cut Off Cycle.wav";
+        audio.startBeats = 24.0;
+        audio.loopEndBeats = 28.0;
+        audio.recordedAfter = autosaveId;
+        writeStepsWav (crashed.getChildFile (audio.path), rate, 2.0, { 0.1f, 0.2f, 0.3f }, 6.2);
+        info.takes.push_back (audio);
+
+        // MIDI, kept as takes: times are folded into the loop (beats 32 to
+        // 34 = 16 to 17 seconds), so the second pass starts where they jump back.
+        SessionRecovery::Take midi;
+        midi.midi = true;
+        midi.midiTakes = true;
+        midi.track = keys;
+        midi.path = juce::String (SessionRecovery::takesFolder) + "/cycle.txt";
+        midi.startBeats = 32.0;
+        midi.loopEndBeats = 34.0;
+        midi.recordedAfter = autosaveId;
+        juce::Array<juce::MidiMessage> played;
+
+        for (auto [pitch, on, off] : { std::tuple { 60, 16.2, 16.4 }, std::tuple { 62, 16.6, 16.8 },
+                                       std::tuple { 64, 16.1, 16.3 }, std::tuple { 65, 16.5, 16.7 }, std::tuple { 67, 16.8, 16.9 } })
+        {
+            played.add (juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 100).withTimeStamp (on));
+            played.add (juce::MidiMessage::noteOff (1, pitch).withTimeStamp (off));
+        }
+
+        crashed.getChildFile (midi.path).getParentDirectory().createDirectory();
+        crashed.getChildFile (midi.path).replaceWithText (SessionRecovery::toJournalLines (played));
+        info.takes.push_back (midi);
+        check (SessionRecovery::writeInfo (crashed, info), "(noted the takes)");
+
+        auto found = engine.findRecoverableSessions();
+        auto session = std::find_if (found.begin(), found.end(), [] (auto& s) { return s.name == "Crashed Cycle"; });
+        check (session != found.end(), "the crashed session is offered");
+
+        if (session != found.end())
+        {
+            check (engine.recoverSession (*session), "Recover opens it");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (3500);   // past the clean-slate reset
+
+            auto regions = regionsOn (rec);
+            auto at = [&] (double beat) -> std::optional<RegionInfo>
+            {
+                for (auto& r : regions)
+                    if (std::abs (r.startBeat - beat) < 0.01)
+                        return r;
+
+                return std::nullopt;
+            };
+
+            auto autosaved = at (8.0), cutOff = at (24.0);
+            check (autosaved && autosaved->takeCount == 5 && autosaved->currentTake == 3, "the autosaved takes are recovered");
+            check (cutOff && cutOff->takeCount == 3 && cutOff->currentTake == 2 && std::abs (cutOff->lengthBeats - 4.0) < 0.01,
+                   "a cycle recording cut off by the crash comes back as one region with its takes");
+
+            if (cutOff)
+            {
+                const auto newest = engine.renderPeak (24.5, 27.5);
+                takes.setCurrentTake (cutOff->id, 0);
+                pumpMessages();
+                check (near (newest / engine.renderPeak (24.5, 27.5), 3.0f), "(and its takes are each pass)");
+            }
+
+            auto midiRegions = regionsOn (keys);
+            check (midiRegions.size() == 1 && midiRegions[0].takeCount == 2 && midiRegions[0].notes.size() == 3,
+                   "a cut-off MIDI cycle comes back with a take per pass");
+
+            if (autosaved)
+                cycle = autosaved->id;
+        }
+    }
+
+    checkUndoRoundTrip (engine, "Delete Unused Takes", [&] { takes.deleteUnusedTakes (cycle); });
+    {
+        auto r = tracks.regions().getRegion (cycle);
+        check (r && r->takeCount == 1 && near (loudness() / take1, 4.0f), "deleting unused takes keeps the current one");
+    }
+
+    checkUndoRoundTrip (engine, "Flatten Takes", [&] { takes.flattenTakes (cycle); });
+    {
+        auto r = tracks.regions().getRegion (cycle);
+        check (r && r->takeCount == 0 && near (loudness() / take1, 4.0f), "flattening leaves an ordinary region");
+        check (! takes.flattenTakes (cycle) && ! takes.deleteUnusedTakes (cycle), "(an ordinary region has nothing to flatten)");
+    }
+
+    std::cout << "Recording over a region\n";
+    {
+        for (auto& r : regionsOn (rec))
+            if (r.id != cycle)
+                tracks.regions().deleteRegion (r.id);
+
+        engine.setPositionBeats (0.0);
+        pumpMessages();
+        const auto before = engine.getStateSnapshot();
+        const auto oldLevel = engine.renderPeak (9.5, 10.5);
+
+        // Beats 9 to 11, not cycling.
+        tracks.setSelectedTrack (rec);
+        tracks.inputs().setArmed (rec, true);
+        runAudio (*device, 0.3);
+        engine.setPositionBeats (9.0);
+        engine.toggleRecord();
+        runAudio (*device, 1.0, steps (0.6f, 100.0));
+        engine.toggleRecord();
+        pumpMessages();
+
+        auto regions = regionsOn (rec);
+        std::sort (regions.begin(), regions.end(), [] (auto& a, auto& b) { return a.startBeat < b.startBeat; });
+        check (regions.size() == 3, "the old region is cut around the new one");
+
+        if (regions.size() == 3)
+        {
+            auto& added = regions[1];
+            check (std::abs (regions[0].getEndBeat() - 9.0) < 0.02 && std::abs (regions[2].getEndBeat() - 12.0) < 0.01
+                    && std::abs (regions[2].startBeat - added.getEndBeat()) < 0.01, "(either side of it)");
+            check (added.takeCount == 2 && added.currentTake == 1, "what was recorded over is kept as a take");
+            check (near (engine.renderPeak (9.5, 10.5) / oldLevel, 1.5f), "(the new take plays)");
+
+            takes.setCurrentTake (added.id, 0);
+            pumpMessages();
+            check (near (engine.renderPeak (9.5, 10.5), oldLevel), "choosing the first take brings back what was there");
+            engine.undo();
+        }
+
+        engine.undo();
+        engine.setPositionBeats (0.0);   // (the playhead isn't part of the undo)
+        pumpMessages();
+        checkSameState (before, engine.getStateSnapshot(), "undo puts the old region back exactly");
+    }
+
+    std::cout << "MIDI cycle recording\n";
+    {
+        tracks.setSelectedTrack (keys);
+        engine.setLooping (true);
+        engine.takeRecordingReport();   // (the last audio take's)
+
+        // Tracktion can't cycle-record a loop under 2 seconds.
+        engine.setLoopRangeBeats (4.0, 7.0);
+        engine.toggleRecord();
+        auto refused = engine.takeRecordingReport();
+        check (! engine.getTransportState().recording && refused && refused->reason == RecordingStopReason::loopTooShort,
+               "a loop under 2 seconds is refused, with a report saying why");
+
+        // MIDI from the on-screen keyboard is timed by the clock, so this
+        // part runs in real time. Beats 4 to 8 = 2 seconds a pass.
+        engine.setLoopRangeBeats (4.0, 8.0);
+        runAudio (*device, 0.5, {}, false, true);
+
+        // One note in the first pass, two in the second.
+        auto recordPasses = [&] (std::vector<std::vector<int>> passes)
+        {
+            engine.toggleRecord();
+
+            for (auto& notes : passes)
+            {
+                runAudio (*device, 0.2, {}, false, true);
+
+                for (int note : notes)
+                {
+                    tracks.inputs().noteOn (note, 0.8f);
+                    runAudio (*device, 0.1, {}, false, true);
+                    tracks.inputs().noteOff (note);
+                    runAudio (*device, 0.1, {}, false, true);
+                }
+
+                runAudio (*device, 1.8 - 0.2 * (double) notes.size(), {}, false, true);
+            }
+
+            runAudio (*device, 0.2, {}, false, true);   // a moment of a pass without notes
+            engine.toggleRecord();
+            pumpMessages();
+        };
+
+        // Merged (the default): one region with every pass's notes.
+        check (! engine.getMidiCycleTakes(), "MIDI passes are merged by default");
+        recordPasses ({ { 60 }, { 64, 67 } });
+        auto regions = regionsOn (keys);
+        std::optional<RegionInfo> merged;
+
+        for (auto& r : regions)
+            if (std::abs (r.startBeat - 4.0) < 0.01)
+                merged = r;
+
+        check (merged && merged->takeCount == 0 && merged->notes.size() == 3, "merged: one region with every pass's notes");
+        engine.undo();
+        pumpMessages();
+
+        // As takes, over a region that was there: it becomes the first take.
+        tracks.regions().createChordRegion (keys, 0.0);   // bars 1 to 4
+        engine.setMidiCycleTakes (true);
+        recordPasses ({ { 60 }, { 64, 67 } });
+
+        regions = regionsOn (keys);
+        std::optional<RegionInfo> cycled;
+
+        for (auto& r : regions)
+            if (std::abs (r.startBeat - 4.0) < 0.01)
+                cycled = r;
+
+        check (cycled && cycled->takeCount == 3 && cycled->currentTake == 2 && cycled->notes.size() == 2,
+               "as takes: one region, a take per pass, playing the newest");
+        check (regionsOn (keys).size() == 4, "(the chord region is cut either side, as is the recovered one)");
+
+        if (cycled)
+        {
+            takes.setCurrentTake (cycled->id, 0);
+            pumpMessages();
+            auto first = tracks.regions().getRegion (cycled->id);
+            check (first && ! first->notes.empty() && first->notes.size() != 1, "the first take is what was recorded over");
+
+            checkUndoRoundTrip (engine, "Choose Take", [&] { takes.setCurrentTake (cycled->id, 1); });
+            check (tracks.regions().getRegion (cycled->id)->notes.size() == 1, "(the first pass)");
+
+            recordPasses ({ { 72 } });
+            auto again = tracks.regions().getRegion (cycled->id);
+            check (again && again->takeCount == 4 && again->currentTake == 3, "recording the cycle again adds to the takes");
+
+            checkUndoRoundTrip (engine, "Delete Unused Takes", [&] { takes.deleteUnusedTakes (cycled->id); });
+            check (tracks.regions().getRegion (cycled->id)->takeCount == 1, "(one take left)");
+            checkUndoRoundTrip (engine, "Flatten Takes", [&] { takes.flattenTakes (cycled->id); });
+            auto flat = tracks.regions().getRegion (cycled->id);
+            check (flat && flat->takeCount == 0 && flat->notes.size() == 1, "flattening keeps the current take's notes");
+        }
+
+        engine.setMidiCycleTakes (false);
+        engine.setLooping (false);
+    }
+}
+
+static void runLongRecordingSection()
+{
+    const auto minutes = juce::jmax (1, juce::SystemStats::getEnvironmentVariable ("IKAROS_LONG_TAKE_MINUTES", "20").getIntValue());
+    std::cout << "A " << minutes << " minute take\n";
+
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice::Settings settings;
+    settings.blockSize = 512;
+    TestAudioDevice device (engine, settings);
+    const auto rate = (juce::int64) settings.sampleRate;
+    auto& tracks = engine.getTracks();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (device, 0.2);
+    engine.setCountInEnabled (false);
+
+    auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, tracks.inputs().getAudioInputs().front().id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (device, 0.3);
+
+    // A 1 ms click half way through every second. (Not at the very start:
+    // a take starts at the punch-in, part way into a block.)
+    auto clicks = [&] (juce::int64 start, int num)
+    {
+        juce::AudioBuffer<float> b (settings.numInputs, num);
+        b.clear();
+
+        for (int i = 0; i < num; ++i)
+            if ((start + i + rate / 2) % rate < rate / 1000)
+                b.setSample (0, i, 0.5f);
+
+        return b;
+    };
+
+    const auto takesBefore = listTakes (engine);
+    engine.setPositionBeats (0.0);
+    engine.toggleRecord();
+    check (engine.getTransportState().recording, "recording");
+
+    const auto startTime = juce::Time::getMillisecondCounterHiRes();
+    double memoryAfterOneMinute = 0.0, memoryPeak = 0.0;
+    const juce::int64 total = rate * 60 * minutes;
+    const auto chunk = rate / 10;
+
+    for (juce::int64 done = 0; done < total; done += chunk)
+    {
+        device.process (clicks (done, (int) chunk));
+
+        // Let the engine's timers run, and the disk writer keep up (the
+        // test runs much faster than real time).
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+
+        if (done % (rate * 10) == 0)
+            juce::Thread::sleep (5);
+
+        if (done == rate * 60)
+            memoryAfterOneMinute = residentMB();
+
+        memoryPeak = juce::jmax (memoryPeak, done % (rate * 10) == 0 ? residentMB() : 0.0);
+    }
+
+    engine.toggleRecord();
+    pumpMessages();
+    const auto memoryAtEnd = residentMB();
+    std::cout << "    (" << minutes << " min recorded in " << juce::roundToInt ((juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0)
+              << " s; memory " << juce::roundToInt (memoryAfterOneMinute) << " MB after 1 min, peak "
+              << juce::roundToInt (memoryPeak) << " MB, " << juce::roundToInt (memoryAtEnd) << " MB at the end)\n";
+
+    check (! engine.getTransportState().recording, "recording stops");
+
+    auto report = engine.takeRecordingReport();
+    check (report && report->reason == RecordingStopReason::user && report->dropouts == 0, "with no dropouts");
+
+    auto take = newTake (engine, takesBefore);
+    auto found = findClicks (take);
+    check (std::abs (found.length - total) <= settings.blockSize, "the take is as long as what was played");
+    check ((juce::int64) found.starts.size() == 60 * minutes, "it holds every click");
+
+    juce::int64 worstDrift = 0;
+
+    for (size_t i = 0; i < found.starts.size(); ++i)
+        worstDrift = juce::jmax (worstDrift, std::abs (found.starts[i] - found.starts[0] - (juce::int64) i * rate));
+
+    check (worstDrift == 0, "exactly a second apart all the way through (no drift)");
+
+    if (memoryAfterOneMinute > 0.0)
+        check (memoryPeak - memoryAfterOneMinute < 64.0, "memory stays flat while recording");
+
+    take.deleteFile();
+}
+
+// The app-wide settings: the store itself (no engine needed), then what the
+// engine does with them.
+static void runPreferencesSection (const juce::File& dir)
+{
+    auto folder = dir.getChildFile ("Preferences");
+    folder.createDirectory();
+    auto file = folder.getChildFile ("Preferences.xml");
+
+    std::cout << "Preferences: the store\n";
+    {
+        Preferences prefs (file);
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser
+                 && prefs.get (settings::sessionFolder).isEmpty()
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::normal
+                 && ! prefs.get (settings::monitoringWarningShown),
+               "General and Audio & MIDI start with their defaults");
+        check (prefs.get (settings::countIn) == 0 && ! prefs.get (settings::midiCycleTakes) && prefs.get (settings::autoArmTrack),
+               "Recording starts with no count-in, merged MIDI passes and auto-arm on (today's behaviour)");
+        check (prefs.get (settings::snapEnabled) && prefs.get (settings::snapGrid) == settings::Grid::beat
+                 && prefs.get (settings::followPlayhead) && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier,
+               "Editing starts with snap to beats, following the playhead and Ctrl-wheel zoom (today's behaviour)");
+        check (prefs.get (settings::userSoundsFolder).isEmpty() && prefs.getList (settings::pluginFolders).isEmpty()
+                 && prefs.getList (settings::disabledPluginFormats).isEmpty(),
+               "no extra folders, and every plug-in format is on");
+        check (prefs.get (settings::exportFormat) == "wav" && prefs.get (settings::exportQuality ("wav")) == 24
+                 && prefs.get (settings::exportQuality ("mp3")) == 320 && prefs.get (settings::exportQuality ("ogg")) == 192
+                 && ! prefs.get (settings::exportNormalize) && prefs.get (settings::interfaceScale) == 100
+                 && prefs.getInterfaceScale() == 1.0f,
+               "Export and Appearance start with their defaults");
+
+        int heard = 0;
+        struct Counter : Preferences::Listener
+        {
+            int& count;
+            juce::String lastKey;
+            explicit Counter (int& c) : count (c) {}
+            void preferenceChanged (const juce::String& key) override   { ++count; lastKey = key; }
+        } listener (heard);
+        prefs.addListener (&listener);
+
+        prefs.set (settings::onStartup, settings::OnStartup::reopenLastSession);
+        check (heard == 1 && listener.lastKey == settings::onStartup.key, "a change is announced at once, with its key");
+        prefs.removeListener (&listener);
+
+        prefs.set (settings::sessionFolder, folder.getFullPathName());
+        prefs.set (settings::keyboardVelocity, settings::Velocity::hard);
+        prefs.set (settings::monitoringWarningShown, true);
+        prefs.set (settings::countIn, 2);
+        prefs.set (settings::midiCycleTakes, true);
+        prefs.set (settings::autoArmTrack, false);
+        prefs.set (settings::snapEnabled, false);
+        prefs.set (settings::snapGrid, settings::Grid::bar);
+        prefs.set (settings::followPlayhead, false);
+        prefs.set (settings::wheelMode, settings::Wheel::scroll);
+        prefs.setList (settings::pluginFolders, { "/plugins/a", "/plugins/b" });
+        prefs.setList (settings::disabledPluginFormats, { "LV2" });
+        prefs.set (settings::exportFormat, "flac");
+        prefs.set (settings::exportQuality ("flac"), 16);
+        prefs.set (settings::exportNormalize, true);
+        prefs.set (settings::interfaceScale, 150);
+    }
+
+    {
+        Preferences prefs (file);   // the file as the first one left it
+        check (prefs.get (settings::onStartup) == settings::OnStartup::reopenLastSession
+                 && prefs.getFolder (settings::sessionFolder, {}) == folder
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::hard
+                 && prefs.get (settings::monitoringWarningShown),
+               "General and Audio & MIDI settings round-trip through the file");
+        check (prefs.get (settings::countIn) == 2 && prefs.get (settings::midiCycleTakes) && ! prefs.get (settings::autoArmTrack),
+               "Recording settings round-trip");
+        check (! prefs.get (settings::snapEnabled) && prefs.get (settings::snapGrid) == settings::Grid::bar
+                 && ! prefs.get (settings::followPlayhead) && prefs.get (settings::wheelMode) == settings::Wheel::scroll,
+               "Editing settings round-trip");
+        check (prefs.getList (settings::pluginFolders) == juce::StringArray ({ "/plugins/a", "/plugins/b" })
+                 && prefs.getList (settings::disabledPluginFormats) == juce::StringArray ({ "LV2" }),
+               "lists round-trip");
+        check (prefs.get (settings::exportFormat) == "flac" && prefs.get (settings::exportQuality ("flac")) == 16
+                 && prefs.get (settings::exportNormalize) && prefs.getInterfaceScale() == 1.5f,
+               "Export and Appearance settings round-trip");
+        check (prefs.getFolder (settings::userSoundsFolder, folder) == folder
+                 && prefs.getFolder (settings::sessionFolder, {}) != juce::File(),
+               "a folder setting that's empty (or gone) falls back");
+
+        int heard = 0;
+        struct Counter : Preferences::Listener
+        {
+            int& count;
+            juce::String lastKey = "unset";
+            explicit Counter (int& c) : count (c) {}
+            void preferenceChanged (const juce::String& key) override   { ++count; lastKey = key; }
+        } listener (heard);
+        prefs.addListener (&listener);
+
+        prefs.resetAll();
+        check (heard == 1 && listener.lastKey.isEmpty(), "resetting tells listeners everything changed");
+        prefs.removeListener (&listener);
+
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser && prefs.get (settings::autoArmTrack)
+                 && prefs.get (settings::snapEnabled) && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier
+                 && prefs.getList (settings::pluginFolders).isEmpty() && prefs.get (settings::exportFormat) == "wav"
+                 && prefs.get (settings::exportQuality ("flac")) == 24 && prefs.get (settings::interfaceScale) == 100,
+               "reset puts every setting back to its default");
+    }
+
+    {
+        Preferences prefs (file);
+        check (prefs.get (settings::exportFormat) == "wav" && prefs.get (settings::countIn) == 0 && prefs.get (settings::autoArmTrack),
+               "and the reset is what was saved");
+    }
+
+    {
+        // A file from before most settings existed: only a few keys.
+        auto oldFile = folder.getChildFile ("Old.xml");
+        oldFile.replaceWithText ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<PROPERTIES>\n"
+                                 "  <VALUE name=\"exportFormat\" val=\"ogg\"/>\n"
+                                 "  <VALUE name=\"midiCycleTakes\" val=\"1\"/>\n"
+                                 "</PROPERTIES>\n");
+        Preferences prefs (oldFile);
+        check (prefs.get (settings::exportFormat) == "ogg" && prefs.get (settings::midiCycleTakes),
+               "an old settings file keeps the values it has");
+        check (prefs.get (settings::onStartup) == settings::OnStartup::sessionChooser && prefs.get (settings::autoArmTrack)
+                 && prefs.get (settings::snapEnabled) && prefs.get (settings::followPlayhead)
+                 && prefs.get (settings::keyboardVelocity) == settings::Velocity::normal
+                 && prefs.get (settings::wheelMode) == settings::Wheel::zoomWithModifier
+                 && prefs.get (settings::exportQuality ("ogg")) == 192 && prefs.get (settings::interfaceScale) == 100,
+               "and has the defaults for the keys it lacks");
+    }
+
+    std::cout << "Preferences: settings from the older settings file\n";
+    {
+        juce::PropertiesFile::Options options;
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        juce::PropertiesFile legacy (folder.getChildFile ("Settings.xml"), options);
+        legacy.setValue ("countInMode", 2);
+        legacy.setValue ("midiCycleTakes", true);
+        legacy.setValue ("monitoringWarningShown", true);
+        legacy.setValue ("exportFormat", "flac");
+        legacy.setValue ("exportQuality.flac", 16);
+        legacy.setValue ("exportNormalize", true);
+        legacy.setValue ("exportFolder", folder.getFullPathName());
+
+        auto migrated = folder.getChildFile ("Migrated.xml");
+        {
+            Preferences prefs (migrated, &legacy);
+            check (prefs.get (settings::countIn) == 2 && prefs.get (settings::midiCycleTakes)
+                     && prefs.get (settings::monitoringWarningShown),
+                   "the first time, an existing user's choices are copied over (count-in, MIDI loops, the warning)");
+            check (prefs.get (settings::exportFormat) == "flac" && prefs.get (settings::exportQuality ("flac")) == 16
+                     && prefs.get (settings::exportNormalize) && prefs.getFolder (settings::exportFolder, {}) == folder,
+                   "and the Export window's remembered choices");
+            check (prefs.get (settings::autoArmTrack) && prefs.get (settings::snapEnabled),
+                   "settings that didn't exist before have their defaults");
+        }
+
+        legacy.setValue ("exportFormat", "ogg");
+        Preferences again (migrated, &legacy);
+        check (again.get (settings::exportFormat) == "flac", "later, the older file isn't read again");
+
+        again.resetAll();
+        Preferences afterReset (migrated, &legacy);
+        check (afterReset.get (settings::exportFormat) == "wav" && afterReset.get (settings::countIn) == 0,
+               "and a reset isn't undone by it");
+    }
+
+    std::cout << "Preferences: what the engine does\n";
+    {
+        AudioEngine engine { testSettings, false };
+        TestAudioDevice::Settings deviceSettings;
+        auto device = std::make_unique<TestAudioDevice> (engine, deviceSettings);
+        auto& tracks = engine.getTracks();
+        auto& prefs = engine.getPreferences();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        runAudio (*device, 0.2);
+
+        prefs.set (settings::countIn, 2);
+        check (engine.getCountInBars() == 2 && engine.getTransportState().countIn, "the count-in setting is the session's count-in");
+        engine.setCountInBars (1);
+        check (prefs.get (settings::countIn) == 1, "and the toolbar's change is the setting");
+        prefs.resetAll();
+        check (engine.getCountInBars() == 0 && ! engine.getTransportState().countIn, "resetting turns the count-in off");
+
+        engine.setMidiCycleTakes (true);
+        check (prefs.get (settings::midiCycleTakes) && engine.getMidiCycleTakes(), "MIDI loop recording uses the setting");
+        engine.setMidiCycleTakes (false);
+
+        check (engine.getPlugins().getFormatNames().contains ("VST3"), "the plug-in formats are listed");
+
+        {
+            check (! engine.getSounds().findPack ("ikaros-studio.test").has_value(), "the test sound pack isn't in the library at first");
+            prefs.set (settings::userSoundsFolder, juce::File (IKAROS_TEST_FIXTURES).getFullPathName());
+            check (engine.getSounds().findPack ("ikaros-studio.test").has_value()
+                     && engine.getPackStore().getInstallFolder() == juce::File (IKAROS_TEST_FIXTURES),
+                   "choosing a sound pack folder loads the packs in it, and downloads go there");
+            prefs.set (settings::userSoundsFolder, "");
+        }
+
+        std::cout << "Audio device changes\n";
+        {
+            const juce::String scarlett = "Scarlett 2i2 USB, USB Audio; Direct hardware device without any conversions";
+            const juce::String headphones = "USB Headphones, USB Audio; Direct hardware device without any conversions";
+
+            AudioDeviceState before;
+            before.inputs = { "Default ALSA Input" };
+            before.outputs = { "Default ALSA Output" };
+            before.inUseInput = before.defaultInput = "Default ALSA Input";
+            before.inUseOutput = before.defaultOutput = "Default ALSA Output";
+
+            check (! findDeviceChange (before, before), "no change, nothing to ask");
+
+            auto usb = before;
+            usb.inputs.add (scarlett);
+            usb.outputs.add (scarlett);
+            auto prompt = findDeviceChange (before, usb);
+            check (prompt && prompt->kind == AudioDevicePrompt::Kind::appeared && prompt->deviceName == "Scarlett 2i2 USB"
+                     && prompt->inputName == scarlett && prompt->outputName == scarlett,
+                   "an interface that appears is offered for both recording and playback, under its short name");
+
+            auto modes = before;
+            const juce::String front = "MiniFuse 2, USB Audio; Front output / input";
+            modes.outputs.addArray ({ "MiniFuse 2, USB Audio; Surround", front });
+            modes.inputs.add (front);
+            prompt = findDeviceChange (before, modes);
+            check (prompt && prompt->inputName == front && prompt->outputName == front,
+                   "of a card's modes, the one with both inputs and outputs is offered");
+
+            auto dac = before;
+            dac.outputs.add (headphones);
+            prompt = findDeviceChange (before, dac);
+            check (prompt && prompt->inputName.isEmpty() && prompt->outputName == headphones,
+                   "headphones are offered for playback only");
+
+            auto mixed = before;
+            mixed.inputs.add (scarlett);
+            mixed.outputs.add (headphones);
+            prompt = findDeviceChange (before, mixed);
+            check (prompt && prompt->inputName.isEmpty() && prompt->outputName == headphones,
+                   "an input and an output of different devices at once: one question, about the output");
+
+            auto alreadyUsed = usb;
+            alreadyUsed.inUseInput = alreadyUsed.inUseOutput = scarlett;
+            check (! findDeviceChange (before, alreadyUsed), "a device that's already in use isn't offered");
+
+            auto inUse = usb;
+            inUse.inUseInput = inUse.inUseOutput = scarlett;
+
+            auto unplugged = before;
+            unplugged.inUseInput = unplugged.inUseOutput = scarlett;   // JUCE on Linux keeps the old name
+            prompt = findDeviceChange (inUse, unplugged);
+            check (prompt && prompt->kind == AudioDevicePrompt::Kind::disappeared && prompt->deviceName == "Scarlett 2i2 USB"
+                     && prompt->inputName == "Default ALSA Input" && prompt->outputName == "Default ALSA Output"
+                     && prompt->useName == "Default ALSA Output",
+                   "the device in use going away offers the default one");
+
+            check (! findDeviceChange (inUse, before), "if the system already moved to the default device, there's nothing to offer");
+
+            // The watcher, with the lists acted out.
+            auto& watcher = engine.getDeviceWatcher();
+            auto shown = before;
+            watcher.setStateSource ([&shown] { return shown; });
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "the first look only notes the devices");
+
+            shown = usb;
+            watcher.check();
+            prompt = engine.takeAudioDevicePrompt();
+            check (prompt && prompt->deviceName == "Scarlett 2i2 USB", "a device plugged in is offered");
+            check (! engine.takeAudioDevicePrompt(), "a prompt comes once");
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "and the same device isn't offered again");
+
+            prefs.set (settings::deviceChange, settings::DeviceChange::neverAsk);
+            shown = before;
+            watcher.check();
+            shown = usb;
+            watcher.check();
+            check (! engine.takeAudioDevicePrompt(), "with \"never ask\", it stays quiet");
+
+            prefs.set (settings::deviceChange, settings::DeviceChange::ask);
+            shown = before;
+            watcher.check();
+            shown = usb;
+            watcher.check();
+            check (engine.takeAudioDevicePrompt().has_value(), "and asks again when the setting is back");
+
+            watcher.setStateSource ({});
+        }
+
+        engine.setBpm (120.0);
+        engine.setMetronomeEnabled (false);
+
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (! inputs.empty(), "the pretend device has inputs");
+
+        if (inputs.empty())
+            return;
+
+        const auto first = tracks.getTracks().front().id;
+        auto rec = tracks.addAudioTrack();
+        tracks.inputs().setTrackInput (rec, inputs[0].id);
+        runAudio (*device, 0.3);
+
+        auto regionCount = [&] { return tracks.regions().getRegions (rec).size(); };
+        double nextTakeBeat = 8.0;
+
+        auto record = [&] (double seconds)
+        {
+            engine.setPositionBeats (nextTakeBeat);
+            nextTakeBeat += 20.0;
+            engine.toggleRecord();
+            const bool started = engine.getTransportState().recording;
+
+            if (started)
+            {
+                runAudio (*device, seconds, tone (*device, 0.3f));
+                engine.toggleRecord();
+            }
+
+            return started;
+        };
+
+        std::cout << "Arming (auto-arm on, the default)\n";
+        {
+            check (prefs.get (settings::autoArmTrack), "it's on by default");
+            tracks.setSelectedTrack (first);
+            tracks.setSelectedTrack (rec);
+            check (tracks.inputs().getArmedTrack() == rec, "selecting a track arms it");
+            tracks.inputs().setArmed (rec, false);
+
+            const auto before = regionCount();
+            engine.setPositionBeats (nextTakeBeat);
+            nextTakeBeat += 20.0;
+            engine.toggleRecord();
+            check (engine.getTransportState().recording && tracks.inputs().getArmedTrack() == rec,
+                   "Record arms the selected track for the take");
+            runAudio (*device, 1.0, tone (*device, 0.3f));
+            engine.toggleRecord();
+            check (regionCount() == before + 1 && tracks.inputs().getArmedTrack() == 0,
+                   "and disarms it again afterwards");
+            engine.takeRecordingReport();
+        }
+
+        std::cout << "Arming (auto-arm off)\n";
+        {
+            prefs.set (settings::autoArmTrack, false);
+            tracks.setSelectedTrack (first);
+            tracks.setSelectedTrack (rec);
+            check (tracks.inputs().getArmedTrack() == 0, "selecting a track doesn't arm it");
+
+            const auto before = regionCount();
+            check (! record (1.0), "Record with no track armed doesn't start recording");
+            auto report = engine.takeRecordingReport();
+            check (report && report->reason == RecordingStopReason::noTrackArmed, "the report says no track is armed");
+            check (regionCount() == before && tracks.inputs().getArmedTrack() == 0, "nothing was recorded, and nothing got armed");
+
+            tracks.inputs().setArmed (rec, true);
+            check (record (1.0), "with a track armed by hand, Record starts");
+            check (regionCount() == before + 1, "and records onto it");
+            check (tracks.inputs().getArmedTrack() == rec, "which is still armed afterwards");
+            engine.takeRecordingReport();
+
+            // Turning it back on goes back to the old behaviour.
+            tracks.inputs().setArmed (rec, false);
+            prefs.set (settings::autoArmTrack, true);
+            check (record (1.0) && regionCount() == before + 2 && tracks.inputs().getArmedTrack() == 0,
+                   "with it on again, Record arms the selected track for its take, as before");
+            engine.takeRecordingReport();
+        }
+
+        prefs.resetAll();
+    }
+
+    std::cout << "Preferences: kept between runs\n";
+    {
+        {
+            AudioEngine engine { testSettings, false };
+            engine.getPreferences().set (settings::exportFormat, "mp3");
+            engine.setCountInBars (2);
+        }
+
+        AudioEngine engine { testSettings, false };
+        check (engine.getPreferences().get (settings::exportFormat) == "mp3" && engine.getCountInBars() == 2
+                 && engine.getTransportState().countIn,
+               "the engine's settings are there next time (and the count-in is on)");
+        engine.getPreferences().resetAll();
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -67,10 +1729,37 @@ int main (int argc, char* argv[])
         return 0;
     }
 
+    // The recovery test's crashing child (it shares the test's folders, set below).
+    for (auto& arg : args)
+        if (arg.startsWith ("--recovery-child="))
+            return runRecoveryChild (juce::File (arg.fromFirstOccurrenceOf ("=", false, false)));
+
     // Start from fresh settings, so earlier runs (e.g. remembered plug-in
     // scans) don't change the results. Tracktion keeps them in the user's
     // app-data folder, under the name the engine is given.
     juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile (testSettings).deleteRecursively();
+
+    // Sections: "--only=export" runs just that one, "--skip=export" all the
+    // others (ctest runs them as separate tests, see CMakeLists.txt). The
+    // "main" section is everything that isn't in a section of its own.
+    juce::String only, skip;
+
+    for (int i = args.size(); --i >= 0;)
+    {
+        if (args[i].startsWith ("--only="))       only = args[i].fromFirstOccurrenceOf ("=", false, false);
+        else if (args[i].startsWith ("--skip="))  skip = args[i].fromFirstOccurrenceOf ("=", false, false);
+        else continue;
+
+        args.remove (i);
+    }
+
+    // "--skip=export,undo" skips several.
+    const auto skipped = juce::StringArray::fromTokens (skip, ",", {});
+
+    auto runs = [&] (const juce::String& section)
+    {
+        return (only.isEmpty() || only == section) && ! skipped.contains (section);
+    };
 
     // The test plug-ins (built with -DIKAROS_BUILD_TEST_PLUGINS=ON), if any.
     const auto testPlugins = args.isEmpty() ? juce::File() : juce::File (args[0]);
@@ -82,13 +1771,19 @@ int main (int argc, char* argv[])
     // Never read or change the user's own sound packs: the library's user
     // Sounds folder is one of the test's (see SoundLibrary::getUserSoundsFolder).
     const auto userSounds = dir.getChildFile ("User Sounds").getFullPathName();
+    // Nor the app's open sessions: on Linux, working copies (and crash
+    // recovery) go in a local data folder of the test's (see
+    // platform::getLocalDataFolder).
    #if JUCE_WINDOWS
     _putenv_s ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8());
    #else
+    const auto localData = dir.getChildFile ("Local Data").getFullPathName();
     setenv ("IKAROS_USER_SOUNDS_DIR", userSounds.toRawUTF8(), 1);
+    setenv ("XDG_DATA_HOME", localData.toRawUTF8(), 1);
    #endif
     auto file = AudioEngine::getSessionFileFor (dir.getChildFile ("Smoke"));   // Smoke.iksession
 
+    if (runs ("main"))
     {
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
@@ -333,6 +2028,15 @@ int main (int argc, char* argv[])
             pumpMessages();
             check (engine.getTransportState().recording, "Record starts recording");
             check (tracks.inputs().getArmedTrack() == t3, "the selected track is armed for the take");
+            {
+                const auto lastStep = engine.getUndoDescription();
+                const auto numTracks = tracks.getTracks().size();
+                check (! engine.canUndo() && ! engine.canRedo(), "Undo and Redo are unavailable while recording");
+                engine.undo();
+                pumpMessages();
+                check (engine.getUndoDescription() == lastStep && tracks.getTracks().size() == numTracks,
+                       "(and do nothing if asked anyway)");
+            }
             tracks.setSelectedTrack (t2);
             check (tracks.inputs().getArmedTrack() == t3, "selecting another track mid-take doesn't move the arm");
             tracks.setSelectedTrack (t3);
@@ -354,6 +2058,7 @@ int main (int argc, char* argv[])
             auto regions = tracks.regions().getRegions (t3);
             check (regions.size() == 1, "the take becomes a region");
             check (! regions.empty() && regions[0].notes.size() == 3, "the region holds the played notes");
+            check (engine.canUndo() && engine.getUndoDescription() == "Record", "after the take, Undo is back (to undo the take)");
 
             tracks.setSelectedTrack (t2);
             tracks.setSelectedTrack (t3);   // armed by selecting it this time
@@ -472,6 +2177,7 @@ int main (int argc, char* argv[])
         engine.newSession();
     }
 
+    if (runs ("main"))
     {
         std::cout << "Open (fresh engine)\n";
         AudioEngine engine { testSettings };
@@ -497,6 +2203,7 @@ int main (int argc, char* argv[])
         check (std::abs (engine.getTransportState().bpm - 96.0) < 0.001, "tempo round-trips");
     }
 
+    if (runs ("main"))
     {
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
@@ -660,9 +2367,16 @@ int main (int argc, char* argv[])
 
         std::cout << "Count-in\n";
         engine.setCountInEnabled (true);
-        check (engine.getTransportState().countIn, "count-in turns on");
+        check (engine.getTransportState().countIn && engine.getCountInBars() == 1, "count-in turns on (one bar to begin with)");
         engine.setCountInEnabled (false);
-        check (! engine.getTransportState().countIn, "and off");
+        check (! engine.getTransportState().countIn && engine.getCountInBars() == 0, "and off");
+        engine.setCountInBars (2);
+        check (engine.getTransportState().countIn && engine.getCountInBars() == 2, "it can be two bars");
+        engine.setCountInEnabled (false);
+        engine.setCountInEnabled (true);
+        check (engine.getCountInBars() == 2, "turning it back on keeps the length last chosen");
+        engine.setCountInBars (1);
+        engine.setCountInEnabled (false);
 
         std::cout << "Key, pan and master volume\n";
         engine.setKey (3, true);
@@ -826,10 +2540,44 @@ int main (int argc, char* argv[])
                    "Phaser has Depth, Rate and Feedback knobs");
             pumpMessages();
 
+            // The Delay's mix parameter ("mix proportion") is stored as "mix":
+            // its ID must never end up as a property (invalid XML).
+            auto echo = tracks.effects().addEffect (t1, "delay");
+            pumpMessages();
+            const auto echoMix = tracks.effects().getEffectParameters (t1, echo)[1].value;
+            engine.beginUndoStep ("Mix");
+            tracks.effects().setEffectParameter (t1, echo, 1, 0.9f);
+            pumpMessages();
+            engine.undo();
+            pumpMessages();
+            check (std::abs (tracks.effects().getEffectParameters (t1, echo)[1].value - echoMix) < 0.01f,
+                   "undoing the first change to an effect knob restores it");
+            engine.beginUndoStep ("Mix");
+            tracks.effects().setEffectParameter (t1, echo, 1, 0.9f);
+            pumpMessages();
+
             auto eqSession = dir.getChildFile ("EQ");
             check (engine.saveSessionAs (eqSession), "(save)");
+            const auto savedEdit = SessionBundle::readEntry (AudioEngine::getSessionFileFor (eqSession),
+                                                             SessionBundle::sessionEntry).toString();
+            check (juce::parseXML (savedEdit) != nullptr && ! savedEdit.contains ("mix proportion"),
+                   "effect settings save as valid XML");
             check (engine.openSession (AudioEngine::getSessionFileFor (eqSession)), "(reopen)");
             pumpMessages();
+            check (std::abs (tracks.effects().getEffectParameters (t1, tracks.effects().getEffectChain (t1).back().id)[1].value - 0.9f) < 0.01f,
+                   "and survive reopening");
+
+            // Sessions saved before the fix have those invalid attributes;
+            // they still open.
+            {
+                auto broken = dir.getChildFile ("Broken Echo.iksession");
+                auto brokenEdit = dir.getChildFile ("Broken Echo.tracktionedit");
+                brokenEdit.replaceWithText (savedEdit.replace ("<PLUGIN type=\"delay\"",
+                                                               "<PLUGIN type=\"delay\" mix proportion=\"0.3\" 12=\"0.5\""));
+                SessionBundle::pack (broken, { { SessionBundle::sessionEntry, brokenEdit, true } }, {});
+                check (engine.openSession (broken) && tracks.effects().getEffectChain (t1).back().name == "Echo",
+                       "a session saved with invalid effect attributes still opens");
+            }
             check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f
                      && std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f,
                    "track and master EQ survive save and reopen");
@@ -1521,12 +3269,62 @@ int main (int argc, char* argv[])
                      && sounds.findPack ("ikaros-studio.store-bass").has_value(),
                    "installing a collection installs the packs it's missing");
 
+            // A Nota sample registry's index: the author's SFZ library, wrapped in a pack when it's installed.
+            useIndex (juce::String (IKAROS_TEST_STORE) + "/nota-index.json");
+            const juce::String notaId ("nota.nota-test");
+            auto nota = store.findPack (notaId);
+            check (nota && nota->category == "Brass" && nota->name == "Nota Test" && nota->state == State::notInstalled
+                     && ! store.findPack ("nota.nota-loops").has_value(),
+                   "a Nota registry index lists its SFZ packs, filed by their tags, and leaves out loop packs");
+            store.install (notaId);
+            waitForStore();
+            const juce::String notaSound ("sampler:nota.nota-test/Nota Test");
+            check (store.findPack (notaId)->state == State::installed && store.findPack (notaId)->error.isEmpty()
+                     && sounds.findSound (notaSound).has_value() && sounds.findSound (notaSound)->category == "Brass",
+                   "a Nota archive installs as a pack with one instrument for its main SFZ file");
+            engine.newSession();
+            pumpMessages();
+            pt = tracks.getTracks().front().id;
+            check (effects.setSound (pt, notaSound), "(a track plays the Nota instrument)");
+            tracks.regions().createChordRegion (pt, 0.0);
+            pumpMessages();
+            check (engine.renderPeak (0.0, 1.0) > 0.05f, "an instrument installed from a Nota registry plays");
+
+            // A pack of loose samples (no SFZ file) becomes a kit, one sample per key from C2.
+            const juce::String kitId ("nota.nota-kit"), kitSound ("sampler:nota.nota-kit/Nota Kit");
+            store.install (kitId);
+            waitForStore();
+            check (store.findPack (kitId)->state == State::installed && sounds.findSound (kitSound).has_value(),
+                   "a Nota pack with no SFZ file installs as a kit");
+            engine.newSession();
+            pumpMessages();
+            pt = tracks.getTracks().front().id;
+            check (effects.setSound (pt, kitSound), "(a track plays the kit)");
+
+            for (int i = 0; i < 100 && ! effects.isInstrumentReady (pt); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            auto kitKeys = effects.getInstrumentKeyRange (pt);
+            check (kitKeys && kitKeys->first == 36 && kitKeys->second == 37, "an instrument reports the keys it plays");
+            auto kitRegion = tracks.regions().createChordRegion (pt, 0.0);
+            pumpMessages();
+            std::vector<NoteId> kitNotes;
+
+            for (auto& n : tracks.regions().getRegion (kitRegion)->notes)
+                kitNotes.push_back (n.id);
+
+            tracks.notes().deleteNotes (kitRegion, kitNotes);
+            tracks.notes().addNote (kitRegion, { 37, 0.0, 1.0, 100 });   // the second folder's sample
+            pumpMessages();
+            check (engine.renderPeak (0.0, 1.0) > 0.05f, "the kit plays its samples on the keys from C2");
+
             engine.setAppSetting ("smokeTestSetting", true);
             check ((bool) engine.getAppSetting ("smokeTestSetting", false) && ! (bool) engine.getAppSetting ("noSuchSetting", false),
                    "app settings are kept");
         }
     }
 
+    if (runs ("main"))
     {
         // A fresh engine: Tracktion expects only one at a time.
         AudioEngine reopened { testSettings };
@@ -1548,11 +3346,373 @@ int main (int argc, char* argv[])
         check (std::abs (first.reverbSend - 0.5f) < 0.01f && std::abs (first.delaySend - 0.25f) < 0.01f, "sends round-trip");
     }
 
-    if (testPlugins.getChildFile ("Good").isDirectory())
+    if (runs ("main"))
+    {
+        std::cout << "Automation\n";
+        auto automationSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Automation"));
+        const std::vector<AutomationPoint> ramp { { 4.0, 0.2f }, { 8.0, 0.9f } };
+
+        auto samePoints = [] (const std::vector<AutomationPoint>& a, const std::vector<AutomationPoint>& b)
+        {
+            if (a.size() != b.size())
+                return false;
+
+            for (size_t i = 0; i < a.size(); ++i)
+                if (std::abs (a[i].beat - b[i].beat) > 1.0e-6 || std::abs (a[i].value - b[i].value) > 1.0e-3f)
+                    return false;
+
+            return true;
+        };
+
+        {
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            auto& tracks = engine.getTracks();
+            auto& automation = tracks.automation();
+            auto t = tracks.getTracks().front().id;
+
+            auto targets = automation.getTargets (t);
+            auto hasTarget = [&] (const juce::String& id)
+            {
+                return std::any_of (targets.begin(), targets.end(), [&] (const AutomationTarget& a) { return a.id == id; });
+            };
+            check (hasTarget (automationTargets::volume) && hasTarget (automationTargets::pan)
+                     && hasTarget (automationTargets::send (SendBuses::reverb)) && hasTarget (automationTargets::send (SendBuses::delay))
+                     && hasTarget (automationTargets::soundControl (0)) && hasTarget (automationTargets::soundControl (4)),
+                   "volume, pan, both sends and the Sound knobs can be automated");
+
+            const bool couldUndo = engine.canUndo();
+            automation.setLaneShown (t, true);
+            pumpMessages();
+            check (tracks.getTrack (t)->automationShown && tracks.getTrack (t)->automationTarget == automationTargets::volume,
+                   "a track's lane can be shown, and starts on volume");
+            check (engine.canUndo() == couldUndo, "(showing it isn't an undo step)");
+
+            engine.beginUndoStep ("Add Automation Point");
+            check (automation.setPoints (t, automationTargets::volume, ramp), "points can be added");
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "and read back in beats");
+            check (tracks.getTrack (t)->automated.contains (automationTargets::volume), "the track says its volume is automated");
+
+            // A drag: many small moves, one undo step.
+            engine.beginUndoStep ("Move Automation Points");
+
+            for (int i = 1; i <= 10; ++i)
+                automation.setPoints (t, automationTargets::volume, { { 4.0 + i * 0.25, 0.2f + i * 0.02f }, { 8.0 + i * 0.25, 0.9f } });
+
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), { { 6.5, 0.4f }, { 10.5, 0.9f } }), "points can be moved");
+            check (engine.getUndoDescription() == "Move Automation Points", "(the move is a named undo step)");
+            engine.undo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "undo puts a whole drag back in one step");
+            engine.undo();
+            pumpMessages();
+            check (automation.getPoints (t, automationTargets::volume).empty() && ! tracks.getTrack (t)->automated.contains (automationTargets::volume),
+                   "undo removes added points");
+            engine.redo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "redo adds them back");
+
+            // Points are sorted, and kept within 0..1 and after the start.
+            engine.beginUndoStep ("Pan Automation");
+            automation.setPoints (t, automationTargets::pan, { { 6.0, 1.5f }, { -2.0, 0.25f } });
+            check (samePoints (automation.getPoints (t, automationTargets::pan), { { 0.0, 0.25f }, { 6.0, 1.0f } }), "points are sorted and kept in range");
+            check (automation.describeValue (t, automationTargets::pan, 0.25f) == "L 50", "pan values read like the pan knob");
+
+            // A send and a Sound knob.
+            const auto reverb = automationTargets::send (SendBuses::reverb);
+            automation.setPoints (t, reverb, { { 0.0, 0.5f } });
+            automation.setPoints (t, automationTargets::soundControl (0), { { 0.0, 0.3f }, { 4.0, 0.7f } });
+            pumpMessages();
+            check (automation.getPoints (t, reverb).size() == 1, "a send can be automated (it's made if needed)");
+            check (tracks.getTrack (t)->automated.contains (automationTargets::soundControl (0)), "and a Sound knob");
+
+            // Automation belongs to the track, not its regions.
+            auto region = tracks.regions().createChordRegion (t, 0.0);
+            pumpMessages();
+            engine.beginUndoStep ("Move Region");
+            tracks.regions().moveRegions ({ { region, t, 8.0 } });
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "moving a region leaves the automation where it is");
+
+            // It plays: silence where the volume curve is at the bottom.
+            engine.beginUndoStep ("Volume Automation");
+            automation.setPoints (t, automationTargets::volume, { { 0.0, 0.0f }, { 16.0, 0.0f } });
+            const float silent = engine.renderPeak (8.0, 12.0);
+            automation.setPoints (t, automationTargets::volume, { { 0.0, 0.8f }, { 16.0, 0.8f } });
+            const float loud = engine.renderPeak (8.0, 12.0);
+            std::cout << "  (peak with volume automation at the bottom " << silent << ", at 0.8 " << loud << ")\n";
+            check (silent < 0.001f && loud > 0.01f, "the volume follows its automation when the song plays");
+            automation.setPoints (t, automationTargets::volume, ramp);
+
+            // Tempo: Tracktion stores points in seconds and moves them with the tempo.
+            engine.setBpm (60.0);
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp), "a tempo change keeps points on their beats");
+            engine.undo();
+            pumpMessages();
+            check (samePoints (automation.getPoints (t, automationTargets::volume), ramp) && engine.getTransportState().bpm == 120.0,
+                   "and so does undoing it");
+            engine.setBpm (90.0);
+
+            // Show all: every track's lane opens, on a setting that has automation.
+            auto other = tracks.addInstrumentTrack();
+            engine.beginUndoStep ("Pan Automation");
+            automation.setPoints (other, automationTargets::pan, { { 0.0, 0.2f } });
+            automation.setLaneShown (t, false);
+            automation.setAllLanesShown (true);
+            pumpMessages();
+            check (automation.areAllLanesShown() && automation.getLaneTarget (other) == automationTargets::pan
+                     && automation.getLaneTarget (t) == automationTargets::volume,
+                   "showing all automation opens every lane on what's automated");
+            automation.setAllLanesShown (false);
+            check (! automation.isLaneShown (t) && ! automation.isLaneShown (other), "and hides them all again");
+            automation.setLaneShown (t, true);
+
+            automation.setLaneTarget (t, automationTargets::pan);
+            check (engine.saveSessionAs (automationSession), "(save)");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (automationSession), "(reopen)");
+            pumpMessages();
+            auto& automation = engine.getTracks().automation();
+            auto info = engine.getTracks().getTracks().front();
+            check (samePoints (automation.getPoints (info.id, automationTargets::volume), ramp), "automation round-trips (at a new tempo)");
+            check (automation.getPoints (info.id, automationTargets::soundControl (0)).size() == 2, "Sound knob automation round-trips");
+            check (info.automationShown && info.automationTarget == automationTargets::pan, "so does the lane");
+        }
+    }
+
+    if (runs ("export"))
+    {
+        std::cout << "Export\n";
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        auto& tracks = engine.getTracks();
+        auto& exporter = engine.getExporter();
+        auto exportDir = dir.getChildFile ("Export");
+        constexpr double rate = SongExporter::sampleRate;
+
+        // Runs an export to the end (pumping the message loop like the app would).
+        auto runExport = [&] (ExportSettings s)
+        {
+            ExportResult result;
+            bool done = false;
+
+            if (exporter.start (s, [&] (const ExportResult& r) { result = r; done = true; }).failed())
+                return result;
+
+            for (int i = 0; i < 1200 && ! done; ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            return result;
+        };
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        auto readAudio = [&] (const juce::File& f)
+        {
+            juce::AudioBuffer<float> audio;
+
+            if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (f) })
+            {
+                audio.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+            }
+
+            return audio;
+        };
+
+        auto peakIn = [&] (const juce::AudioBuffer<float>& a, double fromSeconds, double toSeconds)
+        {
+            const auto from = juce::jlimit (0, a.getNumSamples(), (int) (fromSeconds * rate));
+            const auto to = juce::jlimit (0, a.getNumSamples(), (int) (toSeconds * rate));
+            return to > from ? a.getMagnitude (from, to - from) : 0.0f;
+        };
+
+        auto seconds = [&] (const juce::AudioBuffer<float>& a) { return a.getNumSamples() / rate; };
+
+        ExportSettings settings;
+        settings.format = ExportFormat::wav;
+        settings.quality = 24;
+        settings.destination = exportDir.getChildFile ("Song");
+
+        check (exporter.start (settings, {}).failed() && ! exporter.isRunning(), "a song without regions can't be exported");
+
+        // At 120 bpm a beat is half a second: the region plays from 4 s to 12 s.
+        auto t = tracks.getTracks().front().id;
+        tracks.regions().createChordRegion (t, 8.0);
+        pumpMessages();
+        check (std::abs (exporter.getSongEndBeats() - 24.0) < 1.0e-6, "the song ends where the last region ends");
+
+        auto result = runExport (settings);
+        const auto songFile = exportDir.getChildFile ("Song.wav");
+        auto song = readAudio (songFile);
+        std::cout << "  (song: " << seconds (song) << " s, peak " << peakIn (song, 0.0, 60.0) << ")\n";
+        check (result.ok && result.files.size() == 1 && result.files[0] == songFile && song.getNumChannels() == 2,
+               "the song exports to a stereo WAV (the extension is added)");
+        check (seconds (song) >= 12.0 && seconds (song) < 12.0 + SongExporter::maxTailSeconds,
+               "it lasts to the end of the last region, plus a short tail");
+        check (peakIn (song, 0.0, 3.95) < 1.0e-4 && peakIn (song, 4.2, 11.8) > 0.01f, "silence before the region, sound during it");
+        check (exportDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1, "(nothing else is left next to it)");
+
+        // A reverb send makes the tail longer.
+        engine.beginUndoStep ("Reverb");
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 1.0f);
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Reverb.wav");
+        runExport (settings);
+        auto reverb = readAudio (settings.destination);
+        std::cout << "  (with reverb: " << seconds (reverb) << " s)\n";
+        check (seconds (reverb) > seconds (song) + 0.5 && seconds (reverb) <= 12.0 + SongExporter::maxTailSeconds + 0.2,
+               "the tail lasts until the reverb dies out");
+
+        // Normalizing: the loudest moment lands just under full scale.
+        settings.normalize = true;
+        settings.destination = exportDir.getChildFile ("Normalized.wav");
+        runExport (settings);
+        const auto normalizedPeak = peakIn (readAudio (settings.destination), 0.0, 60.0);
+        std::cout << "  (normalized peak " << normalizedPeak << ")\n";
+        check (std::abs (normalizedPeak - juce::Decibels::decibelsToGain (SongExporter::normalizeLevelDb)) < 0.01f,
+               "normalize brings the peak to -1 dB");
+        settings.normalize = false;
+
+        // Automation: the volume drops to nothing for beats 12-16 (6-8 s).
+        // (Dry, so the reverb doesn't ring on into the gap.)
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 0.0f);
+        engine.beginUndoStep ("Volume Automation");
+        tracks.automation().setPoints (t, automationTargets::volume,
+                                       { { 0.0, 0.8f }, { 11.99, 0.8f }, { 12.0, 0.0f }, { 15.99, 0.0f }, { 16.0, 0.8f } });
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Automation.wav");
+        runExport (settings);
+        auto automated = readAudio (settings.destination);
+        std::cout << "  (automated peaks: " << peakIn (automated, 4.2, 5.9) << ", " << peakIn (automated, 6.1, 7.9)
+                  << ", " << peakIn (automated, 8.2, 11.8) << ")\n";
+        check (peakIn (automated, 6.1, 7.9) < 1.0e-3f && peakIn (automated, 4.2, 5.9) > 0.01f && peakIn (automated, 8.2, 11.8) > 0.01f,
+               "the volume follows its automation in the file");
+        tracks.automation().setPoints (t, automationTargets::volume, {});
+        pumpMessages();
+
+        // The cycle range, exactly (no tail).
+        engine.setLoopRangeBeats (8.0, 12.0);
+        settings.cycleOnly = true;
+        settings.destination = exportDir.getChildFile ("Cycle.wav");
+        runExport (settings);
+        auto cycle = readAudio (settings.destination);
+        check (std::abs (cycle.getNumSamples() - 2.0 * rate) <= 2.0 && peakIn (cycle, 0.0, 2.0) > 0.01f,
+               "just the cycle range exports exactly");
+        settings.cycleOnly = false;
+
+        // Stems: a second track plays 0-8 s, without reverb.
+        tracks.sends().setSendLevel (t, SendBuses::reverb, 1.0f);
+        auto t2 = tracks.addInstrumentTrack();
+        tracks.regions().createChordRegion (t2, 0.0);
+        pumpMessages();
+        settings.destination = exportDir.getChildFile ("Mix.wav");
+        runExport (settings);
+        auto mix = readAudio (settings.destination);
+
+        settings.stems = true;
+        settings.destination = exportDir.getChildFile ("Stems");
+        result = runExport (settings);
+        check (result.ok && result.files.size() == 2 && exporter.getStemNames().size() == 2, "stems: one file per track");
+
+        if (result.files.size() == 2)
+        {
+            auto a = readAudio (result.files[0]), b = readAudio (result.files[1]);
+            // (The synth isn't sample-for-sample repeatable, so the song's own
+            // render may find the end of the reverb tail a little earlier or later.)
+            check (result.files[0].getFileName().startsWith ("01 ") && a.getNumSamples() == b.getNumSamples()
+                     && std::abs (seconds (a) - seconds (mix)) < 0.5,
+                   "all the same length, the song's");
+            check (peakIn (a, 0.0, 3.95) < 1.0e-4 && peakIn (b, 0.0, 3.95) > 0.01f, "each holds only its own track");
+
+            // Each stem has its own reverb, and only its own. (The synth isn't
+            // sample-for-sample repeatable, so the stems can't be compared
+            // with the song directly.)
+            std::cout << "  (after 12.5 s: reverb stem " << peakIn (a, 12.5, 60.0) << ", dry stem " << peakIn (b, 9.0, 60.0) << ")\n";
+            check (peakIn (a, 12.5, 60.0) > 1.0e-3f && peakIn (b, 9.0, 60.0) < 1.0e-4f, "each stem has its own reverb, and only its own");
+        }
+
+        // Mute and solo, like playback.
+        tracks.setMute (t2, true);
+        settings.stems = false;
+        settings.destination = exportDir.getChildFile ("Muted.wav");
+        runExport (settings);
+        check (peakIn (readAudio (settings.destination), 0.0, 3.95) < 1.0e-4 && exporter.getStemNames().size() == 1,
+               "a muted track isn't in the song or the stems");
+        tracks.setMute (t2, false);
+        tracks.setSolo (t2, true);
+        settings.destination = exportDir.getChildFile ("Solo.wav");
+        runExport (settings);
+        auto solo = readAudio (settings.destination);
+        std::cout << "  (solo peaks: " << peakIn (solo, 0.0, 3.95) << ", " << peakIn (solo, 9.0, 60.0) << "; stems: "
+                  << exporter.getStemNames().joinIntoString (", ") << ")\n";
+        check (peakIn (solo, 0.0, 3.95) > 0.01f && peakIn (solo, 9.0, 60.0) < 1.0e-4f
+                 && exporter.getStemNames() == juce::StringArray (tracks.getTrack (t2)->name),
+               "solo leaves only the soloed track");
+        tracks.setSolo (t2, false);
+
+        // FLAC and OGG.
+        settings.format = ExportFormat::flac;
+        settings.quality = 16;
+        settings.destination = exportDir.getChildFile ("Song.flac");
+        runExport (settings);
+        auto flac = readAudio (settings.destination);
+        std::cout << "  (FLAC " << seconds (flac) << " s, song " << seconds (mix) << " s)\n";
+        check (std::abs (seconds (flac) - seconds (mix)) < 0.5 && peakIn (flac, 4.2, 11.8) > 0.01f, "FLAC (16-bit) exports");
+
+        settings.format = ExportFormat::ogg;
+        settings.quality = 192;
+        settings.destination = exportDir.getChildFile ("Song.ogg");
+        runExport (settings);
+        auto ogg = readAudio (settings.destination);
+        check (std::abs (seconds (ogg) - seconds (mix)) < 0.1 && peakIn (ogg, 4.2, 11.8) > 0.01f, "OGG Vorbis exports");
+
+        settings.format = ExportFormat::mp3;
+        settings.quality = 320;
+        settings.destination = exportDir.getChildFile ("Song");
+        runExport (settings);
+        auto mp3 = readAudio (exportDir.getChildFile ("Song.mp3"));
+        std::cout << "  (MP3 " << seconds (mp3) << " s, " << exportDir.getChildFile ("Song.mp3").getSize() / 1024 << " KB)\n";
+        check (std::abs (seconds (mp3) - seconds (mix)) < 0.5 && peakIn (mp3, 4.2, 11.8) > 0.01f,
+               "MP3 exports (with LAME)");
+
+        // Cancel: nothing is left behind, and the song still plays.
+        settings.format = ExportFormat::wav;
+        settings.destination = exportDir.getChildFile ("Cancelled.wav");
+        bool cancelled = false;
+        check (exporter.start (settings, [&] (const ExportResult& r) { cancelled = r.cancelled; }).wasOk(), "(start)");
+        exporter.cancel();
+
+        for (int i = 0; i < 200 && exporter.isRunning(); ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        check (cancelled && ! settings.destination.exists() && ! exporter.isRunning(), "cancel stops the export and leaves no file");
+        engine.togglePlay();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        check (engine.getTransportState().playing, "the song still plays after exporting");
+        engine.togglePlay();
+    }
+
+    if (runs ("main") && testPlugins.getChildFile ("Good").isDirectory())
     {
         std::cout << "Third-party plug-ins\n";
         auto pluginSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Plugins"));
         juce::String gainName ("Ikaros Test Gain");
+        juce::String gainTarget;   // the gain parameter's automation target
+        const std::vector<AutomationPoint> gainPoints { { 2.0, 0.25f }, { 6.0, 0.75f } };
+
+        auto sameGainPoints = [&] (const std::vector<AutomationPoint>& p)
+        {
+            return p.size() == 2 && std::abs (p[0].beat - 2.0) < 1.0e-6 && std::abs (p[1].beat - 6.0) < 1.0e-6
+                    && std::abs (p[0].value - 0.25f) < 1.0e-3f && std::abs (p[1].value - 0.75f) < 1.0e-3f;
+        };
 
         {
             AudioEngine engine { testSettings };
@@ -1612,6 +3772,18 @@ int main (int argc, char* argv[])
                        "a plug-in effect can be added");
                 check (effects.getEffectParameters (t1, added).empty(), "(it has its own window instead of knobs)");
 
+                auto gainTargets = tracks.automation().getTargets (t1);
+                auto gainParam = std::find_if (gainTargets.begin(), gainTargets.end(),
+                                               [&] (const AutomationTarget& a) { return a.group == gainName && a.name == "Gain"; });
+                check (gainParam != gainTargets.end(), "a plug-in's parameters can be automated");
+
+                if (gainParam != gainTargets.end())
+                {
+                    gainTarget = gainParam->id;
+                    engine.beginUndoStep ("Gain Automation");
+                    tracks.automation().setPoints (t1, gainTarget, { { 2.0, 0.25f }, { 6.0, 0.75f } });
+                }
+
                 check (effects.setSound (t1, "plugin:" + synth->id), "a plug-in instrument can be picked");
                 pumpMessages();
                 auto instrument = effects.getInstrument (t1);
@@ -1630,6 +3802,7 @@ int main (int argc, char* argv[])
             auto instrument = engine.getTracks().effects().getInstrument (t1);
             check (chain.size() == 1 && chain[0].isThirdParty && ! chain[0].missing, "the plug-in effect comes back");
             check (instrument && instrument->isThirdParty && ! instrument->missing, "and the plug-in instrument");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)), "and the plug-in's automation");
         }
 
         // Pretend the gain plug-in was uninstalled: rename it in the saved
@@ -1667,12 +3840,495 @@ int main (int argc, char* argv[])
             check (engine.saveSession(), "it can be saved");
             check (SessionBundle::readEntry (pluginSession, SessionBundle::sessionEntry).toString().contains ("Ikaros Gone Gain"),
                    "and keeps the missing plug-in's settings");
+
+            auto& automation = engine.getTracks().automation();
+            auto target = automation.getTarget (t1, gainTarget);
+            check (target && ! target->editable && target->name == "Gain" && sameGainPoints (automation.getPoints (t1, gainTarget)),
+                   "the missing plug-in's automation is kept, read-only");
+            check (! automation.setPoints (t1, gainTarget, {}), "(and can't be changed)");
+            engine.setBpm (60.0);
+            pumpMessages();
+            check (sameGainPoints (automation.getPoints (t1, gainTarget)), "a tempo change keeps it on its beats");
+            check (engine.saveSession(), "(save again)");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "(reopen again)");
+            pumpMessages();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "the missing plug-in's automation survives saving again");
         }
     }
-    else
+    else if (runs ("main"))
     {
         std::cout << "(Third-party plug-in checks skipped: build with -DIKAROS_BUILD_TEST_PLUGINS=ON)\n";
     }
+
+    if (runs ("undo"))
+    {
+        // Every edit the app can make, through the same calls the UI uses:
+        // one named undo step each, and undo/redo/save/reopen give back
+        // exactly the same session.
+        AudioEngine engine { testSettings };
+        auto& tracks = engine.getTracks();
+        auto& regions = tracks.regions();
+        auto& notes = tracks.notes();
+        auto& effects = tracks.effects();
+        const auto undoSession = dir.getChildFile ("Undo");
+        engine.newSession();
+        pumpMessages();
+
+        auto t1 = tracks.getTracks().front().id;
+        TrackId t2 = 0, audio = 0;
+
+        std::cout << "-- Tracks\n";
+        checkUndoRoundTrip (engine, "Add Track", [&] { t2 = tracks.addInstrumentTrack(); });
+        checkUndoRoundTrip (engine, "Add Audio Track", [&] { audio = tracks.addAudioTrack(); });
+        checkUndoRoundTrip (engine, "Rename Track", [&] { tracks.renameTrack (t1, "Lead"); });
+        checkUndoRoundTrip (engine, "Track Color", [&] { tracks.setTrackColour (t1, juce::Colours::orange); });
+        checkUndoRoundTrip (engine, "Track Icon", [&] { tracks.setTrackIcon (t1, "guitar"); });
+        checkUndoRoundTrip (engine, "Move Track Down", [&] { tracks.moveTrack (t1, 1); });
+        TrackId copy = 0;
+        checkUndoRoundTrip (engine, "New Track with Duplicate Settings", [&] { copy = tracks.duplicateTrack (t2, false); });
+        checkUndoRoundTrip (engine, "Delete Track", [&] { tracks.deleteTrack (copy); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Mixer and inputs\n";
+        checkUndoRoundTrip (engine, "Volume", [&] { engine.beginUndoStep ("Volume"); tracks.setVolume (t1, 0.3f); });
+        checkUndoRoundTrip (engine, "Pan", [&] { engine.beginUndoStep ("Pan"); tracks.setPan (t1, -0.5f); });
+        checkUndoRoundTrip (engine, "Master Volume", [&] { engine.beginUndoStep ("Master Volume"); tracks.setMasterVolume (0.4f); });
+        checkUndoRoundTrip (engine, "Reverb Send", [&] { engine.beginUndoStep ("Reverb Send"); tracks.sends().setSendLevel (t1, 0, 0.6f); });
+        checkUndoRoundTrip (engine, "Monitoring On", [&] { tracks.inputs().setMonitoring (audio, true); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Regions\n";
+        RegionId r = 0;
+        checkUndoRoundTrip (engine, "Add Region", [&] { r = regions.createChordRegion (t1, 0.0); });
+        checkUndoRoundTrip (engine, "Move Region", [&] { regions.moveRegions ({ { r, t1, 8.0 } }); });
+        checkUndoRoundTrip (engine, "Trim Region", [&] { regions.trimRegion (r, 8.0, 20.0); });
+        checkUndoRoundTrip (engine, "Loop Region", [&] { regions.loopRegion (r, 32.0); });
+        checkUndoRoundTrip (engine, "Split Region", [&] { regions.splitRegions ({ r }, 12.0); });
+        checkUndoRoundTrip (engine, "Duplicate Region", [&] { regions.duplicateRegions ({ r }); });
+        checkUndoRoundTrip (engine, "Rename Region", [&] { regions.renameRegion (r, "Verse"); });
+        regions.copyRegions ({ r });
+        checkUndoRoundTrip (engine, "Paste", [&] { regions.pasteRegions (t2, 64.0); });
+        checkUndoRoundTrip (engine, "Delete Region", [&] { regions.deleteRegion (regions.getRegions (t2).front().id); });
+
+        const auto wavFile = dir.getChildFile ("Undo Tone.wav");
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream (wavFile.createOutputStream().release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                        .withNumChannels (1)
+                                                                                        .withBitsPerSample (16));
+            juce::AudioBuffer<float> buffer (1, 44100);
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                buffer.setSample (0, i, 0.5f * std::sin ((float) i * 0.05f));
+
+            check (writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()), "(test audio written)");
+        }
+        checkUndoRoundTrip (engine, "Import Audio File", [&] { regions.importAudioFiles (audio, { wavFile.getFullPathName() }, 0.0); });
+
+        std::cout << "-- Fades\n";
+        {
+            // At 120 bpm the one-second tone is 2 beats long, and the
+            // automatic edge fade (minFadeSeconds, 5 ms) is 0.01 beats.
+            const auto a = regions.getRegions (audio).front();
+            const double edgeFade = 0.005 * 2.0;
+            auto near = [] (double x, double y) { return std::abs (x - y) < 1.0e-4; };
+            check (near (a.fadeInBeats, edgeFade) && near (a.fadeOutBeats, edgeFade),
+                   "an imported audio region gets very short fades at its edges, so it can't click");
+
+            checkUndoRoundTrip (engine, "Fade In", [&] { regions.setFade (a.id, true, 0.5); });
+            checkUndoRoundTrip (engine, "Fade Out", [&] { regions.setFade (a.id, false, 1.0); });
+            auto faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, 0.5) && near (faded->fadeOutBeats, 1.0), "fades can be made longer");
+
+            pumpMessages();
+            regions.setFade (a.id, true, 2.0);
+            pumpMessages();
+            faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, 1.0), "a fade in stops where the fade out starts");
+            engine.undo();
+            pumpMessages();
+
+            regions.setFade (a.id, true, 0.0);
+            pumpMessages();
+            faded = regions.getRegion (a.id);
+            check (faded && near (faded->fadeInBeats, edgeFade), "a fade can't go below the automatic edge fade");
+            engine.undo();
+            pumpMessages();
+
+            const auto right = regions.splitRegions ({ a.id }, 0.75);   // leaves room for both fades on each half
+            pumpMessages();
+            auto leftHalf = regions.getRegion (a.id);
+            auto rightHalf = right.empty() ? std::nullopt : regions.getRegion (right.front());
+            check (leftHalf && rightHalf && near (leftHalf->fadeOutBeats, edgeFade) && near (rightHalf->fadeInBeats, edgeFade)
+                     && near (leftHalf->fadeInBeats, 0.5) && near (rightHalf->fadeOutBeats, 1.0),
+                   "splitting keeps the outer fades and gives the cut short fades");
+            engine.undo();
+            pumpMessages();
+        }
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Notes\n";
+        checkUndoRoundTrip (engine, "Add Note", [&] { notes.addNote (r, { 72, 0.5, 0.25, 90 }); });
+        checkUndoRoundTrip (engine, "Move Note", [&]
+        {
+            auto moved = regions.getRegion (r)->notes.front();
+            moved.startBeat += 0.5;
+            moved.pitch += 2;
+            notes.changeNotes (r, { moved }, "Move Note");
+        });
+        checkUndoRoundTrip (engine, "Quantize", [&]
+        {
+            std::vector<NoteId> ids;
+
+            for (auto& n : regions.getRegion (r)->notes)
+                ids.push_back (n.id);
+
+            notes.quantiseNotes (r, ids, 1.0);
+        });
+        checkUndoRoundTrip (engine, "Delete Note", [&] { notes.deleteNotes (r, { regions.getRegion (r)->notes.front().id }); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Sounds, effects and EQ\n";
+        PluginId fx = 0, fx2 = 0;
+        checkUndoRoundTrip (engine, "Change Sound", [&] { effects.setSound (t1, "synth:Warm Pad"); });
+        checkUndoRoundTrip (engine, "Tone", [&] { engine.beginUndoStep ("Tone"); effects.setSoundControl (t1, 0, 0.8f); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx = effects.addEffect (t1, "reverb"); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx2 = effects.addEffect (t1, "compressor"); });
+        checkUndoRoundTrip (engine, "Replace Effect", [&] { fx2 = effects.replaceEffect (t1, fx2, "delay"); });
+        checkUndoRoundTrip (engine, "Move Effect", [&] { effects.moveEffect (t1, fx2, 0); });
+        checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t1, fx, false); });
+        checkUndoRoundTrip (engine, "Reverb Mix", [&] { engine.beginUndoStep ("Reverb Mix"); effects.setEffectParameter (t1, fx, 0, 0.9f); });
+        checkUndoRoundTrip (engine, "Remove Effect", [&] { effects.removeEffect (t1, fx2); });
+        checkUndoRoundTrip (engine, "EQ", [&] { engine.beginUndoStep ("EQ"); tracks.eq().setBand (t1, 1, 800.0f, 6.0f, 1.0f); });
+        checkUndoRoundTrip (engine, "Turn EQ Off", [&] { tracks.eq().setEnabled (t1, false); });
+        checkUndoRoundTrip (engine, "Reset EQ", [&] { tracks.eq().reset (t1); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Automation, tempo and key\n";
+        checkUndoRoundTrip (engine, "Add Automation Point", [&]
+        {
+            engine.beginUndoStep ("Add Automation Point");
+            tracks.automation().setPoints (t1, automationTargets::volume, { { 4.0, 0.2f }, { 8.0, 0.9f } });
+        });
+        engine.undo();
+        pumpMessages();
+        check (std::abs (tracks.getTrack (t1)->volume - 0.3f) < 0.01f,
+               "undoing the automation puts the fader back where it was (not where the curve left it)");
+        engine.redo();
+        checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (96.0); });
+        checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignature (3, 4); });
+        checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, true); });
+        checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Selection after delete, undo and redo\n";
+        {
+            engine.newSession();
+            pumpMessages();
+            Selection selection { engine };
+
+            // The same as the Undo and Redo commands do (see MainComponent::perform).
+            auto undoOrRedo = [&] (bool undo)
+            {
+                const auto before = selection.getContents();
+                undo ? engine.undo() : engine.redo();
+                selection.selectAfterUndoOrRedo (before);
+                pumpMessages();
+            };
+
+            tracks.addInstrumentTrack();
+            pumpMessages();
+            const auto lastAdded = tracks.addInstrumentTrack();
+            pumpMessages();
+            std::vector<TrackId> order;
+
+            for (auto& t : tracks.getTracks())
+                order.push_back (t.id);
+
+            selection.selectTrack (order[1]);
+            tracks.deleteTrack (order[1]);
+            pumpMessages();
+            check (selection.getTrack() == order[2], "deleting a track selects the one that takes its place");
+            tracks.deleteTrack (order[2]);
+            pumpMessages();
+            check (selection.getTrack() == order[0], "deleting the bottom track selects the one above");
+
+            undoOrRedo (true);
+            check (selection.getTrack() == order[2], "undoing a delete selects the track that comes back");
+            undoOrRedo (true);
+            check (selection.getTrack() == order[1], "(and again)");
+
+            // Undoing "Add Track" takes the selected track away.
+            selection.selectTrack (lastAdded);
+            const auto at = std::find (order.begin(), order.end(), lastAdded) - order.begin();
+            const auto expected = at + 1 < (long) order.size() ? order[(size_t) at + 1] : order[(size_t) at - 1];
+            undoOrRedo (true);
+            check (selection.getTrack() == expected, "undoing Add Track selects its neighbour, not the first track");
+            undoOrRedo (false);
+            check (selection.getTrack() == lastAdded, "redoing it selects the new track again");
+
+            auto& regions = tracks.regions();
+            const auto r1 = regions.createChordRegion (order[0], 0.0);
+            pumpMessages();
+            const auto r2 = regions.createChordRegion (order[0], 32.0);
+            pumpMessages();
+            selection.selectRegions (order[0], { r1, r2 });
+            regions.deleteRegions ({ r1, r2 });
+            pumpMessages();
+            selection.validate();
+            check (! selection.hasRegions(), "deleted regions leave the selection");
+            undoOrRedo (true);
+            check (selection.isSelected (r1) && selection.isSelected (r2) && selection.getTrack() == order[0],
+                   "undoing a delete selects the regions that come back");
+
+            selection.selectTrack (order[1]);
+            undoOrRedo (false);   // deletes them again
+            undoOrRedo (true);
+            check (selection.isSelected (r1) && selection.isSelected (r2), "(also when another track was selected)");
+            undoOrRedo (true);    // the second "Add Region"
+            check (selection.getRegions() == std::vector<RegionId> { r1 } && selection.getRegion() == r1,
+                   "undoing Add Region drops just that region from the selection");
+        }
+    }
+
+    if (runs ("recovery"))
+    {
+        std::cout << "Atomic saves\n";
+        {
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+
+            auto saveDir = dir.getChildFile ("Atomic");
+            auto bundle = AudioEngine::getSessionFileFor (saveDir.getChildFile ("Kept"));
+            check (engine.saveSessionAs (bundle), "(save)");
+            check (engine.saveSession(), "(save again, over the first)");
+            check (saveDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1,
+                   "saving leaves no temporary files behind");
+
+            juce::MemoryBlock before, after;
+            bundle.loadFileAsData (before);
+
+            // A save that fails halfway (a file it should hold has vanished).
+            std::vector<SessionBundle::Entry> entries { { SessionBundle::sessionEntry, engine.getWorkingCopyFolder().getChildFile (SessionBundle::sessionEntry), true },
+                                                        { "Audio/Gone.wav", saveDir.getChildFile ("Gone.wav"), false } };
+            check (SessionBundle::pack (bundle, entries, {}).failed(), "(a save that fails partway)");
+            bundle.loadFileAsData (after);
+            check (before == after, "a failed save leaves the saved session exactly as it was");
+            check (saveDir.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 1, "and leaves no half-written file");
+
+            std::cout << "Autosave\n";
+            engine.newSession();
+            engine.setAutosaveTiming (400, 1500, 5000);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (3500);
+            const auto work = engine.getWorkingCopyFolder();
+            const auto autosave = work.getChildFile (SessionRecovery::autosaveFile);
+            check (work.getChildFile (SessionRecovery::lockFile).existsAsFile(), "an open session's working copy is marked as open");
+            check (! autosave.exists(), "a session with no changes isn't autosaved");
+
+            auto& tracks = engine.getTracks();
+            auto t = tracks.addInstrumentTrack();
+            engine.beginUndoStep ("Rename");
+            tracks.renameTrack (t, "Autosaved Track");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+            check (! autosave.exists(), "no autosave while changes are still coming");
+            const auto undoName = engine.getUndoDescription();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+            engine.waitForAutosave();
+            check (autosave.loadFileAsString().contains ("Autosaved Track"), "a moment after changes stop, the recovery copy is written");
+            check (engine.getUndoDescription() == undoName && undoName.isNotEmpty() && ! engine.canRedo(), "autosaving doesn't touch undo");
+            check (engine.hasUnsavedChanges(), "the session still has unsaved changes");
+
+            engine.beginUndoStep ("Rename");
+            tracks.renameTrack (t, "Second Name");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+            engine.waitForAutosave();
+            check (! autosave.loadFileAsString().contains ("Second Name"), "not autosaved again until the interval has passed");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
+            engine.waitForAutosave();
+            check (autosave.loadFileAsString().contains ("Second Name"), "then autosaved again");
+
+            check (engine.saveSessionAs (saveDir.getChildFile ("Autosaved")), "(save)");
+            check (! autosave.exists(), "saving removes the recovery copy");
+            check (engine.findRecoverableSessions().empty(), "sessions open in this copy of the app aren't offered");
+        }
+
+        std::cout << "Cut-off recordings\n";
+        {
+            auto wavFile = dir.getChildFile ("CutOff.wav");
+            const int frames = writeCutOffWav (wavFile, 1.0);
+            check (frames > 0 && lengthOfWav (wavFile) <= 0, "(a WAV cut off mid-recording reads as empty)");
+            check (SessionRecovery::repairWavFile (wavFile), "it can be repaired");
+            check (lengthOfWav (wavFile) == frames, "and then holds every whole sample frame");
+
+            juce::MemoryBlock good, again;
+            wavFile.loadFileAsData (good);
+            SessionRecovery::repairWavFile (wavFile);
+            wavFile.loadFileAsData (again);
+            check (good == again, "a WAV that's fine is left alone");
+
+            juce::Array<juce::MidiMessage> played { juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100).withTimeStamp (1.25),
+                                                    juce::MidiMessage::noteOff (1, 60).withTimeStamp (1.5) };
+            auto journal = dir.getChildFile ("Take.txt");
+            journal.replaceWithText (SessionRecovery::toJournalLines (played) + "2.0 90 4");   // cut off mid-line
+            auto readBack = SessionRecovery::readJournal (journal);
+            check (readBack.size() == 2 && readBack[0].isNoteOn() && readBack[0].getNoteNumber() == 60
+                     && std::abs (readBack[0].getTimeStamp() - 1.25) < 1e-6 && readBack[1].isNoteOff(),
+                   "MIDI written as it's played reads back, without a line cut off by the crash");
+        }
+
+        std::cout << "Crash recovery\n";
+        {
+            auto bundle = AudioEngine::getSessionFileFor (dir.getChildFile ("Crashy"));
+            juce::ChildProcess child;
+            const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+            check (child.start (juce::StringArray { exe, "--recovery-child=" + bundle.getFullPathName() }),
+                   "(started a copy of the app to crash)");
+
+            // Wait for it to be mid-take. readProcessOutput blocks until it has
+            // filled the buffer (or the process ends), so it reads a byte at a time.
+            juce::String output;
+            const auto giveUp = juce::Time::getMillisecondCounter() + 60000;
+            char buffer[1];
+
+            while (! output.contains ("RECORDING") && child.isRunning() && juce::Time::getMillisecondCounter() < giveUp)
+                if (auto n = child.readProcessOutput (buffer, sizeof (buffer)); n > 0)
+                    output += juce::String::fromUTF8 (buffer, n);
+
+            // Read up to the end of the line (the audio track's ID).
+            while (output.contains ("RECORDING") && ! output.fromFirstOccurrenceOf ("RECORDING", false, false).containsChar ('\n') && child.isRunning())
+                if (auto n = child.readProcessOutput (buffer, sizeof (buffer)); n > 0)
+                    output += juce::String::fromUTF8 (buffer, n);
+
+            const auto status = juce::StringArray::fromTokens (output.fromFirstOccurrenceOf ("RECORDING", false, false).upToFirstOccurrenceOf ("\n", false, false).trim(), " ", {});
+            check (status.size() == 2 && status[0] == "1" && ! output.contains ("no autosave"),
+                   "(the other copy autosaved, and is recording)");
+            if (status.size() != 2)
+                std::cout << "         the other copy said:\n" << output.getLastCharacters (1500) << "\n";
+
+            const auto audioTrack = (TrackId) status[1].getLargeIntValue();
+
+            AudioEngine engine { testSettings };
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            check (engine.findRecoverableSessions().empty(), "a session open in another copy of the app isn't offered");
+
+            child.kill();   // SIGKILL: no chance to tidy up, like a crash
+
+            for (int i = 0; i < 100 && child.isRunning(); ++i)
+                juce::Thread::sleep (50);
+
+
+            auto found = engine.findRecoverableSessions();
+            check (found.size() == 1, "after the crash, its session is offered");
+
+            if (found.size() == 1)
+            {
+                const auto session = found.front();
+                const auto age = juce::Time::getCurrentTime() - session.savedAt;
+                check (session.name == "Crashy" && ! session.untitled, "with its name");
+                check (age.inSeconds() >= 0 && age.inSeconds() < 120, "and when its work was autosaved");
+
+                const auto saved = SessionBundle::readEntry (bundle, SessionBundle::sessionEntry).toString();
+                check (saved.contains ("TRACK") && ! saved.contains ("After Save"), "autosaving never wrote to the saved session");
+
+                // An audio take cut off by the crash too. (The test can't record
+                // audio, so this is what Tracktion would have left: a WAV in the
+                // Audio folder, noted in Recovery.json.)
+                auto info = SessionRecovery::readInfo (session.folder);
+                check (info.has_value() && info->takes.size() == 1 && info->takes[0].midi, "the MIDI take was noted as it started");
+
+                if (info.has_value() && ! info->takes.empty())
+                {
+                    auto audioTake = info->takes[0];
+                    audioTake.midi = false;
+                    audioTake.track = audioTrack;
+                    audioTake.path = "Audio/Cut Off Take.wav";
+                    writeCutOffWav (session.folder.getChildFile (audioTake.path), 2.0);
+                    info->takes.push_back (audioTake);
+                    SessionRecovery::writeInfo (session.folder, *info);
+                }
+
+                check (engine.recoverSession (session), "Recover opens it");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (3500);   // past the clean-slate reset
+
+                auto& tracks = engine.getTracks();
+                check (engine.getSessionName() == "Crashy" && ! engine.isUntitled(), "as the saved session it was");
+                check (engine.hasUnsavedChanges(), "marked as unsaved");
+
+                std::optional<TrackInfo> afterSave;
+
+                for (auto& t : tracks.getTracks())
+                    if (t.name == "After Save")
+                        afterSave = t;
+
+                check (afterSave.has_value(), "with the changes made after saving");
+
+                if (afterSave.has_value())
+                {
+                    auto regions = tracks.regions().getRegions (afterSave->id);
+                    check (regions.size() == 2, "the chord region, and the take cut short");
+
+                    if (regions.size() != 2)
+                        for (auto& r : regions)
+                            std::cout << "         region at " << r.startBeat << ", " << r.notes.size() << " notes\n";
+
+                    if (regions.size() == 2)
+                    {
+                        const auto& take = regions[0].startBeat < regions[1].startBeat ? regions[0] : regions[1];
+                        check (take.notes.size() == 4, "the take holds the notes played before the crash (the held one too)");
+                        check (take.startBeat < 0.5 && take.lengthBeats < 16.0, "where it was recorded");
+                    }
+                }
+
+                auto audioRegions = tracks.regions().getRegions (audioTrack);
+                check (audioRegions.size() == 1 && audioRegions[0].lengthBeats > 3.0, "a cut-off audio take goes back on its track too");
+                check (engine.getWorkingCopyFolder() == session.folder, "the recordings stay in its working copy");
+                check (engine.findRecoverableSessions().empty(), "a recovered session isn't offered again");
+
+                // Discard: a crashed copy of it, then one with nothing unsaved.
+                engine.waitForAutosave();
+                auto copy = session.folder.getSiblingFile ("Discard Me");
+                session.folder.copyDirectoryTo (copy);
+                auto offered = engine.findRecoverableSessions();
+                check (offered.size() == 1 && offered[0].folder == copy, "(another crashed session)");
+
+                if (! offered.empty())
+                    engine.discardRecoverableSession (offered[0]);
+
+                check (! copy.exists(), "Discard deletes it");
+
+                auto empty = session.folder.getSiblingFile ("Nothing Unsaved");
+                empty.createDirectory();
+                empty.getChildFile (SessionRecovery::lockFile).create();
+                SessionRecovery::writeInfo (empty, { "Nothing", {}, {}, {} });
+                check (engine.findRecoverableSessions().empty() && ! empty.exists(),
+                       "a crashed session with nothing unsaved isn't offered, and is tidied away");
+            }
+        }
+
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile (testSettings + "Child").deleteRecursively();
+
+        // Closing a session leaves nothing behind to recover.
+        auto openSessions = platform::getLocalDataFolder().getChildFile ("Open Sessions");
+        check (openSessions.getNumberOfChildFiles (juce::File::findDirectories) == 0, "closed sessions leave no working copies");
+    }
+
+    if (runs ("recording"))
+        runRecordingSection (dir);
+
+    if (runs ("takes"))
+        runTakesSection (dir);
+
+    if (runs ("longrecording"))
+        runLongRecordingSection();
+
+    if (runs ("preferences"))
+        runPreferencesSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

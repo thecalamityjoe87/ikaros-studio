@@ -13,7 +13,9 @@ namespace
 {
     constexpr float corner = 8.0f;
     constexpr int stripHeight = 20;
-    constexpr int loopCornerWidth = 14;    // the loop handle in the top-right corner
+    constexpr int loopCornerWidth = 18;    // the loop handle (top-right) and trim handle (bottom-right) are this wide and stripHeight tall
+    constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
+    constexpr int fadeHandleReach = 7;        // how close the mouse has to be to grab one
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
 }
 
@@ -60,14 +62,79 @@ RegionComponent::Zone RegionComponent::getZoneAt (juce::Point<int> p) const
     if (p.x < edge)
         return Zone::leftEdge;
 
-    // The top of the right edge loops; the rest of it trims.
+    // An audio region's fade handles, at the top of the waveform. Near an
+    // edge they win over looping and trimming, which the rest of the edge
+    // still does.
+    if (! info.isMidi && getWidth() >= 32 && p.y >= stripHeight && p.y < stripHeight + fadeHandleReach)
+        for (bool fadeIn : { true, false })
+            if (std::abs ((float) p.x - getFadeHandle (fadeIn).x) <= (float) fadeHandleReach)
+                return fadeIn ? Zone::fadeIn : Zone::fadeOut;
+
+    // The top-right handle loops; the bottom-right one and the rest of the right edge trim.
     if (getWidth() >= 32 && p.y < stripHeight && p.x >= getWidth() - loopCornerWidth)
         return Zone::loopCorner;
 
-    if (p.x >= getWidth() - edge)
+    if (getTrimHandleBounds().contains (p) || p.x >= getWidth() - edge)
         return Zone::rightEdge;
 
+    if (getTakeBadgeBounds().contains (p))
+        return Zone::takeBadge;
+
     return p.y < stripHeight ? Zone::nameStrip : Zone::body;
+}
+
+juce::Rectangle<int> RegionComponent::getTrimHandleBounds() const
+{
+    // Empty when the region is too small for the loop and trim handles not to touch.
+    if (getWidth() < 32 || getHeight() < 2 * stripHeight)
+        return {};
+
+    return getLocalBounds().removeFromBottom (stripHeight).removeFromRight (loopCornerWidth);
+}
+
+// "Take 2 ▾" at the start of the name strip, before the name (where it's
+// seen even when the region runs off the screen); just the number on a
+// narrow region; nothing on one too narrow for that.
+static juce::String takeBadgeText (const RegionInfo& info, bool full)
+{
+    const auto number = juce::String (info.currentTake + 1);
+    return full ? "Take " + number : number;
+}
+
+static constexpr int fullTakeBadgeMinWidth = 110;   // narrower regions show just the number
+
+juce::Rectangle<int> RegionComponent::getTakeBadgeBounds() const
+{
+    if (! info.hasTakes() || getWidth() < 32 + loopCornerWidth)
+        return {};
+
+    const bool full = getWidth() >= fullTakeBadgeMinWidth;
+    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (10.0f), takeBadgeText (info, full));
+    const int width = textWidth + (full ? 22 : 12);   // room for the arrow on the full one
+    return { 6, 3, width, stripHeight - 6 };
+}
+
+void RegionComponent::setFadePreview (std::optional<double> fadeInBeats, std::optional<double> fadeOutBeats)
+{
+    fadeInPreview = fadeInBeats;
+    fadeOutPreview = fadeOutBeats;
+    repaint();
+}
+
+double RegionComponent::getFadeLength (bool fadeIn) const
+{
+    // value_or: the preview if there is one, else the region's own fade.
+    return fadeIn ? fadeInPreview.value_or (info.fadeInBeats) : fadeOutPreview.value_or (info.fadeOutBeats);
+}
+
+juce::Point<float> RegionComponent::getFadeHandle (bool fadeIn) const
+{
+    const auto range = getDisplayRange();
+    const float pixelsPerBeat = range.getLength() > 0.0 ? (float) getWidth() / (float) range.getLength() : 0.0f;
+    const float length = (float) getFadeLength (fadeIn) * pixelsPerBeat;
+    const float x = fadeIn ? length : (float) getWidth() - length;
+    return { juce::jlimit (fadeHandleInset, juce::jmax (fadeHandleInset, (float) getWidth() - fadeHandleInset), x),
+             (float) stripHeight + 1.0f };
 }
 
 void RegionComponent::setTrimPreview (std::optional<juce::Range<double>> range, bool asLoop)
@@ -146,9 +213,42 @@ void RegionComponent::paint (juce::Graphics& g)
         g.setColour (colour::regionStrip (colour));
         g.fillRect (strip);
 
+        // The take badge (if any) comes first; the name follows it.
+        const auto badge = getTakeBadgeBounds().toFloat();
+        auto nameArea = strip.reduced (8.0f, 0.0f);
+
+        if (! badge.isEmpty())
+            nameArea.setLeft (badge.getRight() + 5.0f);
+
+        if (getWidth() >= 32 && (hovering || loopPreview))
+            nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
+
         g.setColour (colour::regionStripText (colour));
         g.setFont (fonts::uiBold (11.0f));
-        g.drawText (info.name, strip.reduced (8.0f, 0.0f), juce::Justification::centredLeft, true);
+        g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+
+        if (! badge.isEmpty())
+        {
+            const bool full = getWidth() >= fullTakeBadgeMinWidth;
+            g.setColour (colour::regionStripText (colour).withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
+            g.fillRoundedRectangle (badge, badge.getHeight() * 0.5f);
+
+            auto text = badge.reduced (6.0f, 0.0f);
+            g.setColour (colour::regionStripText (colour));
+            g.setFont (fonts::uiBold (10.0f));
+
+            if (full)
+            {
+                // A small down arrow: it opens a menu.
+                auto arrow = text.removeFromRight (7.0f).withSizeKeepingCentre (7.0f, 4.0f);
+                juce::Path p;
+                p.addTriangle (arrow.getTopLeft(), arrow.getTopRight(), { arrow.getCentreX(), arrow.getBottom() });
+                g.fillPath (p);
+                text.removeFromRight (3.0f);
+            }
+
+            g.drawText (takeBadgeText (info, full), text, juce::Justification::centred, false);
+        }
 
         auto body = r.reduced (3.0f, 4.0f);
 
@@ -159,14 +259,37 @@ void RegionComponent::paint (juce::Graphics& g)
 
         paintLoopDividers (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
 
-        // The loop handle: a small loop arrow in the corner, while the mouse
-        // is over it or it's being dragged.
-        if (hoveringLoopCorner || loopPreview)
+        if (! info.isMidi)
+            paintFades (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
+
+        // The loop handle: a small loop arrow in the top-right corner. It
+        // shows faintly while the mouse is over the region (so it can be
+        // found), and lights up over the loop zone or while dragging.
+        if (getWidth() >= 32 && (hovering || loopPreview))
         {
-            auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth + 4.0f);
-            g.setColour (colour::regionStrip (colour).darker (0.3f));
-            g.fillRect (handle);
-            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour), 12.0f, 1.6f);
+            const bool active = hoveringLoopCorner || loopPreview;
+            auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth);
+
+            if (active)
+            {
+                g.setColour (colour::regionStrip (colour).darker (0.3f));
+                g.fillRect (handle);
+            }
+
+            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
+        }
+
+        // The trim handle: the same, in the bottom-right corner, with a resize arrow.
+        if (const auto trimHandle = getTrimHandleBounds().toFloat(); ! trimHandle.isEmpty() && (hovering || trimPreview.has_value()))
+        {
+            const bool active = hoveringTrimHandle || (trimPreview.has_value() && ! loopPreview);
+
+            g.setColour (juce::Colours::black.withAlpha (active ? 0.3f : 0.15f));
+            g.fillRect (trimHandle);
+
+            // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.
+            icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
+                         colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
         }
     }
 
@@ -247,6 +370,52 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
             auto w = juce::jmax (2.0f, (float) n.lengthBeats * pxPerBeat - 1.0f);
             auto y = area.getY() + (float) (hi - n.pitch) * rowH + (rowH - noteH) * 0.5f;
             g.fillRoundedRectangle (x, y, w, noteH, noteH * 0.5f);
+        }
+    }
+}
+
+void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const auto range = getDisplayRange();
+
+    if (range.getLength() <= 0.0)
+        return;
+
+    const float pixelsPerBeat = area.getWidth() / (float) range.getLength();
+
+    for (bool fadeIn : { true, false })
+    {
+        // The fade as a line from silence at the edge up to full volume, with
+        // the part it turns down shaded. The automatic edge fades are less
+        // than a pixel, so they don't show.
+        const float length = juce::jmin (area.getWidth(), (float) getFadeLength (fadeIn) * pixelsPerBeat);
+
+        if (length >= 1.0f)
+        {
+            const float edge = fadeIn ? area.getX() : area.getRight();
+            const float end = fadeIn ? edge + length : edge - length;
+
+            juce::Path faded;
+            faded.startNewSubPath (edge, area.getY());
+            faded.lineTo (end, area.getY());
+            faded.lineTo (edge, area.getBottom());
+            faded.closeSubPath();
+
+            g.setColour (colour::windowBg.withAlpha (0.5f));   // dimmed: quieter there
+            g.fillPath (faded);
+            g.setColour (colour);
+            g.drawLine (edge, area.getBottom(), end, area.getY(), 1.5f);
+        }
+
+        // The handles, while the mouse is over the region or one is being dragged.
+        if (hovering || fadeInPreview.has_value() || fadeOutPreview.has_value())
+        {
+            const auto handle = getFadeHandle (fadeIn);
+            const auto dot = juce::Rectangle<float> (8.0f, 8.0f).withCentre (handle);
+            g.setColour (colour::text);
+            g.fillEllipse (dot);
+            g.setColour (colour::windowBg);
+            g.drawEllipse (dot, 1.0f);
         }
     }
 }
@@ -358,6 +527,7 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
     // loop corner shows its loop arrow.
     auto zone = getZoneAt (e.getPosition());
     setMouseCursor (zone == Zone::leftEdge || zone == Zone::rightEdge || zone == Zone::loopCorner
+                     || zone == Zone::fadeIn || zone == Zone::fadeOut
                         ? juce::MouseCursor::LeftRightResizeCursor
                         : juce::MouseCursor::PointingHandCursor);
 
@@ -366,13 +536,34 @@ void RegionComponent::mouseMove (const juce::MouseEvent& e)
         hoveringLoopCorner = zone == Zone::loopCorner;
         repaint();
     }
+
+    if (getTrimHandleBounds().contains (e.getPosition()) != hoveringTrimHandle)
+    {
+        hoveringTrimHandle = ! hoveringTrimHandle;
+        repaint();
+    }
+
+    if ((zone == Zone::takeBadge) != hoveringTakeBadge)
+    {
+        hoveringTakeBadge = zone == Zone::takeBadge;
+        repaint();
+    }
+}
+
+void RegionComponent::mouseEnter (const juce::MouseEvent&)
+{
+    hovering = true;
+    repaint();   // the loop handle (and an audio region's fade handles) show while the mouse is over it
 }
 
 void RegionComponent::mouseExit (const juce::MouseEvent&)
 {
-    if (hoveringLoopCorner)
+    hovering = false;
+    repaint();
+
+    if (hoveringLoopCorner || hoveringTrimHandle || hoveringTakeBadge)
     {
-        hoveringLoopCorner = false;
+        hoveringLoopCorner = hoveringTrimHandle = hoveringTakeBadge = false;
         repaint();
     }
 }
@@ -381,19 +572,28 @@ void RegionComponent::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
 
+    // The take badge is a button of its own, not the start of a drag.
+    pressedTakeBadge = e.mods.isLeftButtonDown() && getZoneAt (e.getPosition()) == Zone::takeBadge && onTakeBadge;
+
+    if (pressedTakeBadge)
+    {
+        onTakeBadge (*this);
+        return;
+    }
+
     if (onMouseDown)
         onMouseDown (*this, e);
 }
 
 void RegionComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (onMouseDrag)
+    if (onMouseDrag && ! pressedTakeBadge)
         onMouseDrag (*this, e);
 }
 
 void RegionComponent::mouseUp (const juce::MouseEvent& e)
 {
-    if (onMouseUp)
+    if (onMouseUp && ! std::exchange (pressedTakeBadge, false))
         onMouseUp (*this, e);
 }
 

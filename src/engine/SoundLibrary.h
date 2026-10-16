@@ -59,7 +59,11 @@ namespace ikaros
       folder names stay the same from one pack version to the next.
 
     loops.json:
-        [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C" } ]
+        [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C",
+            "tags": [ "drums", "electronic" ] } ]
+
+      "tags" is optional: lowercase words the loop browser's instrument,
+      genre and mood filters look for (as well as the name).
 
     Packs are read from the folder installed with the app and from the user's
     Documents/Ikaros Studio/Sounds folder.
@@ -69,7 +73,14 @@ namespace ikaros
 class SoundLibrary
 {
 public:
-    SoundLibrary();
+    /** `userFolder`: where the user's own and downloaded packs are (see
+        getUserSoundsFolder for the default). */
+    explicit SoundLibrary (const juce::File& userFolder = getUserSoundsFolder());
+
+    /** Where the user's own and downloaded packs are looked for. Call
+        rescan() after changing it. */
+    void setUserFolder (const juce::File& folder)       { userFolder = folder; }
+    juce::File getUserFolder() const                    { return userFolder; }
 
     /** Re-reads the sound packs (e.g. after the user added one). */
     void rescan();
@@ -103,8 +114,9 @@ public:
     /** The sound new instrument tracks start with. */
     static const juce::String defaultSoundId;
 
-    /** Where users can put their own sound packs, and where downloaded ones
-        go: Documents/Ikaros Studio/Sounds (or IKAROS_USER_SOUNDS_DIR, if set). */
+    /** The default place for users' own sound packs, and where downloaded
+        ones go: Documents/Ikaros Studio/Sounds (or IKAROS_USER_SOUNDS_DIR, if
+        set). The Sounds & Plug-ins preference can choose another. */
     static juce::File getUserSoundsFolder();
 
     /** The packs installed with the app (may not exist in odd setups). */
@@ -171,6 +183,7 @@ public:
     static juce::String getPackIdOf (const juce::String& soundId);
 
 private:
+    juce::File userFolder;
     std::vector<SoundPackInfo> packs;
     std::vector<SoundInfo> sounds;
     std::vector<SampledInstrument> sampled;

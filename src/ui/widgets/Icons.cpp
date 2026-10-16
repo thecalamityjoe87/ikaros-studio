@@ -60,6 +60,8 @@ namespace
                                          "M8.23 9.85A3 3 0 0 1 11 8a5 5 0 0 1 5 5 3 3 0 0 1-1.85 2.77l-.92.38A2 2 0 0 0 12 18"
                                          "a4 4 0 0 1-4 4 6 6 0 0 1-6-6 4 4 0 0 1 4-4 2 2 0 0 0 1.85-1.23z";
             case Icon::strings:   return "M8 3v18 M12 3v18 M16 3v18 M5 17h14";
+            case Icon::woodwinds: return "M3.5 17.5l13-13 3 3-13 13z M9 15h.01 M12 12h.01 M15 9h.01";   // a flute with finger holes
+            case Icon::brass:     return "M3 9h5l11-5v16L8 15H3z M8 15v5h3";   // a horn with a flared bell
             case Icon::loops:     return "M17 2l3 3-3 3 M4 11V9a4 4 0 0 1 4-4h12 M7 22l-3-3 3-3 M20 13v2a4 4 0 0 1-4 4H4";
             case Icon::mic:       return "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M6 11a6 6 0 0 0 12 0 M12 17v4";
 
@@ -84,7 +86,12 @@ namespace
             case Icon::stop:           return "M7 7h10v10H7z";
             case Icon::warning:        return "M12 3.5l9.5 17h-19z M12 10v5 M12 18h.01";
             case Icon::openWindow:     return "M14 4h6v6 M20 4l-9 9 M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5";   // box with an arrow out
+            // A ramp between two points: low, up, high.
+            case Icon::automation:     return "M2 17h1.5 M8.5 17a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0 M7.8 15.2l6.4-6.4 "
+                                              "M18.5 7a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0 M20.5 7H22";
             case Icon::download:       return "M12 4v11 M7 10l5 5l5-5 M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2";   // arrow down into a tray
+            case Icon::trim:           return "M3 12h18 M7 8l-4 4 4 4 M17 8l4 4-4 4";   // left-right arrow, like the resize cursor
+            case Icon::trash:          return "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v6 M14 11v6";   // a bin with a lid
         }
 
         return "";
@@ -135,6 +142,8 @@ Icon forCategory (const juce::String& c)
     if (c == "Bass")        return Icon::bass;
     if (c == "Guitar")      return Icon::guitar;
     if (c == "Strings")     return Icon::strings;
+    if (c == "Woodwinds")   return Icon::woodwinds;
+    if (c == "Brass")       return Icon::brass;
     if (c == "Loops")       return Icon::loops;
     if (c == "Audio Files") return Icon::mic;
     if (c == "Plug-ins")    return Icon::plugin;

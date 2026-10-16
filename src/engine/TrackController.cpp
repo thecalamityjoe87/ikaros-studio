@@ -29,6 +29,12 @@ struct MeterTap
 
     te::Plugin::Ptr plugin;          // ref-counted pointer keeps the plugin alive while we're attached
     te::LevelMeasurer::Client client;
+
+    // Reading the client clears it, so a second reader on the same UI tick
+    // (the track header and the Mixer both show a track's level) would get
+    // nothing. Readings within a few milliseconds share the first one.
+    StereoLevel lastLevel;
+    juce::uint32 lastReadMs = 0;
 };
 
 struct TrackController::Impl
@@ -43,10 +49,12 @@ TrackController::TrackController (AudioEngine& o)
       // Importing audio may need a new audio track: RegionEditor gets a
       // function that makes one, instead of depending on this class.
       regionEditor (std::make_unique<RegionEditor> (o, [this] (const juce::String& name) { return createAudioTrack (name); })),
+      takeEditor (std::make_unique<TakeEditor> (o)),
       noteEditor (std::make_unique<NoteEditor> (o)),
       effectsController (std::make_unique<EffectsController> (o)),
       sendBuses (std::make_unique<SendBuses> (o)),
-      eqController (std::make_unique<EqController> (o))
+      eqController (std::make_unique<EqController> (o)),
+      automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses))
 {
 }
 
@@ -115,6 +123,10 @@ std::vector<TrackInfo> TrackController::getTracks() const
             info.volumeDb = vol->getVolumeDb();
             info.pan = vol->getPan();
         }
+
+        info.automationShown = automationEditor->isLaneShown (info.id);
+        info.automationTarget = automationEditor->getLaneTarget (info.id);
+        info.automated = automationEditor->getAutomatedTargets (info.id);
 
         result.push_back (info);
     }
@@ -207,6 +219,12 @@ void TrackController::deleteTrack (TrackId id)
         owner.beginUndoStep ("Delete Track");
         impl->meters.erase (id);
 
+        // Where the track was, so the selection can move to the one that
+        // takes its place (or the one above, if it was the last).
+        auto before = getTracks();
+        const auto index = std::find_if (before.begin(), before.end(), [id] (const TrackInfo& t) { return t.id == id; })
+                             - before.begin();
+
         inputRouter->trackDeleted (id);
 
         owner.getEdit()->deleteTrack (track);
@@ -214,7 +232,7 @@ void TrackController::deleteTrack (TrackId id)
         if (selectedTrack == id)
         {
             auto remaining = getTracks();
-            setSelectedTrack (remaining.empty() ? 0 : remaining.front().id);
+            setSelectedTrack (remaining.empty() ? 0 : remaining[(size_t) juce::jmin ((int) index, (int) remaining.size() - 1)].id);
         }
     }
 }
@@ -413,8 +431,15 @@ StereoLevel TrackController::getTrackLevel (TrackId id)
             return {};
     }
 
-    return { tap->client.getAndClearAudioLevel (0).dB,
-             tap->client.getAndClearAudioLevel (1).dB };
+    const auto now = juce::Time::getMillisecondCounter();
+
+    if (now - tap->lastReadMs > 10)
+    {
+        tap->lastLevel = { tap->client.getAndClearAudioLevel (0).dB, tap->client.getAndClearAudioLevel (1).dB };
+        tap->lastReadMs = now;
+    }
+
+    return tap->lastLevel;
 }
 
 TrackDetails TrackController::getDetails (TrackId id) const

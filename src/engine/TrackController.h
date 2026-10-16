@@ -1,11 +1,13 @@
 #pragma once
 
+#include "engine/AutomationEditor.h"
 #include "engine/EffectsController.h"
 #include "engine/EqController.h"
 #include "engine/InputRouter.h"
 #include "engine/NoteEditor.h"
 #include "engine/RegionEditor.h"
 #include "engine/SendBuses.h"
+#include "engine/TakeEditor.h"
 #include <memory>
 #include <optional>
 
@@ -23,9 +25,11 @@ class AudioEngine;
         inputs()   - live MIDI/audio input routing, arming, input meters
         regions()  - regions, the region clipboard, audio file import
         notes()    - notes in a MIDI region (the piano roll)
+        takes()    - a region's takes: picking one, deleting unused ones, flattening
         effects()  - the Sound tab's knobs, the instrument and the effect chain
         sends()    - each track's sends to the shared Reverb and Delay buses
         eq()       - the EQ tab's 4-band EQ, on a track or the master
+        automation() - automation curves and the lanes that show them
 
     Every method runs on the message thread. Mutating methods record into the
     session's UndoManager.
@@ -41,12 +45,16 @@ public:
     RegionEditor& regions() noexcept                        { return *regionEditor; }
     const RegionEditor& regions() const noexcept            { return *regionEditor; }
     NoteEditor& notes() noexcept                            { return *noteEditor; }
+    TakeEditor& takes() noexcept                            { return *takeEditor; }
+    const TakeEditor& takes() const noexcept                { return *takeEditor; }
     EffectsController& effects() noexcept                   { return *effectsController; }
     const EffectsController& effects() const noexcept       { return *effectsController; }
     SendBuses& sends() noexcept                             { return *sendBuses; }
     const SendBuses& sends() const noexcept                 { return *sendBuses; }
     EqController& eq() noexcept                             { return *eqController; }
     const EqController& eq() const noexcept                 { return *eqController; }
+    AutomationEditor& automation() noexcept                 { return *automationEditor; }
+    const AutomationEditor& automation() const noexcept     { return *automationEditor; }
 
     //==============================================================================
     // Tracks
@@ -119,10 +127,12 @@ private:
 
     std::unique_ptr<InputRouter> inputRouter;
     std::unique_ptr<RegionEditor> regionEditor;
+    std::unique_ptr<TakeEditor> takeEditor;
     std::unique_ptr<NoteEditor> noteEditor;
     std::unique_ptr<EffectsController> effectsController;
     std::unique_ptr<SendBuses> sendBuses;
     std::unique_ptr<EqController> eqController;
+    std::unique_ptr<AutomationEditor> automationEditor;   // after sendBuses: it uses them
 
     TrackId createAudioTrack (const juce::String& name);
 };

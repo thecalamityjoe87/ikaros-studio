@@ -1,4 +1,5 @@
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/dialogs/MonitoringWarning.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -120,6 +121,20 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
 
     monitorToggle.setTooltip ("Use headphones, or a microphone near your speakers will feed back.");
     addChildComponent (monitorToggle);
+
+    // Ticking it shows the feedback warning the first time; Cancel unticks it.
+    monitorToggle.onClick = [this]
+    {
+        if (! monitorToggle.getToggleState())
+            return;
+
+        // SafePointer: the dialog might be closed while the warning is up.
+        confirmMonitoring (engine, this, [safeThis = juce::Component::SafePointer<NewTrackDialog> (this)] (bool goAhead)
+        {
+            if (safeThis != nullptr && ! goAhead)
+                safeThis->monitorToggle.setToggleState (false, juce::dontSendNotification);
+        });
+    };
 
     auto cancelColours = IconButton::raisedColours();
     cancelColours.border = colour::border;

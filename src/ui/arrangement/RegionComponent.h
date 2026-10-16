@@ -21,8 +21,13 @@ class RegionComponent  : public juce::Component
 {
 public:
     /** The parts of a region that react differently to the mouse. The loop
-        corner is the top-right corner: dragging it repeats the content. */
-    enum class Zone { body, nameStrip, leftEdge, rightEdge, loopCorner };
+        "corner" is a small handle at the top of the right edge: dragging it
+        repeats the content. A matching handle at the bottom-right trims (it
+        reports rightEdge, like the rest of the edge). The fade handles
+        sit on an audio region's waveform, at the top, where each fade ends.
+        A region with takes has a take badge in its name strip, which opens
+        the take menu. */
+    enum class Zone { body, nameStrip, leftEdge, rightEdge, loopCorner, fadeIn, fadeOut, takeBadge };
 
     RegionComponent (const RegionInfo&, juce::Colour trackColour);
 
@@ -36,6 +41,10 @@ public:
         asLoop: the content repeats to fill the new length (a loop drag). */
     void setTrimPreview (std::optional<juce::Range<double>>, bool asLoop = false);
 
+    /** While a fade handle is being dragged, the fades are drawn with these
+        lengths (in beats) instead. std::nullopt = the region's own. */
+    void setFadePreview (std::optional<double> fadeInBeats, std::optional<double> fadeOutBeats);
+
     /** The start and end beat as currently drawn (the trim preview, if any). */
     juce::Range<double> getDisplayRange() const;
 
@@ -47,12 +56,20 @@ public:
     std::function<void (const juce::String& newName)> onRename;
     std::function<void()> onOpenEditor;
 
+    /** The take badge was clicked (the region has takes). */
+    std::function<void (RegionComponent&)> onTakeBadge;
+
+    /** Where the take badge is drawn (empty if the region has no takes or is too narrow). */
+    juce::Rectangle<int> getTakeBadgeBounds() const;
+    juce::Rectangle<int> getTrimHandleBounds() const;
+
     /** Escape was pressed on the region. Return true if it was used (it
         cancelled a drag), so it doesn't go on to the app's shortcuts. */
     std::function<bool()> onEscape;
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseEnter (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -70,6 +87,11 @@ private:
     std::optional<juce::Range<double>> trimPreview;
     bool loopPreview = false;
     bool hoveringLoopCorner = false;
+    bool hoveringTrimHandle = false;
+    bool hoveringTakeBadge = false;
+    bool pressedTakeBadge = false;                  // the press went to the badge: no drag
+    bool hovering = false;                          // the fade handles show while the mouse is over the region
+    std::optional<double> fadeInPreview, fadeOutPreview;
 
     juce::TextEditor nameEditor;
     bool renaming = false;
@@ -88,6 +110,10 @@ private:
     void paintMidiNotes (juce::Graphics&, juce::Rectangle<float>);
     void paintWaveform (juce::Graphics&, juce::Rectangle<float>);
     void paintLoopDividers (juce::Graphics&, juce::Rectangle<float>);
+    void paintFades (juce::Graphics&, juce::Rectangle<float>);
+
+    double getFadeLength (bool fadeIn) const;              // in beats, as drawn (the preview, if any)
+    juce::Point<float> getFadeHandle (bool fadeIn) const;  // where a fade handle is drawn
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RegionComponent)
 };

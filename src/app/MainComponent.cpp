@@ -1,13 +1,18 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/DeviceChangePrompt.h"
+#include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/dialogs/RecoveryPrompt.h"
 #include "ui/library/MoreSoundsDialog.h"
+#include "ui/library/FreesoundSetupDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/AutomationHint.h"
 
 namespace ikaros
 {
@@ -44,7 +49,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
-    library.onMoreSoundsRequested = [this] { MoreSoundsDialog::show (*this, engine); };
+    library.onMoreSoundsRequested = [this] (const juce::String& category) { MoreSoundsDialog::show (*this, engine, {}, category); };
+    library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
 
     // Commands: register everything this component can do, make it the
@@ -54,10 +60,13 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     addKeyListener (commands.getKeyMappings());
 
    #if JUCE_MAC
-    juce::MenuBarModel::setMacMainMenu (&menuModel);
+    // The app menu's own Settings... item (Cmd+,), next to About.
+    macAppMenu.addCommandItem (&commands, CommandIDs::preferences);
+    juce::MenuBarModel::setMacMainMenu (&menuModel, &macAppMenu);
    #endif
 
     engine.addListener (this);
+    engine.getPreferences().addListener (this);
     selection.addChangeListener (this);
 
     // Third-party plug-in windows: the engine supplies the plug-in's editor,
@@ -78,7 +87,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
     // Like GarageBand, start with the session chooser: recent sessions if
     // there are any, otherwise the templates. On first run, offer the
-    // starter sounds first. (Async: the window isn't on screen yet.)
+    // starter sounds first. After a crash, offer to recover the unsaved
+    // work before anything else. (Async: the window isn't on screen yet.)
     juce::MessageManager::callAsync ([safeThis = SafePointer<MainComponent> (this)]
     {
         if (safeThis == nullptr)
@@ -86,15 +96,30 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
         auto showChooser = [safeThis]
         {
-            if (safeThis != nullptr)
-                safeThis->showSessionChooser (safeThis->engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
-                                                                                          : SessionChooser::Page::recent);
+            if (safeThis == nullptr)
+                return;
+
+            auto& engine = safeThis->engine;
+
+            // Some people would rather go straight back to where they were.
+            if (engine.getPreferences().get (settings::onStartup) == settings::OnStartup::reopenLastSession)
+                if (auto recent = engine.getRecentSessions(); ! recent.empty() && engine.openSession (recent.front().file))
+                    return;
+
+            safeThis->showSessionChooser (engine.getRecentSessions().empty() ? SessionChooser::Page::newSession
+                                                                            : SessionChooser::Page::recent);
         };
 
-        if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
-            MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
-        else
-            showChooser();
+        RecoveryPrompt::show (*safeThis, safeThis->engine, [safeThis, showChooser] (bool recovered)
+        {
+            if (safeThis == nullptr || recovered)
+                return;   // a recovered session is open: no chooser
+
+            if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+                MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+            else
+                showChooser();
+        });
     });
 }
 
@@ -102,6 +127,7 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     engine.removeListener (this);
+    engine.getPreferences().removeListener (this);
     selection.removeChangeListener (this);
     engine.setPluginWindowFactory (nullptr);
     engine.getPlugins().cancelScan();
@@ -123,7 +149,8 @@ void MainComponent::resized()
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
              || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
-             || dynamic_cast<AboutDialog*> (child) != nullptr)
+             || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr
+             || dynamic_cast<PreferencesDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
 
     auto r = getLocalBounds();
@@ -313,14 +340,33 @@ void MainComponent::timerCallback()
     bottomPanel.update();
     library.update();
     updateSessionStatus();   // "unsaved" isn't broadcast, so check it here (cheap: it only tells the menu bar on a change)
+
+    if (auto report = engine.takeRecordingReport())
+        showRecordingReport (*report);
+
+    // One question at a time, and not in the middle of a take.
+    if (! deviceChangeOpen && ! engine.getTransportState().recording)
+    {
+        if (auto prompt = engine.takeAudioDevicePrompt())
+        {
+            deviceChangeOpen = true;
+            showDeviceChangePrompt (engine, *prompt, this,
+                                    [safeThis = SafePointer<MainComponent> (this)]
+                                    {
+                                        if (safeThis != nullptr)
+                                            safeThis->deviceChangeOpen = false;
+                                    });
+        }
+    }
 }
 
 //==============================================================================
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     const juce::CommandID all[] { CommandIDs::newSession, CommandIDs::openSession, CommandIDs::saveSession,
-                                   CommandIDs::saveSessionAs, CommandIDs::closeSession, CommandIDs::audioSettings,
-                                   CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection,
+                                   CommandIDs::saveSessionAs, CommandIDs::closeSession,
+                                   CommandIDs::exportSong, CommandIDs::exportStems,
+                                   CommandIDs::undo, CommandIDs::redo, CommandIDs::deleteSelection, CommandIDs::preferences,
                                    CommandIDs::newTrack, CommandIDs::newAudioTrack, CommandIDs::deleteTrack,
                                    CommandIDs::muteTrack, CommandIDs::soloTrack, CommandIDs::armTrack,
                                    CommandIDs::duplicateTrackSettings, CommandIDs::duplicateTrack,
@@ -329,12 +375,13 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
                                    CommandIDs::renameRegion, CommandIDs::deleteRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
-                                   CommandIDs::toggleMetronome, CommandIDs::toggleCountIn,
+                                   CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
+                                   CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
-                                   CommandIDs::showMixerTab, CommandIDs::toggleDetails,
-                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::about,
+                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleDetails,
+                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
@@ -371,9 +418,15 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Close Session", "Close the session and choose another", "File", 0);
             info.addDefaultKeypress ('w', cmd);
             break;
-        case CommandIDs::audioSettings:
-            info.setInfo ("Audio & MIDI Settings...", "Choose audio and MIDI devices", "File", 0);
-            info.addDefaultKeypress (',', cmd);
+        case CommandIDs::exportSong:
+            info.setInfo ("Export Song...", "Save the song as a WAV, FLAC or OGG file", "File", 0);
+            info.addDefaultKeypress ('e', cmd);
+            info.setActive (engine.getExporter().getSongEndBeats() > 0.0);
+            break;
+        case CommandIDs::exportStems:
+            info.setInfo ("Export Stems...", "Save each track as its own audio file", "File", 0);
+            info.addDefaultKeypress ('e', cmd | shift);
+            info.setActive (engine.getExporter().getSongEndBeats() > 0.0);
             break;
 
         case CommandIDs::undo:
@@ -396,6 +449,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             // so pressing it with nothing selected can't remove a whole track.
             info.setInfo ("Delete", "Delete the selected regions, or the selected track", "Edit", 0);
             info.setActive (hasTrack);
+            break;
+        case CommandIDs::preferences:
+            info.setInfo (juce::String (PreferencesDialog::getName()) + "...", "Change the app's settings", "Edit", 0);
+            info.addDefaultKeypress (',', cmd);
             break;
 
         case CommandIDs::newTrack:
@@ -496,7 +553,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
         case CommandIDs::toggleRecord:
             info.setInfo (transport.recording ? "Stop Recording" : "Record", "Record onto the armed or selected track", "Transport", 0);
-            info.setActive (hasTrack);
+
+            // Without auto-arm, pressing it with nothing armed explains what to do.
+            info.setActive (hasTrack || ! engine.getPreferences().get (settings::autoArmTrack));
             info.addDefaultKeypress ('r', 0);
             break;
         case CommandIDs::goToStart:
@@ -514,9 +573,26 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (transport.metronome);
             info.addDefaultKeypress ('u', cmd);
             break;
-        case CommandIDs::toggleCountIn:
-            info.setInfo ("Count-in", "Play one bar of clicks before recording starts", "Transport", 0);
-            info.setTicked (transport.countIn);
+        // The Count-in submenu: one of the three is ticked.
+        case CommandIDs::countInOff:
+            info.setInfo ("Off", "Start recording straight away", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 0);
+            break;
+
+        case CommandIDs::countInOneBar:
+            info.setInfo ("1 Bar", "Play one bar of clicks before recording starts", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 1);
+            break;
+
+        case CommandIDs::countInTwoBars:
+            info.setInfo ("2 Bars", "Play two bars of clicks before recording starts", "Transport", 0);
+            info.setTicked (engine.getCountInBars() == 2);
+            break;
+
+        case CommandIDs::toggleMidiCycleTakes:
+            info.setInfo ("Keep MIDI Loop Passes as Takes",
+                          "When recording MIDI with the loop on, keep each pass as a take instead of merging them", "Transport", 0);
+            info.setTicked (engine.getMidiCycleTakes());
             break;
 
         case CommandIDs::toggleLibrary:
@@ -565,6 +641,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
+        case CommandIDs::toggleAutomation:
+            // No shortcut: plain A (GarageBand's) plays a note on the computer keyboard here.
+            info.setInfo ("Show Automation", "Show every track's automation", "View", 0);
+            info.setTicked (engine.getTracks().automation().areAllLanesShown());
+            break;
         case CommandIDs::showMixerTab:
             info.setInfo ("Mixer", "Show every track's fader at once", "View", 0);
             info.setTicked (bottomPanel.isMixerShown());
@@ -584,7 +665,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
            #endif
             break;
         case CommandIDs::moreSounds:
-            info.setInfo ("More Sounds...", "Download more instruments and loops", "Window", 0);
+            info.setInfo ("More Sounds...", "Download more instruments and loops", "Sounds", 0);
+            break;
+        case CommandIDs::freesoundKey:
+            info.setInfo ("Freesound API Key...", "Set up or change your Freesound API key", "Sounds", 0);
             break;
 
         case CommandIDs::about:
@@ -605,7 +689,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 {
     // Nothing happens while a save is being written (see SavingOverlay); a
     // change then wouldn't be in the file, yet would look saved.
-    if (saving)
+    if (saving || engine.getExporter().isRunning())
         return true;
 
     auto& tracks = engine.getTracks();
@@ -618,10 +702,17 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::saveSession:     saveSession(); break;
         case CommandIDs::saveSessionAs:   saveSessionAs(); break;
         case CommandIDs::closeSession:    closeSession(); break;
-        case CommandIDs::audioSettings:   showAudioSettings(); break;
+        case CommandIDs::exportSong:      ExportDialog::show (*this, engine, false); break;
+        case CommandIDs::exportStems:     ExportDialog::show (*this, engine, true); break;
 
-        case CommandIDs::undo:            engine.undo(); break;
-        case CommandIDs::redo:            engine.redo(); break;
+        case CommandIDs::undo:
+        case CommandIDs::redo:
+        {
+            const auto before = selection.getContents();
+            info.commandID == CommandIDs::undo ? engine.undo() : engine.redo();
+            selection.selectAfterUndoOrRedo (before);
+            break;
+        }
 
         case CommandIDs::deleteSelection:
             if (selection.hasRegions())
@@ -715,7 +806,10 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::goToStart:       engine.goToStart(); break;
         case CommandIDs::toggleLoop:      engine.setLooping (! engine.getTransportState().looping); break;
         case CommandIDs::toggleMetronome: engine.setMetronomeEnabled (! engine.getTransportState().metronome); break;
-        case CommandIDs::toggleCountIn:   engine.setCountInEnabled (! engine.getTransportState().countIn); break;
+        case CommandIDs::countInOff:      engine.setCountInBars (0); break;
+        case CommandIDs::countInOneBar:   engine.setCountInBars (1); break;
+        case CommandIDs::countInTwoBars:  engine.setCountInBars (2); break;
+        case CommandIDs::toggleMidiCycleTakes: engine.setMidiCycleTakes (! engine.getMidiCycleTakes()); break;
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
         case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
@@ -730,6 +824,12 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
+        case CommandIDs::toggleAutomation:
+        {
+            auto& automation = engine.getTracks().automation();
+            automation.setAllLanesShown (! automation.areAllLanesShown());
+            break;
+        }
         case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
         case CommandIDs::toggleDetails:
@@ -743,6 +843,8 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
+        case CommandIDs::freesoundKey:    FreesoundSetupDialog::show (*this, engine); break;
+        case CommandIDs::preferences:     showPreferences(); break;
         case CommandIDs::about:           showAbout(); break;
         case juce::StandardApplicationCommandIDs::quit: requestQuit(); break;
 
@@ -788,13 +890,6 @@ void MainComponent::showNewTrackDialog()
 }
 
 //==============================================================================
-juce::File MainComponent::getDefaultSessionFolder()
-{
-    auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Ikaros Studio");
-    dir.createDirectory();
-    return dir;
-}
-
 void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
 {
     if (! engine.hasUnsavedChanges())
@@ -875,7 +970,7 @@ void MainComponent::openOtherSession()
     confirmDiscardChanges ([this]
     {
         // Bundles, and session folders from earlier versions.
-        fileChooser = std::make_unique<juce::FileChooser> ("Open Session", getDefaultSessionFolder(),
+        fileChooser = std::make_unique<juce::FileChooser> ("Open Session", engine.getSessionFolder(),
                                                            juce::String ("*") + AudioEngine::sessionFileExtension
                                                              + ";*" + AudioEngine::legacySessionFileExtension);
 
@@ -951,7 +1046,7 @@ void MainComponent::saveSession (std::function<void (bool)> afterSave)
 void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
 {
     // A session is one file ("My Song.iksession").
-    auto initial = engine.isUntitled() ? getDefaultSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
+    auto initial = engine.isUntitled() ? engine.getSessionFolder().getChildFile (engine.getSessionName() == "Untitled Session"
                                                                                     ? juce::String ("My Session")
                                                                                     : engine.getSessionName())
                                        : engine.getSessionFile();
@@ -1043,20 +1138,134 @@ void MainComponent::requestQuit()
     confirmDiscardChanges ([] { juce::JUCEApplication::getInstance()->quit(); });
 }
 
-void MainComponent::showAudioSettings()
+void MainComponent::showPreferences (PreferencesDialog::Page page)
 {
-    juce::DialogWindow::LaunchOptions o;
-    o.dialogTitle = "Audio & MIDI Settings";
-    o.dialogBackgroundColour = colour::toolbarBg;
-    o.content.setOwned (engine.createAudioSettingsComponent().release());   // the dialog takes ownership
-    o.useNativeTitleBar = true;
-    o.resizable = false;
-    o.launchAsync();
+    PreferencesDialog::show (*this, engine, commands, page, [this] { MoreSoundsDialog::show (*this, engine); });
+}
+
+// Some settings change something in this window the moment they change.
+void MainComponent::preferenceChanged (const juce::String& key)
+{
+    const bool all = key.isEmpty();   // reset
+
+    if (all || key == settings::snapEnabled.key || key == settings::snapGrid.key)
+        arrangement.applySnapPreference();
+
+    if (all || key == settings::interfaceScale.key)
+        applyInterfaceScale();
+
+    if (all || key == settings::autoArmTrack.key)
+        commands.commandStatusChanged();   // Record is available with no track selected, or not
+}
+
+void MainComponent::setInterfaceScale (float requested)
+{
+    auto& desktop = juce::Desktop::getInstance();
+    desktop.setGlobalScaleFactor (requested);
+
+    // Too big for the screen? The window can't get smaller than its minimum
+    // size, so settle for the biggest scale where that still fits.
+    if (auto* display = desktop.getDisplays().getPrimaryDisplay())
+    {
+        const auto area = display->userArea;   // in the units of the scale just set
+        const float fits = juce::jmin ((float) area.getWidth() / (float) minWindowWidth,
+                                       (float) area.getHeight() / (float) minWindowHeight);
+
+        if (fits < 1.0f)
+            desktop.setGlobalScaleFactor (juce::jmax (1.0f, requested * fits));
+    }
+}
+
+void MainComponent::applyInterfaceScale()
+{
+    setInterfaceScale (engine.getPreferences().getInterfaceScale());
+
+    // The window keeps its size on screen, so in the new units it may be smaller than allowed.
+    if (auto* window = getTopLevelComponent())
+        window->setSize (juce::jmax (window->getWidth(), minWindowWidth), juce::jmax (window->getHeight(), minWindowHeight));
 }
 
 void MainComponent::showAbout()
 {
     AboutDialog::show (*this, engine);
+}
+
+void MainComponent::showRecordingReport (const RecordingReport& report)
+{
+    using Reason = RecordingStopReason;
+    const juce::String kept = report.seconds > 0.5 ? " What you recorded up to then has been kept." : "";
+    const juce::String tooLoud = report.clipped ? "\n\nYour input was also too loud in places (it distorted)." : "";
+
+    switch (report.reason)
+    {
+        case Reason::user:
+            break;
+
+        case Reason::notStarted:
+            showError ("Not Enough Disk Space",
+                       "Recording needs at least 200 MB of free disk space. Free up some space, then try again.");
+            return;
+
+        case Reason::loopTooShort:
+            showError ("Loop Too Short",
+                       "Recording with the loop on needs a loop at least 2 seconds long. "
+                       "Make the loop longer, or turn the loop off to record.");
+            return;
+
+        case Reason::noTrackArmed:
+        {
+            // Point at the selected track's record button (or the toolbar's, with no track to point at).
+            auto* target = arrangement.getArmButton (selection.getTrack());
+            HintBubble::show (target != nullptr ? *target : toolbar.getRecordButton(), "Arm a track to record");
+            return;
+        }
+
+        case Reason::deviceStopped:
+            showError ("Recording Stopped",
+                       "The audio device stopped responding. Was it unplugged?" + kept
+                         + "\n\nCheck that it's connected, then choose it in " + PreferencesDialog::getName() + " > Audio & MIDI." + tooLoud);
+            return;
+
+        case Reason::deviceChanged:
+            showError ("Recording Stopped", "The audio device or its settings changed while recording." + kept + tooLoud);
+            return;
+
+        case Reason::sampleRateChanged:
+            showError ("Recording Stopped",
+                       "The audio device switched to a different sample rate while recording." + kept
+                         + " Recordings at either rate play back correctly." + tooLoud);
+            return;
+
+        case Reason::diskFull:
+            showError ("Recording Stopped",
+                       "The disk is almost full, so recording stopped before it ran out of space." + kept
+                         + " Free up some space to record more." + tooLoud);
+            return;
+
+        case Reason::diskWriteFailed:
+            showError ("Recording Stopped",
+                       "The recording couldn't be written to disk (it may be full)." + kept + tooLoud);
+            return;
+    }
+
+    // A normal take: gentle hints, not dialogs. MIDI takes can't clip or drop out.
+    if (! report.audio)
+        return;
+
+    if (report.clipped)
+    {
+        HintBubble::show (toolbar.getRecordButton(),
+                          "Your input is too loud: parts of that take distorted. Turn down the gain on your "
+                          "audio interface, or move back a little from the mic, and try again.");
+    }
+    else if (report.dropouts > 0)
+    {
+        HintBubble::show (toolbar.getRecordButton(),
+                          juce::String (report.dropouts) + (report.dropouts == 1 ? " dropout" : " dropouts")
+                            + " during that take: the computer couldn't keep up, which can leave clicks or gaps. "
+                              "A larger buffer size helps.",
+                          "Audio Settings", [this] { showPreferences (PreferencesDialog::Page::audioMidi); });
+    }
 }
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)

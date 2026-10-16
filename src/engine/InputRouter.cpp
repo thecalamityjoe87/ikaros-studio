@@ -1,6 +1,7 @@
 #include "engine/InputRouter.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackHelpers.h"
+#include <map>
 
 namespace te = tracktion;
 
@@ -20,20 +21,41 @@ struct InputRouter::Impl
 
     std::array<bool, 128> heldNotes {};   // keys currently down on the on-screen keyboard
 
-    // Input meter for the Recording section. WeakReference: input devices
-    // can be rebuilt when the audio device changes.
-    juce::WeakReference<te::LevelMeasurer> inputMeasurer;
-    te::LevelMeasurer::Client inputClient;
-
-    void detachInputMeter()
+    // The input meters, one per input that's shown (by input ID).
+    // WeakReference: input devices can be rebuilt when the audio device changes.
+    struct Meter
     {
-        if (auto* m = inputMeasurer.get())
-            m->removeClient (inputClient);
+        juce::WeakReference<te::LevelMeasurer> measurer;
+        te::LevelMeasurer::Client client;
+        InputMeter reading;
+        double lastReadMs = 0.0;
 
-        inputMeasurer = nullptr;
-    }
+        void attach (te::LevelMeasurer* m)
+        {
+            if (m == measurer.get())
+                return;
 
-    ~Impl()   { detachInputMeter(); }
+            detach();
+
+            if (m != nullptr)
+                m->addClient (client);
+
+            measurer = m;
+        }
+
+        void detach()
+        {
+            if (auto* m = measurer.get())
+                m->removeClient (client);
+
+            measurer = nullptr;
+        }
+
+        ~Meter()    { detach(); }
+    };
+
+    // unique_ptr: a Client can't be moved (the measurer points at it).
+    std::map<juce::String, std::unique_ptr<Meter>> meters;
 };
 
 //==============================================================================
@@ -58,8 +80,9 @@ void InputRouter::setSelectedTrack (TrackId id)
 
     // The arm follows the selection, but not mid-take: the take stays on the
     // track it started on. Only on a change, so a track the user disarmed
-    // stays disarmed while it's still selected.
-    if (changed && ! owner.getTransportState().recording)
+    // stays disarmed while it's still selected. Not at all if the user
+    // prefers to arm tracks themselves.
+    if (changed && ! owner.getTransportState().recording && owner.getPreferences().get (settings::autoArmTrack))
     {
         if (id != 0)
             setArmed (id, true);
@@ -328,35 +351,51 @@ void InputRouter::setMonitoring (TrackId id, bool shouldMonitor)
     }
 }
 
-StereoLevel InputRouter::getInputLevel (TrackId id)
+InputMeter InputRouter::getInputMeter (TrackId id)
 {
-    auto inputId = getRecordingSettings (id).inputId;
+    const auto inputId = getRecordingSettings (id).inputId;
     te::InputDevice* device = nullptr;
 
     for (auto* in : owner.getTeEngine().getDeviceManager().getWaveInputDevices())
-        if (in->getDeviceID() == inputId)
+        if (in->getDeviceID() == inputId && in->isEnabled())
             device = in;
 
-    auto* measurer = device != nullptr ? &device->levelMeasurer : nullptr;
-
-    if (measurer != impl->inputMeasurer.get())
-    {
-        impl->detachInputMeter();
-
-        if (measurer != nullptr)
-        {
-            measurer->addClient (impl->inputClient);
-            impl->inputMeasurer = measurer;
-        }
-    }
-
-    if (impl->inputMeasurer == nullptr)
+    if (device == nullptr)
         return {};
 
-    // Mono inputs report one channel; show it on both meter bars.
-    auto left = impl->inputClient.getAndClearAudioLevel (0).dB;
-    auto right = impl->inputClient.getNumChannelsUsed() > 1 ? impl->inputClient.getAndClearAudioLevel (1).dB : left;
-    return { left, right };
+    auto& meter = impl->meters[inputId];
+
+    if (meter == nullptr)
+        meter = std::make_unique<Impl::Meter>();
+
+    meter->attach (&device->levelMeasurer);
+
+    // Reading clears the levels, so a second meter reading this input in
+    // the same timer tick (track header and Recording section) gets the
+    // first one's reading instead of nothing.
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+
+    if (now - meter->lastReadMs > 10.0)
+    {
+        meter->lastReadMs = now;
+
+        // Mono inputs report one channel; show it on both meter bars.
+        auto& client = meter->client;
+        auto left = client.getAndClearAudioLevel (0).dB;
+        auto right = client.getNumChannelsUsed() > 1 ? client.getAndClearAudioLevel (1).dB : left;
+        meter->reading.level = { left, right };
+
+        if (juce::jmax (left, right) >= clipLevelDb)
+            meter->reading.clipped = true;   // stays on until cleared
+    }
+
+    return meter->reading;
+}
+
+void InputRouter::clearClipIndicator (TrackId id)
+{
+    if (auto it = impl->meters.find (getRecordingSettings (id).inputId); it != impl->meters.end())
+        it->second->reading.clipped = false;
 }
 
 //==============================================================================

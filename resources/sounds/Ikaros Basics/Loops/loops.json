@@ -3,23 +3,27 @@
     "file": "Electro Beat.flac",
     "name": "Electro Beat",
     "bpm": 120,
-    "key": "C"
+    "key": "C",
+    "tags": ["drums", "electronic", "energetic"]
   },
   {
     "file": "Hat Groove.flac",
     "name": "Hat Groove",
-    "bpm": 120
+    "bpm": 120,
+    "tags": ["drums", "percussion", "funk"]
   },
   {
     "file": "Pluck Bass.flac",
     "name": "Pluck Bass",
     "bpm": 120,
-    "key": "C"
+    "key": "C",
+    "tags": ["bass", "electronic"]
   },
   {
     "file": "Glass Chords.flac",
     "name": "Glass Chords",
     "bpm": 120,
-    "key": "C"
+    "key": "C",
+    "tags": ["keys", "piano", "chill"]
   }
 ]

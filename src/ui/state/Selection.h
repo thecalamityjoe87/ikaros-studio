@@ -78,6 +78,88 @@ public:
         selectRegions (track, next);
     }
 
+    /** The tracks (in order) and regions there are, to compare with after an
+        undo or redo (see selectAfterUndoOrRedo). */
+    struct Contents
+    {
+        std::vector<TrackId> tracks;
+        std::vector<RegionId> regions;
+    };
+
+    Contents getContents() const
+    {
+        Contents c;
+        auto& tracks = engine.getTracks();
+
+        for (auto& t : tracks.getTracks())
+        {
+            c.tracks.push_back (t.id);
+
+            for (auto& r : tracks.regions().getRegions (t.id))
+                c.regions.push_back (r.id);
+        }
+
+        return c;
+    }
+
+    /** Call after an undo or redo, with the contents from before it. Selects
+        what it brought back (regions, or else a track), so you can see what
+        changed. If it took the selected track away, the one now in its place
+        is selected, as when deleting a track. Anything else that's gone is
+        dropped from the selection. */
+    void selectAfterUndoOrRedo (const Contents& before)
+    {
+        auto& tracks = engine.getTracks();
+        auto contains = [] (const auto& list, auto id) { return std::find (list.begin(), list.end(), id) != list.end(); };
+
+        std::vector<RegionId> regionsBack;
+        TrackId regionsTrack = 0, trackBack = 0;
+
+        for (auto& t : tracks.getTracks())
+        {
+            if (! contains (before.tracks, t.id))
+                trackBack = t.id;
+
+            for (auto& r : tracks.regions().getRegions (t.id))
+            {
+                if (! contains (before.regions, r.id))
+                {
+                    regionsBack.push_back (r.id);
+                    regionsTrack = t.id;
+                }
+            }
+        }
+
+        if (! regionsBack.empty())
+        {
+            selectRegions (regionsTrack, std::move (regionsBack));
+        }
+        else if (trackBack != 0)
+        {
+            selectTrack (trackBack);
+        }
+        else if (! tracks.getTrack (getTrack()).has_value())
+        {
+            // The first track after it that's still there, or else the
+            // nearest one before it.
+            const auto at = std::find (before.tracks.begin(), before.tracks.end(), getTrack());
+            TrackId neighbour = 0;
+
+            for (auto it = at; it != before.tracks.end() && neighbour == 0; ++it)
+                if (tracks.getTrack (*it).has_value())
+                    neighbour = *it;
+
+            for (auto it = at; it != before.tracks.begin() && neighbour == 0;)
+                if (tracks.getTrack (*--it).has_value())
+                    neighbour = *it;
+
+            if (neighbour != 0)
+                selectTrack (neighbour);
+        }
+
+        validate();
+    }
+
     /** Drops selections that no longer exist (after undo, delete, or loading a session). */
     void validate()
     {

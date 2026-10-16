@@ -12,7 +12,7 @@ AppMenuModel::AppMenuModel (juce::ApplicationCommandManager& cm) : commands (cm)
 
 juce::StringArray AppMenuModel::getMenuBarNames()
 {
-    return { "File", "Edit", "Track", "Region", "Mix", "View", "Window", "Help" };
+    return { "File", "Edit", "Track", "Region", "Mix", "Sounds", "View", "Window", "Help" };
 }
 
 juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
@@ -32,8 +32,11 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::saveSessionAs);
         add (CommandIDs::closeSession);
         m.addSeparator();
-        add (CommandIDs::audioSettings);
-        // TODO(milestone-4): Export / Share submenu.
+
+        juce::PopupMenu exportMenu;
+        exportMenu.addCommandItem (&commands, CommandIDs::exportSong);
+        exportMenu.addCommandItem (&commands, CommandIDs::exportStems);
+        m.addSubMenu ("Export", exportMenu);
 
        #if ! JUCE_MAC   // macOS puts Quit in the app menu automatically
         m.addSeparator();
@@ -46,6 +49,11 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::redo);
         m.addSeparator();
         add (CommandIDs::deleteSelection);
+
+       #if ! JUCE_MAC   // macOS has Settings in the app menu (see MainComponent)
+        m.addSeparator();
+        add (CommandIDs::preferences);
+       #endif
     }
     else if (name == "Track")
     {
@@ -85,9 +93,22 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::goToStart);
         add (CommandIDs::toggleLoop);
         add (CommandIDs::toggleMetronome);
-        add (CommandIDs::toggleCountIn);
+
+        juce::PopupMenu countIn;
+        countIn.addCommandItem (&commands, CommandIDs::countInOff);
+        countIn.addCommandItem (&commands, CommandIDs::countInOneBar);
+        countIn.addCommandItem (&commands, CommandIDs::countInTwoBars);
+        m.addSubMenu ("Count-in", countIn);
+        add (CommandIDs::toggleMidiCycleTakes);
         m.addSeparator();
         add (CommandIDs::showMixerTab);
+        add (CommandIDs::toggleAutomation);
+    }
+    else if (name == "Sounds")
+    {
+        add (CommandIDs::moreSounds);
+        m.addSeparator();
+        add (CommandIDs::freesoundKey);
     }
     else if (name == "View")
     {
@@ -110,8 +131,6 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     }
     else if (name == "Window")
     {
-        add (CommandIDs::moreSounds);
-        m.addSeparator();
         add (CommandIDs::toggleFullScreen);
     }
     else if (name == "Help")

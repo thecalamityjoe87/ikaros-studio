@@ -29,6 +29,9 @@ public:
     std::function<void (float)> onValueChange;   // normalised 0..1
     std::function<void()> onDragStart;
 
+    /** The dial itself, e.g. for followAutomation(). */
+    juce::Slider& getSlider() noexcept           { return slider; }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

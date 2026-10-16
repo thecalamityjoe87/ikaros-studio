@@ -17,11 +17,11 @@ namespace CommandIDs
         saveSession,
         saveSessionAs,
         closeSession,
-        audioSettings,
 
         undo,
         redo,
         deleteSelection,
+        preferences,        // Edit > Preferences (Settings in the macOS app menu)
 
         newTrack,
         newAudioTrack,
@@ -49,7 +49,10 @@ namespace CommandIDs
         goToStart,
         toggleLoop,
         toggleMetronome,
-        toggleCountIn,
+        countInOff,
+        countInOneBar,
+        countInTwoBars,
+        toggleMidiCycleTakes,
 
         toggleLibrary,
         toggleBottomPanel,
@@ -62,11 +65,16 @@ namespace CommandIDs
         showEditorTab,
         showEqTab,
         showMixerTab,
+        toggleAutomation,
         toggleDetails,
 
         toggleFullScreen,
         moreSounds,
+        freesoundKey,
         about,
+
+        exportSong,
+        exportStems,
     };
 }
 

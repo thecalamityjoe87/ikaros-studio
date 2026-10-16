@@ -1,0 +1,10 @@
+LAME 3.100 (https://lame.sourceforge.io), the MP3 encoder used by Ikaros
+Studio's MP3 export. LGPL 2 or later: see COPYING and LICENSE.
+
+From the official release lame-3.100.tar.gz on SourceForge
+(md5 83e260acbe4389b54fe08e0bdbf7cddb, sha256
+ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e).
+Only the encoder library is kept: libmp3lame/ (without mpglib_interface.c,
+the i386/ and vector/ SIMD code except vector/lame_intrin.h, which fft.c
+includes, and the makefiles) and include/lame.h. The
+files are unchanged. ikaros/ holds our CMake build and config.h.

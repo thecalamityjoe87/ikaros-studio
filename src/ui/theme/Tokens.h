@@ -56,6 +56,15 @@ namespace colour
     inline const juce::Colour trackPurple    { 0xffc78bff };
     inline const juce::Colour trackYellow    { 0xffffd25a };
 
+    // Automation curves, by what they move (see getAutomationColour). A
+    // shade lighter than the track colours, to stand out over regions.
+    inline const juce::Colour automationVolume { 0xff7cc0ff };   // blue
+    inline const juce::Colour automationPan    { 0xff6fe3a3 };   // green
+    inline const juce::Colour automationReverb { 0xffd4a6ff };   // purple
+    inline const juce::Colour automationDelay  { 0xffffa877 };   // orange
+    inline const juce::Colour automationSound  { 0xffffe07a };   // yellow: the Sound tab's knobs
+    inline const juce::Colour automationPlugin { 0xffff8ac6 };   // pink: plug-in parameters
+
     /** Darker variant of a track colour for region label strips (white text). */
     inline juce::Colour regionStrip (juce::Colour track)
     {
@@ -78,8 +87,8 @@ namespace size
     inline constexpr int toolbarHeight     = 64;
     inline constexpr int sidebarWidth      = 264;   // 250–280 in the spec
     inline constexpr int rulerHeight       = 30;
-    inline constexpr int trackHeaderWidth  = 260;   // also the width of the track inspector below, so they line up
-    inline constexpr int trackRowHeight    = 100;
+    inline constexpr int trackHeaderWidth  = 320;   // also the width of the track inspector below, so they line up
+    inline constexpr int trackRowHeight    = 100;   // grows while the track's automation picker shows (see ArrangementLayout.h)
     inline constexpr int bottomPanelHeight = 290;
     inline constexpr int minHitTarget      = 44;
 

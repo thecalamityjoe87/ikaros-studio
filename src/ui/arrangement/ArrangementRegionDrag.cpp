@@ -51,8 +51,11 @@ void ArrangementView::RegionDrag::regionMouseDown (RegionComponent& comp, const 
     drag.mode = zone == RegionComponent::Zone::leftEdge  ? Drag::Mode::trimStart
               : zone == RegionComponent::Zone::rightEdge ? Drag::Mode::trimEnd
               : zone == RegionComponent::Zone::loopCorner ? Drag::Mode::loop
+              : zone == RegionComponent::Zone::fadeIn    ? Drag::Mode::fadeIn
+              : zone == RegionComponent::Zone::fadeOut   ? Drag::Mode::fadeOut
                                                          : Drag::Mode::pending;
     drag.trim = { info.startBeat, info.getEndBeat() };
+    drag.fade = zone == RegionComponent::Zone::fadeIn ? info.fadeInBeats : info.fadeOutBeats;
 
     for (auto id : owner.selection.getRegions())
     {
@@ -84,6 +87,8 @@ void ArrangementView::RegionDrag::regionMouseDrag (RegionComponent&, const juce:
         updateTrimDrag (pos.x - drag.start.x);
     else if (drag.mode == Drag::Mode::loop)
         updateLoopDrag (pos.x - drag.start.x);
+    else if (drag.mode == Drag::Mode::fadeIn || drag.mode == Drag::Mode::fadeOut)
+        updateFadeDrag (pos.x - drag.start.x);
 }
 
 void ArrangementView::RegionDrag::updateMoveDrag (juce::Point<int> pos)
@@ -206,6 +211,29 @@ void ArrangementView::RegionDrag::updateLoopDrag (int dx)
         lane->resized();
 }
 
+void ArrangementView::RegionDrag::updateFadeDrag (int dx)
+{
+    auto* comp = owner.findRegion (drag.anchor);
+
+    if (comp == nullptr)
+        return;
+
+    // Dragging a handle into the region makes its fade longer, up to where
+    // the other fade starts. Fades don't snap to the grid: they're about how
+    // the sound starts and stops, not the beat.
+    auto& info = comp->getInfo();
+    const bool fadeIn = drag.mode == Drag::Mode::fadeIn;
+    const double before = fadeIn ? info.fadeInBeats : info.fadeOutBeats;
+    const double other = fadeIn ? info.fadeOutBeats : info.fadeInBeats;
+    const double delta = (fadeIn ? dx : -dx) / owner.geometry.pixelsPerBeat;
+    drag.fade = juce::jlimit (0.0, juce::jmax (0.0, info.lengthBeats - other), before + delta);
+
+    if (fadeIn)
+        comp->setFadePreview (drag.fade, std::nullopt);
+    else
+        comp->setFadePreview (std::nullopt, drag.fade);
+}
+
 bool ArrangementView::RegionDrag::cancel()
 {
     if (drag.mode == Drag::Mode::none || drag.mode == Drag::Mode::pending)
@@ -226,6 +254,7 @@ bool ArrangementView::RegionDrag::cancel()
     else if (auto* comp = owner.findRegion (cancelled.anchor))
     {
         comp->setTrimPreview (std::nullopt);
+        comp->setFadePreview (std::nullopt, std::nullopt);
 
         if (auto* lane = comp->getParentComponent())
             lane->resized();
@@ -289,6 +318,15 @@ void ArrangementView::RegionDrag::regionMouseUp (RegionComponent&, const juce::M
         {
             comp->setTrimPreview (std::nullopt);
             tc.regions().loopRegion (finished.anchor, finished.trim.getEnd());
+            owner.refresh();
+        }
+    }
+    else if (finished.mode == Drag::Mode::fadeIn || finished.mode == Drag::Mode::fadeOut)
+    {
+        if (auto* comp = owner.findRegion (finished.anchor))
+        {
+            comp->setFadePreview (std::nullopt, std::nullopt);
+            tc.regions().setFade (finished.anchor, finished.mode == Drag::Mode::fadeIn, finished.fade);   // one undo step
             owner.refresh();
         }
     }

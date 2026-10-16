@@ -1,4 +1,5 @@
 #include "engine/EffectsController.h"
+#include "engine/SoundControls.h"
 #include "engine/AudioEngine.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
@@ -395,8 +396,29 @@ namespace
         return edit.getPluginCache().createNewPlugin (state);
     }
 
-    // Sets a knob, adding the hidden plugin it needs if it isn't there yet
-    // (inside the undo step the UI started).
+    // The hidden plugins the knobs need, added the first time a knob needs
+    // them (inside the undo step the UI started).
+    TransposePlugin* findOrAddTranspose (te::AudioTrack& t, te::Plugin& instrument)
+    {
+        if (auto* transpose = t.pluginList.findFirstPluginOfType<TransposePlugin>())
+            return transpose;
+
+        auto created = createTranspose (t.edit, {});
+        t.pluginList.insertPlugin (created, t.pluginList.indexOf (&instrument), nullptr);
+        return dynamic_cast<TransposePlugin*> (created.get());
+    }
+
+    SoundShaperPlugin* findOrAddShaper (te::AudioTrack& t, te::Plugin& instrument)
+    {
+        if (auto* shaper = t.pluginList.findFirstPluginOfType<SoundShaperPlugin>())
+            return shaper;
+
+        auto created = createShaper (t.edit, {});
+        t.pluginList.insertPlugin (created, t.pluginList.indexOf (&instrument) + 1, nullptr);
+        return dynamic_cast<SoundShaperPlugin*> (created.get());
+    }
+
+    // Sets a knob, adding the hidden plugin it needs if it isn't there yet.
     void setKnobValue (te::AudioTrack& t, const Knob& knob, float v)
     {
         auto* instrument = sampledInstrumentOn (t);
@@ -412,35 +434,103 @@ namespace
         }
         else if (knob.control == "tune")
         {
-            auto* transpose = t.pluginList.findFirstPluginOfType<TransposePlugin>();
-
-            if (transpose == nullptr)
-            {
-                auto created = createTranspose (edit, {});
-                t.pluginList.insertPlugin (created, t.pluginList.indexOf (instrument), nullptr);
-                transpose = dynamic_cast<TransposePlugin*> (created.get());
-            }
-
-            if (transpose != nullptr)
+            if (auto* transpose = findOrAddTranspose (t, *instrument))
                 setParameterUndoably (*transpose, *transpose->getSemitonesParameter(),
                                       TransposePlugin::semitonesID, knobToSemitones (v));
         }
-        else
+        else if (auto* shaper = findOrAddShaper (t, *instrument))
         {
-            auto* shaper = t.pluginList.findFirstPluginOfType<SoundShaperPlugin>();
-
-            if (shaper == nullptr)
-            {
-                auto created = createShaper (edit, {});
-                t.pluginList.insertPlugin (created, t.pluginList.indexOf (instrument) + 1, nullptr);
-                shaper = dynamic_cast<SoundShaperPlugin*> (created.get());
-            }
-
-            if (shaper != nullptr)
-                if (auto* param = shaper->getParameterFor (knob.control))
-                    setParameterUndoably (*shaper, *param, juce::Identifier (knob.control), v);
+            if (auto* param = shaper->getParameterFor (knob.control))
+                setParameterUndoably (*shaper, *param, juce::Identifier (knob.control), v);
         }
     }
+
+    // How the built-in synth's knobs read, from the parameter's own value.
+    juce::String describeSynthKnob (const juce::String& paramID, float raw, float normalised)
+    {
+        if (paramID == "ampAttack" || paramID == "ampRelease")  return seconds (raw);
+        if (paramID == "filterResonance")                       return juce::String (juce::roundToInt (raw)) + "%";
+        return percent (normalised);
+    }
+}
+
+//==============================================================================
+std::vector<SoundControlParameter> getSoundControlParameters (te::AudioTrack& t, const SoundLibrary& sounds, bool createMissing)
+{
+    std::vector<SoundControlParameter> result;
+
+    if (auto* synth = findSynth (t))
+    {
+        for (auto& k : knobMappings)
+        {
+            SoundControlParameter c;
+            c.name = k.label;
+            c.parameter = synth->getAutomatableParameterByID (k.paramID).get();
+            c.stateProperty = k.paramID;
+
+            if (auto* param = c.parameter)
+            {
+                // valueRange maps 0..1 onto the parameter's own (possibly skewed) range.
+                c.toParameter = [param] (float v) { return param->valueRange.convertFrom0to1 (v); };
+                c.fromParameter = [param] (float raw) { return param->valueRange.convertTo0to1 (raw); };
+                c.describe = [param, id = juce::String (k.paramID)] (float v)
+                             { return describeSynthKnob (id, param->valueRange.convertFrom0to1 (v), v); };
+
+                // Some patches have the synth's reverb switched off; automating "Room" needs it on.
+                if (createMissing && param == synth->reverbMix.get() && ! synth->reverbOnValue.get())
+                    synth->reverbOnValue = true;
+            }
+
+            result.push_back (std::move (c));
+        }
+
+        return result;
+    }
+
+    auto* instrument = sampledInstrumentOn (t);
+
+    for (auto& knob : sampledKnobsFor (t, sounds))
+    {
+        SoundControlParameter c;
+        c.name = knob.name;
+        c.toParameter = c.fromParameter = [] (float v) { return v; };
+        c.describe = [knob] (float v) { return describeKnob (knob, v); };
+        c.valueWithoutParameter = knob.control == "cc" ? knob.defaultValue : getKnobValue (t, knob);
+
+        if (knob.control == "cc")
+        {
+            if (auto* sfz = dynamic_cast<SfzPlugin*> (instrument))
+                c.parameter = sfz->getCcParameter (knob.cc);
+
+            c.stateProperty = SfzPlugin::ccProperty (knob.cc);
+        }
+        else if (knob.control == "tune")
+        {
+            auto* transpose = createMissing ? findOrAddTranspose (t, *instrument)
+                                            : t.pluginList.findFirstPluginOfType<TransposePlugin>();
+
+            if (transpose != nullptr)
+                c.parameter = transpose->getSemitonesParameter();
+
+            c.stateProperty = TransposePlugin::semitonesID;
+            c.toParameter = knobToSemitones;
+            c.fromParameter = semitonesToKnob;
+        }
+        else
+        {
+            auto* shaper = createMissing ? findOrAddShaper (t, *instrument)
+                                         : t.pluginList.findFirstPluginOfType<SoundShaperPlugin>();
+
+            if (shaper != nullptr)
+                c.parameter = shaper->getParameterFor (knob.control);
+
+            c.stateProperty = juce::Identifier (knob.control);
+        }
+
+        result.push_back (std::move (c));
+    }
+
+    return result;
 }
 
 //==============================================================================
@@ -482,10 +572,8 @@ std::vector<SoundControl> EffectsController::getSoundControls (TrackId id) const
             auto raw = param->getCurrentValue();
             juce::String paramID (k.paramID);
 
-            if (paramID == "ampAttack" || paramID == "ampRelease")  c.valueText = seconds (raw);
-            else if (paramID == "filterResonance")                  c.valueText = juce::String (juce::roundToInt (raw)) + "%";
-            else if (paramID == "reverbMix" && ! synth->reverbOnValue.get())  { c.value = 0.0f; c.valueText = "0%"; }
-            else                                                    c.valueText = percent (c.value);
+            if (paramID == "reverbMix" && ! synth->reverbOnValue.get())  { c.value = 0.0f; c.valueText = "0%"; }
+            else                                                         c.valueText = describeSynthKnob (paramID, raw, c.value);
         }
 
         result.push_back (c);
@@ -658,6 +746,17 @@ bool EffectsController::isInstrumentReady (TrackId id) const
                 return sfz->isLoaded();
 
     return true;
+}
+
+std::optional<std::pair<int, int>> EffectsController::getInstrumentKeyRange (TrackId id) const
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : t->pluginList)
+            if (auto* sfz = dynamic_cast<SfzPlugin*> (p))
+                if (int lowest = 0, highest = 0; sfz->getKeyRange (lowest, highest))
+                    return std::make_pair (lowest, highest);
+
+    return std::nullopt;
 }
 
 std::optional<PluginSlot> EffectsController::getInstrument (TrackId id) const
@@ -858,7 +957,16 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
 
             if (auto* param = params[index])
             {
-                setParameterUndoably (*p, *param, param->paramID, param->valueRange.convertFrom0to1 (value));
+                // Like setParameterUndoably, but we don't know which state
+                // property backs an arbitrary effect's parameter: the ID isn't
+                // it (the Delay's "mix proportion" lives in "mix", plug-in IDs
+                // are numbers), and writing the ID as a property made saved
+                // sessions invalid XML. Instead, setting the parameter to its
+                // current value makes Tracktion store it in the right property,
+                // outside the undo history (it writes its attached CachedValue
+                // with no UndoManager on every notifying set).
+                param->setParameter (param->getCurrentValue(), juce::sendNotification);
+                param->setParameter (param->valueRange.convertFrom0to1 (value), juce::sendNotification);
             }
             else
             {

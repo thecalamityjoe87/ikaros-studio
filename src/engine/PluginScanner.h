@@ -39,6 +39,10 @@ public:
         are scanned again. Call on the message thread. */
     void start (const juce::StringArray& folders = {}, bool rescanEverything = false);
 
+    /** Where a scan with no folders looks, besides each format's standard
+        install locations: extra folders, and formats to leave out. */
+    void setSearchOptions (const juce::StringArray& extraFolders, const juce::StringArray& disabledFormats);
+
     /** Where to remember which files have been scanned (for formats such as
         LV2 that the plug-in list can't check by file). */
     void setRecordFile (const juce::File&);
@@ -68,6 +72,7 @@ private:
 
     juce::AudioPluginFormatManager& formats;
     juce::KnownPluginList& list;
+    juce::StringArray extraFolders, disabledFormats;
 
     // What the thread works through: (format, file) pairs, found on the
     // message thread before it starts.

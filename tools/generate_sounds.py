@@ -434,12 +434,21 @@ def write_loops():
             mix_into(chords, electric_piano_note(note, 1.4), beat_to_sample(start, bpm), 0.28)
     loops.append(("Glass Chords", "Glass Chords", chords, "C"))
 
+    # What the loop browser's instrument, genre and mood filters look for.
+    loop_tags = {
+        "Electro Beat": ["drums", "electronic", "energetic"],
+        "Hat Groove": ["drums", "percussion", "funk"],
+        "Pluck Bass": ["bass", "electronic"],
+        "Glass Chords": ["keys", "piano", "chill"],
+    }
+
     entries = []
     for stem, name, samples, key in loops:
         file_name = write_audio(folder / stem, fade_out(normalise(samples, 0.8), 0.01))
         entry = {"file": file_name, "name": name, "bpm": bpm}
         if key:
             entry["key"] = key
+        entry["tags"] = loop_tags[name]
         entries.append(entry)
         print(f"  loop: {name}")
     (folder / "loops.json").write_text(json.dumps(entries, indent=2) + "\n")

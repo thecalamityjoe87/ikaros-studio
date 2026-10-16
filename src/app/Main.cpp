@@ -34,6 +34,11 @@ public:
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
         engine = std::make_unique<AudioEngine>();
+
+        // The saved interface size, before the window exists (Preferences > Appearance
+        // changes it later without a restart; see MainComponent).
+        MainComponent::setInterfaceScale (engine->getPreferences().getInterfaceScale());
+
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
         platform::enableDropsFromWaylandApps();
 

@@ -520,6 +520,10 @@ public:
         sampleRate = newSampleRate;
         bufferSize = newBufferSize;
 
+        // As for the outputs below: the callback's channel list must match the open channels.
+        if (inputChannels.getHighestBit() >= 0)
+            ensureMinimumNumBitsSet (inputChannels, (int) minChansIn);
+
         int maxInputsRequested = inputChannels.getHighestBit() + 1;
         maxInputsRequested = jmax ((int) minChansIn, jmin ((int) maxChansIn, maxInputsRequested));
 

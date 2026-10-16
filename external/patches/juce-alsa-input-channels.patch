@@ -1,0 +1,15 @@
+diff --git a/modules/juce_audio_devices/native/juce_ALSA_linux.cpp b/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
+index 84e0696..d651289 100644
+--- a/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
++++ b/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
+@@ -520,6 +520,10 @@ public:
+         sampleRate = newSampleRate;
+         bufferSize = newBufferSize;
+ 
++        // As for the outputs below: the callback's channel list must match the open channels.
++        if (inputChannels.getHighestBit() >= 0)
++            ensureMinimumNumBitsSet (inputChannels, (int) minChansIn);
++
+         int maxInputsRequested = inputChannels.getHighestBit() + 1;
+         maxInputsRequested = jmax ((int) minChansIn, jmin ((int) maxChansIn, maxInputsRequested));
+ 
