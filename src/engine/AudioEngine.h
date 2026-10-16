@@ -22,6 +22,7 @@ class TrackController;
 class SoundLibrary;
 class PluginLibrary;
 class PackStore;
+class FreesoundStore;
 class AudioPreview;
 class SongExporter;
 class RecordingGuard;
@@ -320,6 +321,9 @@ public:
         waiting for it start playing, and listeners hear about it. */
     PackStore& getPackStore() noexcept          { return *packStore; }
 
+    /** Searching Freesound for loops and adding them to the library. */
+    FreesoundStore& getFreesound() noexcept     { return *freesoundStore; }
+
     /** Third-party plug-ins and the plug-in scan. */
     PluginLibrary& getPlugins() noexcept        { return *plugins; }
 
@@ -405,6 +409,7 @@ private:
     std::unique_ptr<Preferences> preferences;
     std::unique_ptr<SoundLibrary> sounds;
     std::unique_ptr<PackStore> packStore;
+    std::unique_ptr<FreesoundStore> freesoundStore;
     std::unique_ptr<PluginLibrary> plugins;
     std::unique_ptr<AudioPreview> preview;
     std::unique_ptr<TrackController> trackController;

@@ -6,6 +6,7 @@
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
 #include "ui/library/MoreSoundsDialog.h"
+#include "ui/library/FreesoundSetupDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
@@ -49,6 +50,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
     library.onMoreSoundsRequested = [this] (const juce::String& category) { MoreSoundsDialog::show (*this, engine, {}, category); };
+    library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
 
     // Commands: register everything this component can do, make it the
@@ -379,7 +381,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleDetails,
-                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::about,
+                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
@@ -663,7 +665,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
            #endif
             break;
         case CommandIDs::moreSounds:
-            info.setInfo ("More Sounds...", "Download more instruments and loops", "Window", 0);
+            info.setInfo ("More Sounds...", "Download more instruments and loops", "Sounds", 0);
+            break;
+        case CommandIDs::freesoundKey:
+            info.setInfo ("Freesound API Key...", "Set up or change your Freesound API key", "Sounds", 0);
             break;
 
         case CommandIDs::about:
@@ -838,6 +843,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
+        case CommandIDs::freesoundKey:    FreesoundSetupDialog::show (*this, engine); break;
         case CommandIDs::preferences:     showPreferences(); break;
         case CommandIDs::about:           showAbout(); break;
         case juce::StandardApplicationCommandIDs::quit: requestQuit(); break;

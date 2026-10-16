@@ -59,7 +59,11 @@ namespace ikaros
       folder names stay the same from one pack version to the next.
 
     loops.json:
-        [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C" } ]
+        [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C",
+            "tags": [ "drums", "electronic" ] } ]
+
+      "tags" is optional: lowercase words the loop browser's instrument,
+      genre and mood filters look for (as well as the name).
 
     Packs are read from the folder installed with the app and from the user's
     Documents/Ikaros Studio/Sounds folder.

@@ -12,7 +12,7 @@ AppMenuModel::AppMenuModel (juce::ApplicationCommandManager& cm) : commands (cm)
 
 juce::StringArray AppMenuModel::getMenuBarNames()
 {
-    return { "File", "Edit", "Track", "Region", "Mix", "View", "Window", "Help" };
+    return { "File", "Edit", "Track", "Region", "Mix", "Sounds", "View", "Window", "Help" };
 }
 
 juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
@@ -104,6 +104,12 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::showMixerTab);
         add (CommandIDs::toggleAutomation);
     }
+    else if (name == "Sounds")
+    {
+        add (CommandIDs::moreSounds);
+        m.addSeparator();
+        add (CommandIDs::freesoundKey);
+    }
     else if (name == "View")
     {
         add (CommandIDs::toggleLibrary);
@@ -125,8 +131,6 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
     }
     else if (name == "Window")
     {
-        add (CommandIDs::moreSounds);
-        m.addSeparator();
         add (CommandIDs::toggleFullScreen);
     }
     else if (name == "Help")

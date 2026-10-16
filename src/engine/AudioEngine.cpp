@@ -4,6 +4,7 @@
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
+#include "engine/FreesoundStore.h"
 #include "engine/RecordingGuard.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
@@ -764,6 +765,8 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
     sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
     packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
+    freesoundStore = std::make_unique<FreesoundStore> (*sounds, *preferences);
+    freesoundStore->onLibraryChanged = [this] { soundPacksChanged (FreesoundStore::packId); };
     plugins = std::make_unique<PluginLibrary> (*this);
     preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
@@ -793,6 +796,7 @@ AudioEngine::~AudioEngine()
     impl->stopObservingEdit();
     impl->edit.reset();   // closes any plug-in windows
     plugins.reset();
+    freesoundStore.reset();   // stops downloads
     packStore.reset();    // stops downloads
 }
 

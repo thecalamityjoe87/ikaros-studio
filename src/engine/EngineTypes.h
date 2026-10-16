@@ -347,6 +347,7 @@ struct LibraryFile
     juce::String detail;           // e.g. "120 · C" for a loop, or the file's length
     bool isFolder = false;
     double bpm = 0.0;              // loops: the tempo it was made at (0 = unknown)
+    juce::StringArray tags;        // loops: lowercase words that describe it, for the browser's filters
 };
 
 // A third-party plug-in found by the plug-in scan.

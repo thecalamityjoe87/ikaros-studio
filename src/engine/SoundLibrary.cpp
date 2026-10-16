@@ -420,6 +420,10 @@ void SoundLibrary::readPack (const juce::File& pack, bool bundled)
             loop.name = l.getProperty ("name", loop.file.getFileNameWithoutExtension()).toString();
             loop.bpm = l.getProperty ("bpm", 0.0);
 
+            if (auto* tags = l["tags"].getArray())
+                for (auto& t : *tags)
+                    loop.tags.add (t.toString().toLowerCase());
+
             juce::StringArray detail;
 
             if (loop.bpm > 0.0)

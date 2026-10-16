@@ -91,6 +91,7 @@ namespace
                                               "M18.5 7a2.5 2.5 0 1 0-5 0a2.5 2.5 0 1 0 5 0 M20.5 7H22";
             case Icon::download:       return "M12 4v11 M7 10l5 5l5-5 M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2";   // arrow down into a tray
             case Icon::trim:           return "M3 12h18 M7 8l-4 4 4 4 M17 8l4 4-4 4";   // left-right arrow, like the resize cursor
+            case Icon::trash:          return "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v6 M14 11v6";   // a bin with a lid
         }
 
         return "";

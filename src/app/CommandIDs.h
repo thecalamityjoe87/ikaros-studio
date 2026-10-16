@@ -70,6 +70,7 @@ namespace CommandIDs
 
         toggleFullScreen,
         moreSounds,
+        freesoundKey,
         about,
 
         exportSong,

@@ -203,6 +203,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PackStore.h          src/engine/PackStore.cpp
+    src/engine/FreesoundStore.h     src/engine/FreesoundStore.cpp
     src/engine/PluginLibrary.h      src/engine/PluginLibrary.cpp
     src/engine/PluginScanner.h      src/engine/PluginScanner.cpp
     src/engine/AudioPreview.h       src/engine/AudioPreview.cpp
@@ -270,6 +271,8 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
+    src/ui/library/FreesoundSetupDialog.h   src/ui/library/FreesoundSetupDialog.cpp
+    src/ui/library/LoopBrowser.h            src/ui/library/LoopBrowser.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
