@@ -4,6 +4,7 @@
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
+#include "engine/RealtimeAudioThread.h"
 #include "engine/FreesoundStore.h"
 #include "engine/RecordingGuard.h"
 #include "engine/SfzPlugin.h"
@@ -56,6 +57,14 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // We initialise the device manager ourselves (see AudioEngine::Impl) so we
     // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
+
+    // Render everything on the audio thread itself. Tracktion's default
+    // hands parts of each block to a worker per CPU core, and with small
+    // buffers (64 samples is 750 blocks a second) waking them costs more than
+    // it saves; worse, the workers run at ordinary priority, so when the
+    // desktop is busy the audio thread sits waiting for them and the sound
+    // breaks up. A session of a beginner's size fits on one core easily.
+    int getNumberOfCPUsToUseForAudio() override     { return 1; }
 
     // Takes are recorded straight into the session's working copy (its
     // Audio folder), whether or not it has been saved yet.
@@ -228,6 +237,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         {
             engine.getDeviceManager().initialise (2, 2);
             chooseSmallBufferOnce();
+
+            // After initialise, so its (silent) callback comes after Tracktion's.
+            realtimeThread = std::make_unique<RealtimeAudioThread> (engine.getDeviceManager().deviceManager);
         }
 
         // Our own instrument for SFZ sounds, next to Tracktion's built-in
@@ -310,6 +322,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     te::Engine engine;
 
     std::unique_ptr<te::Edit> edit;
+
+    // Declared after `engine`, so it's destroyed (and leaves the device) first.
+    std::unique_ptr<RealtimeAudioThread> realtimeThread;
 
     // The session being edited: its working copy (an unpacked bundle, see
     // AudioEngine.h), the session file inside it that Tracktion reads and
@@ -2079,6 +2094,10 @@ SystemStats AudioEngine::getSystemStats() const
     s.cpuPercent = dm.getCpuUsage() * 100.0f;
     s.sampleRate = dm.getSampleRate();
     s.latencyMs = dm.getOutputLatencySeconds() * 1000.0;
+
+    if (impl->realtimeThread != nullptr)
+        s.realtimeAudio = impl->realtimeThread->isRealtime();
+
     return s;
 }
 
@@ -2086,6 +2105,9 @@ void AudioEngine::reattachAudioCallbacks()
 {
     preview->reattach();
     recordingGuard->reattach();
+
+    if (impl->realtimeThread != nullptr)
+        impl->realtimeThread->reattach();
 }
 
 std::optional<RecordingReport> AudioEngine::takeRecordingReport()

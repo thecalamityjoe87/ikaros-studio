@@ -78,11 +78,17 @@ void Toolbar::update (bool libraryVisible)
                         + juce::String::fromUTF8 ("\xc2\xb7 ") + juce::String (juce::roundToInt (stats.latencyMs)) + " ms"
                     : juce::String ("No audio device");
 
-        if (l1 != statsLine1 || l2 != statsLine2)
+        // optional::value_or: the value if there is one, otherwise the fallback.
+        const bool known = stats.sampleRate > 0 && stats.realtimeAudio.has_value();
+        const bool rt = known && stats.realtimeAudio.value_or (false);
+
+        if (l1 != statsLine1 || l2 != statsLine2 || rt != realtimeBadge || known != realtimeKnown)
         {
             statsLine1 = l1;
             statsLine2 = l2;
-            repaint (statsArea);
+            realtimeBadge = rt;
+            realtimeKnown = known;
+            repaint (statsArea.getUnion (getRealtimeBadgeArea()));
         }
     }
 }
@@ -101,6 +107,40 @@ void Toolbar::paint (juce::Graphics& g)
     auto s = statsArea;
     g.drawText (statsLine1, s.removeFromTop (s.getHeight() / 2), juce::Justification::bottomRight);
     g.drawText (statsLine2, s, juce::Justification::topRight);
+
+    // "RT": a small badge under the readout while the audio thread is real-time.
+    if (realtimeBadge)
+    {
+        const auto badge = getRealtimeBadgeArea().toFloat();
+        g.setColour (colour::meterGreen.withAlpha (0.18f));
+        g.fillRoundedRectangle (badge, 3.0f);
+        g.setColour (colour::meterGreen);
+        g.setFont (fonts::mono (9.5f));
+        g.drawText ("RT", badge, juce::Justification::centred);
+    }
+}
+
+juce::Rectangle<int> Toolbar::getRealtimeBadgeArea() const
+{
+    // Right-aligned with the text, just under its second line (which sits
+    // at the top of its half of statsArea, so the badge can tuck up a little).
+    return { statsArea.getRight() - 20, statsArea.getBottom() - 2, 20, 12 };
+}
+
+juce::String Toolbar::getTooltip()
+{
+    if (! statsArea.getUnion (getRealtimeBadgeArea()).contains (getMouseXYRelative()))
+        return {};
+
+    juce::String tip ("CPU: how much of the time between audio blocks it takes to make the sound.");
+
+    if (realtimeKnown)
+        tip << "\n\n" << (realtimeBadge
+                ? "RT: real-time audio is on. Sound comes first on this computer, so small buffer sizes play cleanly."
+                : "Real-time audio is off: other programs can hold up the sound, so small buffer sizes may crackle. "
+                  "(Ikaros asks the system's RealtimeKit service for it.)");
+
+    return tip;
 }
 
 void Toolbar::resized()

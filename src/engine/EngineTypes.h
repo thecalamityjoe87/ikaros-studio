@@ -10,6 +10,7 @@
 #include <juce_graphics/juce_graphics.h>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <limits>
 #include <set>
 #include <vector>
@@ -462,6 +463,11 @@ struct SystemStats
     float cpuPercent = 0.0f;
     double sampleRate = 0.0;
     double latencyMs = 0.0;
+
+    // Whether the audio thread runs at real-time priority (see
+    // RealtimeAudioThread). Empty where the OS looks after that itself
+    // (macOS, Windows), or when the engine has no audio device of its own.
+    std::optional<bool> realtimeAudio;
 };
 
 } // namespace ikaros

@@ -212,7 +212,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RecordingTypes.h
     src/engine/Preferences.h        src/engine/Preferences.cpp
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
-    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp)
+    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
+    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -366,6 +367,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # doesn't do itself). JUCE itself loads X11 at runtime, so it's already required.
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
+
+    # sd-bus (part of libsystemd) for src/platform/AudioHardware: it asks
+    # RealtimeKit for a real-time audio thread.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(IKAROS_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+    target_link_libraries(IkarosStudio PRIVATE PkgConfig::IKAROS_SYSTEMD)
 endif()
 
 # The sound packs that come with the app (made by tools/generate_sounds.py).
@@ -468,7 +475,7 @@ if(IKAROS_BUILD_TESTS)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic)
+        target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic PkgConfig::IKAROS_SYSTEMD)
     endif()
 
     ikaros_copy_sounds(IkarosEngineSmokeTest)
