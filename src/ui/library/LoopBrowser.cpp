@@ -155,24 +155,27 @@ public:
                      playing ? colour::accent : colour::textSecondary, 12.0f);
         content.removeFromLeft (8);
 
-        if (hasAction())
+        // In your own loops only some rows have a bin, so it shows on hover and the details stay lined up.
+        const bool busy = hasAction() && owner.engine.getFreesound().isBusy (item.id);
+
+        if (hasAction() && (over || busy || item.kind == Item::Kind::result))
         {
             auto zone = content.removeFromRight (actionWidth).toFloat();
             const bool onAction = over && getMouseXYRelative().x >= getWidth() - actionWidth - 10;
 
-            if (owner.engine.getFreesound().isBusy (item.id))
+            if (busy)
             {
                 g.setColour (colour::textSecondary);
                 g.setFont (fonts::ui (14.0f));
-                g.drawText ("...", zone.toNearestInt(), juce::Justification::centred);
+                g.drawText ("...", zone.toNearestInt(), juce::Justification::centredRight);
             }
             else if (item.removable)
             {
-                icons::draw (g, Icon::trash, zone, onAction ? colour::record : colour::textSecondary, 15.0f);
+                icons::draw (g, Icon::trash, zone.removeFromRight (15.0f), onAction ? colour::record : colour::textSecondary, 15.0f);
             }
             else
             {
-                icons::draw (g, Icon::plus, zone, onAction ? colour::accent : colour::textSecondary, 14.0f);
+                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? colour::accent : colour::textSecondary, 14.0f);
             }
         }
 
