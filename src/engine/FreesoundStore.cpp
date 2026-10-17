@@ -73,6 +73,27 @@ namespace
         return s == "attribution" ? juce::String ("CC-BY") : juce::String();
     }
 
+    // The loop's key as the app writes it ("F# min"): Freesound's own
+    // analysis if it has one, otherwise a tag like "a-minor" or "cmajor".
+    // Empty if neither says.
+    juce::String keyFor (const juce::String& tonality, const juce::StringArray& tags)
+    {
+        int root = 0;
+        bool minor = false;
+
+        if (SoundLibrary::parseKey (tonality, root, minor))
+            return getKeyName (root, minor);
+
+        // Only tags that name the mode: a tag "a" or "e" says nothing about a key.
+        // ("cminor" parses as it is; "a-minor" needs the dash made a space.)
+        for (auto& tag : tags)
+            if ((tag.contains ("maj") || tag.contains ("min"))
+                 && SoundLibrary::parseKey (tag.replaceCharacters ("-_", "  "), root, minor))
+                return getKeyName (root, minor);
+
+        return {};
+    }
+
     // Many loops say their tempo in the name or tags: "Funk 95 BPM", "bpm120".
     double bpmFromText (const juce::String& text)
     {
@@ -139,7 +160,6 @@ namespace
         s.license = licenseFor (v["license"].toString());
         s.pageUrl = v["url"].toString();
         s.previewUrl = v["previews"]["preview-hq-ogg"].toString();
-        s.key = v["tonality"].toString();
         s.duration = (double) v["duration"];
 
         // Only what Freesound told us is trusted for the name of a file or an address we open.
@@ -162,6 +182,11 @@ namespace
 
         auto bpm = (double) v["bpm"];
         s.bpm = bpm >= 40.0 && bpm <= 300.0 ? bpm : bpmFromText (s.name + " " + tags.joinIntoString (" "));
+
+        // Drums have no key, whatever Freesound's analysis heard in them.
+        if (! SoundLibrary::soundsUnpitched (s.tags))
+            s.key = keyFor (v["tonality"].toString(), s.tags);
+
         return s;
     }
 
@@ -720,7 +745,9 @@ void FreesoundStore::recordInPack (const FreesoundSound& sound, const juce::Stri
     if (sound.bpm > 0.0)
         loop->setProperty ("bpm", sound.bpm);
 
-    if (sound.key.isNotEmpty())
+    if (SoundLibrary::soundsUnpitched (sound.tags))
+        loop->setProperty ("unpitched", true);
+    else if (sound.key.isNotEmpty())
         loop->setProperty ("key", sound.key);
 
     if (! sound.tags.isEmpty())

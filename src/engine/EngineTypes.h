@@ -10,6 +10,7 @@
 #include <juce_graphics/juce_graphics.h>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <limits>
 #include <set>
 #include <vector>
@@ -82,6 +83,18 @@ struct RegionInfo
     // current take's.
     int takeCount = 0;
     int currentTake = 0;    // index into the takes
+
+    // Loops that know their key follow the session's key (see LoopKey.h):
+    // how many semitones the region is moved to fit it (-6..+6).
+    bool followsKey = false;
+    int keyShiftSemitones = 0;
+
+    // Audio regions only, set in the audio editor: the region's own volume
+    // (dB, 0 = as recorded), whether it plays backwards, and how far the
+    // user moved it in pitch (semitones; on top of keyShiftSemitones).
+    float gainDb = 0.0f;
+    bool reversed = false;
+    int transposeSemitones = 0;
 
     double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
     bool hasTakes() const noexcept          { return takeCount > 0; }
@@ -348,6 +361,9 @@ struct LibraryFile
     bool isFolder = false;
     double bpm = 0.0;              // loops: the tempo it was made at (0 = unknown)
     juce::StringArray tags;        // loops: lowercase words that describe it, for the browser's filters
+    int keyRoot = -1;              // loops: the key it was made in, 0 = C ... 11 = B (-1 = unknown)
+    bool keyMinor = false;
+    bool unpitched = false;        // loops: drums and the like, which never change key
 };
 
 // A third-party plug-in found by the plug-in scan.
@@ -462,6 +478,11 @@ struct SystemStats
     float cpuPercent = 0.0f;
     double sampleRate = 0.0;
     double latencyMs = 0.0;
+
+    // Whether the audio thread runs at real-time priority (see
+    // RealtimeAudioThread). Empty where the OS looks after that itself
+    // (macOS, Windows), or when the engine has no audio device of its own.
+    std::optional<bool> realtimeAudio;
 };
 
 } // namespace ikaros

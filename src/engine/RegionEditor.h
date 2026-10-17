@@ -76,6 +76,37 @@ public:
         automatic edge fade, and never running into the other fade. */
     void setFade (RegionId, bool fadeIn, double lengthBeats);
 
+    //==============================================================================
+    // Audio regions: the audio editor's settings
+
+    static constexpr float minGainDb = -30.0f, maxGainDb = 12.0f;
+    static constexpr int maxTransposeSemitones = 24;
+
+    /** Sets an audio region's own volume, in dB (0 = as recorded). Not an
+        undo step of its own: call AudioEngine::beginUndoStep at the start of
+        the gesture, so a whole drag undoes in one go (as for track volume). */
+    void setRegionGain (RegionId, float gainDb);
+
+    /** Plays an audio region backwards (or forwards again), as one "Reverse
+        Region" undo step. The region keeps its place and length and shows
+        the same stretch of the recording, from the other end. */
+    void setRegionReversed (RegionId, bool reversed);
+
+    /** Moves an audio region up or down in pitch, keeping its length, as one
+        "Transpose Region" undo step. A loop that follows the session key
+        keeps doing so, on top of this. */
+    void setRegionTranspose (RegionId, int semitones);
+
+    /** An audio region's waveform as it plays (reversed, with its gain)
+        between two beats on the timeline, in `numColumns` slices. Outside
+        the region it carries on: the rest of the recording, or the loop
+        repeating (silence past the recording's ends).
+
+        The editor zooms right in, so this reads the whole recording in
+        detail, on a background thread. Until that's done it returns false
+        (and leaves `columns` empty): ask again later. */
+    bool getWaveform (RegionId, double fromBeat, double toBeat, int numColumns, std::vector<WaveformRange>& columns);
+
     /** Region clipboard. Pasting puts the earliest copied region at `beat` on
         `track`, keeping the regions' spacing and track layout. A region whose
         target track is the wrong kind goes back to the track it came from.

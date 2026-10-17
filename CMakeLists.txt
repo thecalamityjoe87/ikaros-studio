@@ -74,6 +74,25 @@ foreach(patch IN LISTS IKAROS_JUCE_PATCHES)
     endif()
 endforeach()
 
+# The same for Tracktion Engine's own fixes.
+file(GLOB IKAROS_TRACKTION_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/tracktion-*.patch")
+
+foreach(patch IN LISTS IKAROS_TRACKTION_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${TE_DIR}"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${TE_DIR}"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to Tracktion Engine")
+        endif()
+    endif()
+endforeach()
+
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
@@ -190,14 +209,17 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
+    src/engine/LoopKey.h
     src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
+    src/engine/SectionEditor.h      src/engine/SectionEditor.cpp
     src/engine/SoundControls.h
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
+    src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
@@ -212,7 +234,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RecordingTypes.h
     src/engine/Preferences.h        src/engine/Preferences.cpp
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
-    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp)
+    src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
+    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -276,6 +299,8 @@ set(IKAROS_UI_SOURCES
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
+    src/ui/arrangement/ArrangementTempoLane.h   src/ui/arrangement/ArrangementTempoLane.cpp
+    src/ui/arrangement/ArrangementSections.h    src/ui/arrangement/ArrangementSections.cpp
     src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
     src/ui/arrangement/ArrangementAutomation.h src/ui/arrangement/ArrangementAutomation.cpp
     src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
@@ -285,6 +310,9 @@ set(IKAROS_UI_SOURCES
     src/ui/arrangement/RegionComponent.h    src/ui/arrangement/RegionComponent.cpp
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
+    src/ui/bottompanel/AudioEditor.h        src/ui/bottompanel/AudioEditor.cpp
+    src/ui/bottompanel/EditorGrid.h
+    src/ui/bottompanel/RegionInspector.h    src/ui/bottompanel/RegionInspector.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
     src/ui/bottompanel/PianoRollLayout.h
     src/ui/bottompanel/PianoRollGestures.cpp
@@ -294,6 +322,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
     src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp
+    src/ui/bottompanel/NoiseGateView.h      src/ui/bottompanel/NoiseGateView.cpp
     src/ui/bottompanel/RecordingView.h      src/ui/bottompanel/RecordingView.cpp)
 
 target_sources(IkarosStudio PRIVATE
@@ -366,6 +395,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # doesn't do itself). JUCE itself loads X11 at runtime, so it's already required.
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
+
+    # sd-bus (part of libsystemd) for src/platform/AudioHardware: it asks
+    # RealtimeKit for a real-time audio thread.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(IKAROS_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+    target_link_libraries(IkarosStudio PRIVATE PkgConfig::IKAROS_SYSTEMD)
 endif()
 
 # The sound packs that come with the app (made by tools/generate_sounds.py).
@@ -468,7 +503,7 @@ if(IKAROS_BUILD_TESTS)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic)
+        target_link_libraries(IkarosEngineSmokeTest PRIVATE atomic PkgConfig::IKAROS_SYSTEMD)
     endif()
 
     ikaros_copy_sounds(IkarosEngineSmokeTest)
@@ -476,7 +511,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -497,6 +532,15 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Recording PROPERTIES LABELS "recording")
     set_tests_properties(EngineSmokeTest.Takes PROPERTIES LABELS "takes")
     set_tests_properties(EngineSmokeTest.LongRecording PROPERTIES LABELS "slow" TIMEOUT 1800)
+
+    # The built-in effects (see src/engine/BuiltInEffects.h), heard through
+    # the pretend audio interface.
+    add_test(NAME EngineSmokeTest.Effects COMMAND IkarosEngineSmokeTest --only=effects)
+    set_tests_properties(EngineSmokeTest.Effects PROPERTIES LABELS "effects")
+    add_test(NAME EngineSmokeTest.Tempo COMMAND IkarosEngineSmokeTest --only=tempo)
+    set_tests_properties(EngineSmokeTest.Tempo PROPERTIES LABELS "tempo")
+    add_test(NAME EngineSmokeTest.Sections COMMAND IkarosEngineSmokeTest --only=sections)
+    set_tests_properties(EngineSmokeTest.Sections PROPERTIES LABELS "sections")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

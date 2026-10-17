@@ -59,11 +59,19 @@ namespace ikaros
       folder names stay the same from one pack version to the next.
 
     loops.json:
-        [ { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "key": "C",
+        [ { "file": "Bass.wav", "name": "Pluck Bass", "bpm": 120, "key": "C minor",
+            "tags": [ "bass", "electronic" ] },
+          { "file": "Beat.wav", "name": "Electro Beat", "bpm": 120, "unpitched": true,
             "tags": [ "drums", "electronic" ] } ]
 
       "tags" is optional: lowercase words the loop browser's instrument,
       genre and mood filters look for (as well as the name).
+
+      "key" is optional: the key the loop was made in, written "C", "C major",
+      "F# minor", "Bbm" and so on (see parseKey). A loop with a key is moved
+      to the session's key when it's placed, and follows it when it changes.
+      "unpitched": true marks loops that never change key (drums). Without
+      it, loops tagged as drums or percussion count as unpitched too.
 
     Packs are read from the folder installed with the app and from the user's
     Documents/Ikaros Studio/Sounds folder.
@@ -108,8 +116,16 @@ public:
     /** Loops from the sound packs. */
     const std::vector<LibraryFile>& getLoops() const noexcept   { return loops; }
 
-    /** The tempo a loop was made at, if it's one of ours (0 if unknown). */
-    double getLoopBpm (const juce::File&) const;
+    /** The library's loop for this file, or nullptr if it isn't one of ours.
+        The pointer is only good until the next rescan. */
+    const LibraryFile* findLoop (const juce::File&) const;
+
+    /** A musical key, e.g. "C", "C major", "F# minor", "Bbm" or "a minor".
+        Returns false (and leaves root and minor alone) if it isn't one. */
+    static bool parseKey (const juce::String& text, int& root, bool& minor);
+
+    /** True if a loop with these tags is drums or percussion, which have no key. */
+    static bool soundsUnpitched (const juce::StringArray& tags);
 
     /** The sound new instrument tracks start with. */
     static const juce::String defaultSoundId;

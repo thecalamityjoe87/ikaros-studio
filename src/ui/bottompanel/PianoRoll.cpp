@@ -17,23 +17,6 @@ PianoRoll::PianoRoll (AudioEngine& e) : engine (e)
     setTitle ("Piano roll");
     setWantsKeyboardFocus (true);
 
-    auto buttonColours = IconButton::raisedColours();
-    buttonColours.border = colour::border;
-
-    for (auto* b : { &gridButton, &quantizeButton })
-    {
-        b->setColours (buttonColours);
-        b->setFont (fonts::ui (12.0f));
-        b->setCornerRadius (size::radiusSmall);
-        b->setMouseClickGrabsKeyboardFocus (false);   // keep focus here, so Delete etc. still work
-        addAndMakeVisible (b);
-    }
-
-    gridButton.setTooltip ("Where notes snap to when you draw, move or resize them");
-    gridButton.onClick = [this] { showGridMenu(); };
-    quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
-    quantizeButton.onClick = [this] { quantize(); };
-
     timeZoom.setTitle ("Zoom in time");
     timeZoom.setTooltip ("Zoom in time (Ctrl + mouse wheel)");
     timeZoom.setRange (0.0, 1.0);
@@ -62,7 +45,7 @@ PianoRoll::PianoRoll (AudioEngine& e) : engine (e)
         addAndMakeVisible (bar);
     }
 
-    setRegion (std::nullopt, colour::accent, 4.0);
+    setRegion (std::nullopt, colour::accent, TempoMap());
 }
 
 PianoRoll::~PianoRoll()
@@ -73,7 +56,7 @@ PianoRoll::~PianoRoll()
 }
 
 //==============================================================================
-void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, double bpb)
+void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, const TempoMap& t)
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
@@ -103,11 +86,11 @@ void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, double b
 
     region = std::move (r);
     colour = c;
-    beatsPerBar = bpb;
+    tempo = t;
 
     const bool editable = region.has_value() && region->isMidi;
 
-    for (auto* comp : std::initializer_list<juce::Component*> { &gridButton, &quantizeButton, &timeZoom, &noteZoom,
+    for (auto* comp : std::initializer_list<juce::Component*> { &timeZoom, &noteZoom,
                                                                 &timeScroll, &noteScroll })
         comp->setVisible (editable);
 
@@ -182,74 +165,32 @@ juce::Rectangle<float> PianoRoll::noteBounds (const NoteInfo& n) const
 // Grid
 double PianoRoll::gridBeats() const
 {
-    switch (grid)
-    {
-        case Grid::bar:          return beatsPerBar;
-        case Grid::quarter:      return 1.0;
-        case Grid::eighth:       return 0.5;
-        case Grid::sixteenth:    return 0.25;
-        case Grid::thirtySecond: return 0.125;
-        case Grid::off:          break;
-    }
+    // ikaros:: picks EditorGrid.h's gridBeats rather than this member function.
+    // As a step (a new note's length, say), a bar is as long as the one the
+    // region starts in.
+    return ikaros::gridBeats (grid, tempo.beatsPerBarAt (region.has_value() ? contentStartBeat() : 0.0));
+}
 
-    return 0.0;
+void PianoRoll::setGrid (EditorGrid newGrid)
+{
+    grid = newGrid;
+
+    // New notes get one grid step long.
+    if (gridBeats() > 0.0)
+        lastNoteLength = gridBeats();
+
+    repaint();
 }
 
 double PianoRoll::snapToGrid (double beat, bool roundDown) const
 {
-    const double g = gridBeats();
-
-    if (g <= 0.0 || ! region.has_value())
+    if (gridBeats() <= 0.0 || ! region.has_value())
         return beat;
 
     // Snap on the song's timeline, so notes line up with the arrangement's
     // bars even when the region doesn't start on a bar.
     const double absolute = contentStartBeat() + beat;
-    const double snapped = (roundDown ? std::floor (absolute / g + 1.0e-9) : std::round (absolute / g)) * g;
-    return snapped - contentStartBeat();
-}
-
-juce::String PianoRoll::gridName() const
-{
-    switch (grid)
-    {
-        case Grid::bar:          return "Bar";
-        case Grid::quarter:      return "1/4";
-        case Grid::eighth:       return "1/8";
-        case Grid::sixteenth:    return "1/16";
-        case Grid::thirtySecond: return "1/32";
-        case Grid::off:          break;
-    }
-
-    return "Off";
-}
-
-void PianoRoll::showGridMenu()
-{
-    juce::PopupMenu menu;
-    menu.addSectionHeader ("Grid (note length)");
-
-    auto add = [&] (const juce::String& name, Grid value)
-    {
-        menu.addItem (juce::PopupMenu::Item (name).setTicked (grid == value).setAction ([this, value]
-        {
-            grid = value;
-            gridButton.setText ("Grid: " + gridName());
-
-            if (gridBeats() > 0.0)
-                lastNoteLength = gridBeats();
-
-            repaint();
-        }));
-    };
-
-    add ("Bar", Grid::bar);
-    add ("1/4 (beat)", Grid::quarter);
-    add ("1/8", Grid::eighth);
-    add ("1/16", Grid::sixteenth);
-    add ("1/32", Grid::thirtySecond);
-    add ("Off", Grid::off);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&gridButton));
+    return snapToEditorGrid (grid, tempo, absolute, roundDown) - contentStartBeat();
 }
 
 //==============================================================================
@@ -543,10 +484,6 @@ void PianoRoll::resized()
 
     toolbarArea = r.removeFromTop (toolbarHeight);
     auto bar = toolbarArea.reduced (12, 6);
-    gridButton.setBounds (bar.removeFromLeft (92));
-    bar.removeFromLeft (6);
-    quantizeButton.setBounds (bar.removeFromLeft (84));
-    bar.removeFromLeft (14);
 
     noteZoom.setBounds (bar.removeFromRight (70));
     noteZoomIcon = bar.removeFromRight (20).withSizeKeepingCentre (16, 16);

@@ -489,8 +489,9 @@ static void runRecordingSection (const juce::File& dir)
         check (s.running && s.sampleRate == rate && s.bufferSize == block, "the pretend device is running");
         check (std::abs (s.inputLatencyMs - 10.0) < 0.01 && std::abs (s.outputLatencyMs - 5.0) < 0.01,
                "its input and output latency are reported");
-        check (std::abs (s.monitoringLatencyMs - 15.0) < 0.01, "the monitoring delay is input + output latency");
-        check (std::abs (s.recordingCompensationMs - 15.0) < 0.01, "and recordings are moved back by as much");
+        // Plus the 2 ms the master's limiter looks ahead (new sessions have one).
+        check (std::abs (s.monitoringLatencyMs - 17.0) < 0.01, "the monitoring delay is input + output + plug-in latency");
+        check (std::abs (s.recordingCompensationMs - 17.0) < 0.01, "and recordings are moved back by as much");
         check (s.dropouts == 0, "no dropouts yet");
     }
 
@@ -1132,6 +1133,50 @@ static void runTakesSection (const juce::File& dir)
         checkSameState (before, engine.getStateSnapshot(), "undo puts the old region back exactly");
     }
 
+    std::cout << "Recording over a reversed or transposed region\n";
+    {
+        // The audio editor's Reverse and Transpose change how a region
+        // sounds, so what it plays can't simply be kept as a take (see
+        // TakeEditor's canBecomeTake). Like a stretched loop, it's left as
+        // it was, under the new recording.
+        engine.setPositionBeats (0.0);
+        pumpMessages();
+        const auto before = engine.getStateSnapshot();
+
+        for (bool reversed : { true, false })
+        {
+            if (reversed)
+                tracks.regions().setRegionReversed (cycle, true);
+            else
+                tracks.regions().setRegionTranspose (cycle, 5);
+
+            tracks.setSelectedTrack (rec);
+            tracks.inputs().setArmed (rec, true);
+            runAudio (*device, 0.3);
+            engine.setPositionBeats (9.0);
+            engine.toggleRecord();
+            runAudio (*device, 1.0, steps (0.6f, 100.0));
+            engine.toggleRecord();
+            pumpMessages();
+
+            auto regions = regionsOn (rec);
+            std::sort (regions.begin(), regions.end(), [] (auto& a, auto& b) { return a.startBeat < b.startBeat; });
+            const auto old = tracks.regions().getRegion (cycle);
+            check (regions.size() == 2 && regions[1].id != cycle && regions[1].takeCount == 0
+                     && old && old->reversed == reversed && old->transposeSemitones == (reversed ? 0 : 5)
+                     && std::abs (old->startBeat - 8.0) < 0.01 && std::abs (old->getEndBeat() - 12.0) < 0.01,
+                   reversed ? "recording over a reversed region doesn't keep it as a take, and leaves it as it was"
+                            : "nor over a transposed one");
+
+            engine.undo();   // the recording
+            engine.undo();   // reversing or transposing
+            engine.setPositionBeats (0.0);
+            pumpMessages();
+        }
+
+        checkSameState (before, engine.getStateSnapshot(), "(undo puts the region back)");
+    }
+
     std::cout << "MIDI cycle recording\n";
     {
         tracks.setSelectedTrack (keys);
@@ -1325,6 +1370,227 @@ static void runLongRecordingSection()
 
 // The app-wide settings: the store itself (no engine needed), then what the
 // engine does with them.
+// Root-mean-square level of the first channel (or of part of it).
+static float rmsOf (const juce::AudioBuffer<float>& b, int start = 0, int num = -1)
+{
+    if (num < 0)
+        num = b.getNumSamples() - start;
+
+    return num > 0 ? b.getRMSLevel (0, start, num) : 0.0f;
+}
+
+// The built-in effects (Limiter, Noise Gate, Distortion, Tremolo), heard
+// through the pretend audio interface: a monitored audio track plays the
+// test's tone through its effects and the master's.
+static void runEffectsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    auto device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    const auto rate = device->getSettings().sampleRate;
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    std::cout << "Built-in effects\n";
+    {
+        auto available = effects.getAvailableEffects();
+        auto offered = [&] (const juce::String& name, const juce::String& group)
+        {
+            return std::any_of (available.begin(), available.end(),
+                                [&] (const EffectType& e) { return e.name == name && e.category == group && ! e.isThirdParty; });
+        };
+
+        check (offered ("Limiter", "Dynamics") && offered ("Noise Gate", "Dynamics")
+                 && offered ("Distortion", "Distortion") && offered ("Tremolo", "Modulation"),
+               "Limiter, Noise Gate, Distortion and Tremolo are in the effects menu");
+    }
+
+    std::cout << "Master limiter\n";
+    auto master = effects.getEffectChain (masterTrackId);
+    check (master.size() == 1 && master[0].name == "Limiter" && master[0].enabled, "a new session has a limiter on the master");
+
+    if (master.empty())
+        return;
+
+    const auto limiter = master[0].id;
+    {
+        auto params = effects.getEffectParameters (masterTrackId, limiter);
+        check (params.size() == 3 && params[0].name == "Gain" && params[1].name == "Ceiling" && params[2].name == "Release",
+               "it has Gain, Ceiling and Release knobs");
+        check (params.size() == 3 && params[1].valueText == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "1.0 dB",
+               "its ceiling is -1 dB");
+        check (! engine.canUndo() && ! engine.hasUnsavedChanges(), "adding it isn't an undo step or a change to save");
+    }
+
+    // A monitored audio track: what goes into Input 1 comes out through its
+    // effects and the master's.
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (! inputs.empty(), "(the pretend device has inputs)");
+
+    if (inputs.empty())
+        return;
+
+    auto t = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (t, inputs[0].id);
+    tracks.setSelectedTrack (t);
+    tracks.inputs().setArmed (t, true);
+    tracks.inputs().setMonitoring (t, true);
+    runAudio (*device, 0.3);
+
+    // Plays a tone for a moment (so the effects settle), then returns what
+    // comes out over the next `seconds`.
+    auto listen = [&] (float level, bool square = false, double seconds = 0.5)
+    {
+        runAudio (*device, 0.4, tone (*device, level, square));
+        return device->process (tone (*device, level, square) (0, (int) (rate * seconds)));
+    };
+
+    const auto quietLimited = peakOf (listen (0.25f));
+    effects.setEffectEnabled (masterTrackId, limiter, false);
+    const auto quietPlain = peakOf (listen (0.25f));
+    check (quietPlain > 0.05f && std::abs (quietLimited - quietPlain) < quietPlain * 0.01f,
+           "the limiter leaves audio under its ceiling alone");
+
+    effects.setEffectEnabled (masterTrackId, limiter, true);
+    engine.beginUndoStep ("Limiter Gain");
+    effects.setEffectParameter (masterTrackId, limiter, 0, 1.0f);   // +12 dB into it
+    const auto loud = peakOf (listen (1.0f, true));
+    std::cout << "    (a full-scale square, 12 dB up, peaks at " << loud << ")\n";
+    // The master fader comes after the master's effects (it starts at -3 dB).
+    const auto ceiling = juce::Decibels::decibelsToGain (-1.0f + tracks.getMasterVolumeDb());
+    check (loud <= ceiling * 1.001f && loud > ceiling * 0.95f, "a loud signal is held at the -1 dB ceiling");
+    engine.undo();
+    check (effects.getEffectParameters (masterTrackId, limiter)[0].value == 0.0f, "undo turns its gain back down");
+
+    std::cout << "Noise gate\n";
+    {
+        const float hiss = juce::Decibels::decibelsToGain (-70.0f);
+        const auto hissPlain = peakOf (listen (hiss));
+
+        check (! effects.getNoiseGate (t).exists, "a track starts without a noise gate");
+        check (effects.setNoiseGateOn (t, true), "the inspector can turn one on");
+        auto gate = effects.getNoiseGate (t);
+        auto chain = effects.getEffectChain (t);
+        check (gate.exists && gate.on && ! chain.empty() && chain[0].name == "Noise Gate" && chain[0].id == gate.pluginId,
+               "which adds a Noise Gate at the top of the chain");
+
+        const auto hissGated = peakOf (listen (hiss));
+        std::cout << "    (-70 dB hiss peaks at " << hissPlain << " without the gate, " << hissGated << " with it)\n";
+        check (hissGated < hissPlain * 0.1f, "it silences sound under its threshold");
+        check (std::abs (peakOf (listen (0.25f)) - quietPlain) < quietPlain * 0.05f, "and lets louder sound through");
+
+        engine.beginUndoStep ("Noise Gate Threshold");
+        effects.setNoiseGateThreshold (t, 0.0f);   // -80 dB
+        check (peakOf (listen (hiss)) > hissPlain * 0.5f, "a lower threshold lets quieter sound through");
+        engine.undo();
+        check (effects.getNoiseGate (t).thresholdText == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "50.0 dB",
+               "undo puts the threshold back");
+
+        effects.setNoiseGateOn (t, false);
+        gate = effects.getNoiseGate (t);
+        check (gate.exists && ! gate.on && effects.getEffectChain (t).size() == 1, "turning it off bypasses it (it stays in the chain)");
+        check (peakOf (listen (hiss)) > hissPlain * 0.5f, "and the quiet sound comes back");
+        engine.undo();
+        check (effects.getNoiseGate (t).on, "undo turns it back on");
+        effects.removeEffect (t, gate.pluginId);
+    }
+
+    std::cout << "Distortion\n";
+    {
+        // A sine's peak is 1.41x its RMS; saturation flattens the peaks.
+        const auto plain = listen (0.25f);
+        const auto distortion = effects.addEffect (t, "ikarosDistortion");
+        auto params = effects.getEffectParameters (t, distortion);
+        check (params.size() == 3 && params[0].name == "Drive" && params[1].name == "Tone" && params[2].name == "Output",
+               "it has Drive, Tone and Output knobs");
+
+        const auto driven = listen (0.25f);
+        const auto crestPlain = peakOf (plain) / rmsOf (plain), crestDriven = peakOf (driven) / rmsOf (driven);
+        std::cout << "    (peak/RMS " << crestPlain << " clean, " << crestDriven << " driven; peak "
+                  << peakOf (plain) << " -> " << peakOf (driven) << ")\n";
+        check (crestDriven < crestPlain - 0.1f, "it changes the shape of the sound");
+        check (peakOf (driven) > peakOf (plain) * 0.5f && peakOf (driven) < peakOf (plain) * 2.5f,
+               "without making it much louder or quieter");
+        effects.removeEffect (t, distortion);
+    }
+
+    std::cout << "Tremolo\n";
+    {
+        const auto tremolo = effects.addEffect (t, "ikarosTremolo");
+        auto params = effects.getEffectParameters (t, tremolo);
+        check (params.size() == 3 && params[0].name == "Rate" && params[0].valueText == "5.0 Hz"
+                 && params[1].name == "Depth" && params[2].name == "Shape",
+               "it has Rate, Depth and Shape knobs (5 Hz to start with)");
+
+        // The level in 10 ms slices over a second (five pulses).
+        const auto heard = listen (0.25f, false, 1.0);
+        const int slice = (int) (rate * 0.01);
+        float lowest = 1.0f, highest = 0.0f;
+
+        for (int start = 0; start + slice <= heard.getNumSamples(); start += slice)
+        {
+            lowest = juce::jmin (lowest, rmsOf (heard, start, slice));
+            highest = juce::jmax (highest, rmsOf (heard, start, slice));
+        }
+
+        std::cout << "    (level swings " << lowest << " to " << highest << ")\n";
+        check (highest > lowest * 1.6f && highest < lowest * 2.5f, "the level pulses (down by about half at 50% depth)");
+        effects.removeEffect (t, tremolo);
+    }
+
+    std::cout << "Saving effect settings\n";
+    {
+        const auto distortion = effects.addEffect (t, "ikarosDistortion");
+        const auto tremolo = effects.addEffect (t, "ikarosTremolo");
+        effects.addEffect (t, "ikarosLimiter");
+        effects.setNoiseGateOn (t, true);
+        engine.beginUndoStep ("Drive");
+        effects.setEffectParameter (t, distortion, 0, 0.8f);
+        engine.beginUndoStep ("Rate");
+        effects.setEffectParameter (t, tremolo, 0, 1.0f);
+        engine.beginUndoStep ("Noise Gate Threshold");
+        effects.setNoiseGateThreshold (t, 0.25f);
+        pumpMessages();
+
+        auto session = dir.getChildFile ("Effects");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+
+        t = tracks.getTracks().back().id;
+        auto chain = effects.getEffectChain (t);
+        check (chain.size() == 4 && chain[0].name == "Noise Gate" && chain[1].name == "Distortion"
+                 && chain[2].name == "Tremolo" && chain[3].name == "Limiter",
+               "the new effects survive save and reopen");
+
+        if (chain.size() == 4)
+        {
+            check (std::abs (effects.getEffectParameters (t, chain[1].id)[0].value - 0.8f) < 0.01f
+                     && effects.getEffectParameters (t, chain[2].id)[0].valueText == "15 Hz"
+                     && std::abs (effects.getNoiseGate (t).threshold - 0.25f) < 0.01f,
+                   "and so do their settings");
+        }
+
+        check (effects.getEffectChain (masterTrackId).size() == 1, "and the master limiter");
+
+        // Sessions from before the default limiter don't get one when they open.
+        effects.removeEffect (masterTrackId, effects.getEffectChain (masterTrackId)[0].id);
+        check (engine.saveSession(), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        check (effects.getEffectChain (masterTrackId).empty(), "a session saved without a master limiter opens without one");
+
+        engine.newSession ({ SessionTemplate::voice, 120.0, 4, 4, 0, false });
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        master = effects.getEffectChain (masterTrackId);
+        check (master.size() == 1 && master[0].name == "Limiter", "every new session (from any template) starts with one");
+        check (! engine.canUndo(), "(and it's not an undo step there either)");
+    }
+
+    device.reset();
+}
+
 static void runPreferencesSection (const juce::File& dir)
 {
     auto folder = dir.getChildFile ("Preferences");
@@ -1708,6 +1974,378 @@ static void runPreferencesSection (const juce::File& dir)
                  && engine.getTransportState().countIn,
                "the engine's settings are there next time (and the count-in is on)");
         engine.getPreferences().resetAll();
+    }
+}
+
+//==============================================================================
+// Tempo and time-signature changes (the tempo lane).
+static void runTempoSection (const juce::File& dir)
+{
+    std::cout << "Tempo map\n";
+    {
+        const TempoMap map ({ { 0.0, 120.0 }, { 16.0, 90.0 } }, { { 0.0, 0, 4, 4 }, { 16.0, 0, 3, 4 } });
+        check (map.getTimeSignatureChanges()[1].bar == 4, "a 3/4 change at beat 16 starts the 5th bar");
+        check (map.barToBeat (6) == 22.0 && map.barAt (21.9) == 5 && map.barAt (22.0) == 6 && map.beatsPerBarAt (20.0) == 3.0,
+               "bars after it are 3 beats long");
+        check (map.nearestBarLine (17.4) == 16.0 && map.nearestBarLine (17.6) == 19.0 && map.nearestBar (17.6) == 5,
+               "the nearest bar line");
+        check (map.tempoAt (15.9).bpm == 120.0 && map.tempoAt (16.0).bpm == 90.0, "the tempo in effect at a beat");
+
+        int bars = 0;
+        map.forEachBar (0.0, 22.0, 1, [&] (int, double) { ++bars; });
+        check (bars == 7, "every bar line is visited");
+
+        const TempoMap odd ({}, { { 0.0, 0, 4, 4 }, { 18.0, 0, 3, 4 } });
+        check (odd.getTimeSignatureChanges()[1].beat == 20.0 && odd.getTimeSignatureChanges()[1].bar == 5,
+               "a time signature off a bar line starts at the next one, as in Tracktion");
+    }
+
+    AudioEngine engine { testSettings };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+
+    const auto midi = tracks.getTracks().front().id;
+    const auto audio = tracks.addAudioTrack();
+    engine.setBpm (120.0);              // 2 beats a second
+
+    // A chord region at bar 9, a loop (auto-tempo) at bar 5 and a plain
+    // 2-second file (a recording, as far as tempo goes) at bar 13.
+    const auto chords = regions.createChordRegion (midi, 32.0);
+    std::optional<LibraryFile> loop;
+
+    for (auto& l : engine.getSounds().getLoops())
+        if (l.name == "Glass Chords")
+            loop = l;
+
+    const auto plainFile = dir.getChildFile ("Two Seconds.wav");
+    writeClickWav (plainFile, 44100.0, 2.0, { 0.0 }, 0.5f);
+    check (loop.has_value(), "(the bundled loop is there)");
+
+    if (loop)
+        regions.importAudioFiles (audio, { loop->file.getFullPathName() }, 16.0);
+
+    regions.importAudioFiles (audio, { plainFile.getFullPathName() }, 48.0);
+    pumpMessages();
+
+    auto regionAt = [&] (TrackId track, double startBeat) -> std::optional<RegionInfo>
+    {
+        for (auto& r : regions.getRegions (track))
+            if (std::abs (r.startBeat - startBeat) < 0.001)
+                return r;
+
+        return std::nullopt;
+    };
+
+    auto secondsAt = [&] (double beat)
+    {
+        engine.setPositionBeats (beat);
+        return engine.getTransportState().positionSeconds;
+    };
+
+    const auto loopBeats = loop ? regionAt (audio, 16.0)->lengthBeats : 0.0;
+    check (std::abs (regionAt (audio, 48.0).value_or (RegionInfo {}).lengthBeats - 4.0) < 0.01, "(the 2-second file is 4 beats long at 120 BPM)");
+
+    std::cout << "Tempo changes\n";
+    checkUndoRoundTrip (engine, "Add Tempo Change", [&] { engine.addTempoChange (2, 60.0); });   // from bar 3 (beat 8)
+    {
+        const auto map = engine.getTempoMap();
+        check (map.getTempoChanges().size() == 2 && map.getTempoChanges()[1].beat == 8.0 && map.getTempoChanges()[1].bpm == 60.0,
+               "a tempo change goes on its bar line");
+        check (std::abs (secondsAt (10.0) - 6.0) < 1.0e-6, "beat 10 is 6 seconds in (4 at 120 BPM, then 2 at 60)");
+        check (engine.getTransportState().bpm == 60.0, "the LCD shows the tempo at the playhead");
+        check (secondsAt (4.0) >= 0.0 && engine.getTransportState().bpm == 120.0, "...before the change too");
+
+        auto chordRegion = regions.getRegion (chords);
+        check (chordRegion && chordRegion->startBeat == 32.0 && chordRegion->lengthBeats == 16.0,
+               "MIDI regions stay on their beats");
+        check (! loop || std::abs (regionAt (audio, 16.0).value_or (RegionInfo {}).lengthBeats - loopBeats) < 0.01,
+               "loops stay on their beats and follow the new tempo (the same length in beats)");
+        check (std::abs (regionAt (audio, 48.0).value_or (RegionInfo {}).lengthBeats - 2.0) < 0.01,
+               "a recording keeps its length in seconds (2 beats at 60 BPM)");
+    }
+
+    checkUndoRoundTrip (engine, "Tempo Change", [&]
+    {
+        engine.beginUndoStep ("Tempo Change");   // as the tempo lane does when a drag starts
+        engine.setTempoChange (1, 12.0, 90.0);
+    });
+    check (! engine.setTempoChange (1, 0.0, 90.0) && engine.getTempoMap().getTempoChanges()[1].beat == 12.0,
+           "a tempo change can't be moved onto or past its neighbour");
+
+    engine.setPositionBeats (20.0);
+    checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (100.0); });
+    check (engine.getTempoMap().getTempoChanges()[0].bpm == 120.0 && engine.getTempoMap().getTempoChanges()[1].bpm == 100.0,
+           "the LCD's tempo changes the tempo change at the playhead");
+    checkUndoRoundTrip (engine, "Delete Tempo Change", [&] { engine.removeTempoChange (1); });
+    check (engine.getTempoMap().getTempoChanges().size() == 1 && std::abs (secondsAt (10.0) - 5.0) < 1.0e-6,
+           "deleting it puts the song back to one tempo");
+
+    std::cout << "Time-signature changes\n";
+    engine.addTempoChange (8, 100.0);   // bar 9 (beat 32)
+    checkUndoRoundTrip (engine, "Add Time Signature Change", [&] { engine.addTimeSignatureChange (4, 3, 4); });
+    {
+        const auto map = engine.getTempoMap();
+        check (map.getTimeSignatureChanges().size() == 2 && map.getTimeSignatureChanges()[1].beat == 16.0 && map.barToBeat (8) == 28.0,
+               "a 3/4 change from bar 5 makes later bars 3 beats long");
+        check (map.getTempoChanges()[1].beat == 32.0 && regions.getRegion (chords)->startBeat == 32.0,
+               "tempo changes and regions stay on their beats");
+
+        engine.setPositionBeats (17.0);
+        const auto t = engine.getTransportState();
+        check (t.timeSigNumerator == 3 && t.timeSigDenominator == 4 && t.bar == 5 && t.beat == 2,
+               "the LCD shows the time signature, bar and beat at the playhead");
+    }
+
+    engine.addTimeSignatureChange (8, 4, 4);   // bar 9 (beat 28)
+    checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignatureChange (1, 2, 4); });
+    check (engine.getTempoMap().getTimeSignatureChanges()[2].bar == 8 && engine.getTempoMap().getTimeSignatureChanges()[2].beat == 24.0,
+           "a later time-signature change stays on its bar when earlier bars get shorter");
+
+    {
+        const double before = secondsAt (60.0), beforeLoop = secondsAt (16.0);
+        const auto temposBefore = engine.getTempoMap().getTempoChanges();
+        checkUndoRoundTrip (engine, "Add Time Signature Change", [&] { engine.addTimeSignatureChange (10, 6, 8); });
+        check (std::abs (secondsAt (60.0) - before) < 1.0e-6 && std::abs (secondsAt (16.0) - beforeLoop) < 1.0e-6,
+               "a 6/8 change doesn't change when anything plays");
+        check (engine.getTempoMap().getTempoChanges() == temposBefore, "...nor the tempo the lane shows");
+
+        engine.setPositionBeats (engine.getTempoMap().barToBeat (10) + 1.0);
+        check (engine.getTransportState().bpm == 100.0 && engine.getTransportState().timeSigDenominator == 8,
+               "the LCD's tempo counts the eighth notes in 6/8");
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Tempo"));
+        check (engine.getTempoMap().getTempoChanges() == temposBefore && engine.getTempoMap().getTimeSignatureChanges().size() == 4,
+               "tempo and time-signature changes are saved");
+
+        const int sixEight = engine.getTempoMap().indexOfSignatureAt (engine.getTempoMap().barToBeat (10));
+        checkUndoRoundTrip (engine, "Delete Time Signature Change", [&] { engine.removeTimeSignatureChange (sixEight); });
+        check (std::abs (secondsAt (60.0) - before) < 1.0e-6 && engine.getTempoMap().getTempoChanges() == temposBefore,
+               "deleting it doesn't change when anything plays either");
+    }
+
+    std::cout << "Count-in\n";
+    {
+        // A bar of the time signature where recording starts (Tracktion only
+        // looked at the first one until external/patches/tracktion-count-in-time-signature.patch).
+        const auto map = engine.getTempoMap();
+        engine.setCountInBars (1);
+        const auto at = [&] (double beat) { return engine.getCountInBeatsAt (beat); };
+        // 4/4, then 2/4 from bar 5 and 4/4 again from bar 9 (see above).
+        check (at (0.0) == 4 && at (map.barToBeat (4)) == 2 && at (map.barToBeat (6)) == 2 && at (map.barToBeat (8)) == 4,
+               "the count-in is a bar of the time signature where recording starts");
+        engine.setCountInBars (0);
+    }
+
+    std::cout << "Chord regions and the loop range follow the bars\n";
+    {
+        const auto map = engine.getTempoMap();   // 4/4, 3/4 from bar 5, 2/4 from bar 6... (see above)
+        const auto id = regions.createChordRegion (midi, map.barToBeat (5) + 0.5);
+        auto r = regions.getRegion (id);
+        check (r && r->startBeat == map.barToBeat (5) && std::abs (r->lengthBeats - (map.barToBeat (9) - map.barToBeat (5))) < 1.0e-6,
+               "a chord region starts on its bar and is 4 bars long, whatever their lengths");
+    }
+}
+
+//==============================================================================
+// Arrangement markers: sections of the song, and moving, copying and
+// deleting what's inside them on every track.
+static void runSectionsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& sections = tracks.sections();
+    auto& automation = tracks.automation();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);   // 4/4, so a bar is 4 beats
+
+    const auto midi = tracks.getTracks().front().id;
+    const auto audio = tracks.addAudioTrack();
+    check (sections.getSections().empty(), "a new session has no sections");
+
+    auto sectionAt = [&] (double startBeat) -> std::optional<SectionInfo>
+    {
+        for (auto& s : sections.getSections())
+            if (std::abs (s.startBeat - startBeat) < 1.0e-6)
+                return s;
+
+        return std::nullopt;
+    };
+
+    auto regionStarts = [&] (TrackId track)
+    {
+        std::vector<std::pair<double, double>> result;   // start and end, in song order
+
+        for (auto& r : regions.getRegions (track))
+            result.push_back ({ std::round (r.startBeat * 1000.0) / 1000.0, std::round ((r.startBeat + r.lengthBeats) * 1000.0) / 1000.0 });
+
+        std::sort (result.begin(), result.end());
+        return result;
+    };
+
+    auto samePan = [&] (std::vector<AutomationPoint> expected)
+    {
+        const auto points = automation.getPoints (midi, automationTargets::pan);
+        bool same = points.size() == expected.size();
+
+        for (size_t i = 0; same && i < points.size(); ++i)
+            same = std::abs (points[i].beat - expected[i].beat) < 1.0e-4 && std::abs (points[i].value - expected[i].value) < 1.0e-4f;
+
+        if (! same)
+            for (auto& p : points)
+                std::cout << "         (" << p.beat << ", " << p.value << ")\n";
+
+        return same;
+    };
+
+    // The pan curve's value at a beat, as it plays (straight lines between
+    // points), and the shape it's given below.
+    auto panAt = [&] (double beat)
+    {
+        const auto points = automation.getPoints (midi, automationTargets::pan);
+
+        for (size_t i = 1; i < points.size(); ++i)
+            if (beat < points[i].beat)
+                return (float) juce::jmap (beat, points[i - 1].beat, points[i].beat, (double) points[i - 1].value, (double) points[i].value);
+
+        return points.back().value;
+    };
+
+    auto originalPan = [] (double beat)
+    {
+        return (float) (beat < 20.0 ? 0.2 + 0.03 * beat : beat < 40.0 ? 0.8 - 0.02 * (beat - 20.0) : 0.4);
+    };
+
+    auto panFollows = [&] (std::function<double (double)> originalBeatOf)
+    {
+        for (double beat = 0.5; beat < 80.0; beat += 1.0)
+            if (std::abs (panAt (beat) - originalPan (originalBeatOf (beat))) > 1.0e-4f)
+                return false;
+
+        return true;
+    };
+
+    std::cout << "Adding sections\n";
+    SectionId a = 0, b = 0, c = 0;
+    checkUndoRoundTrip (engine, "Add Section", [&] { c = sections.addSection (8); });
+    c = sectionAt (32.0).value_or (SectionInfo {}).id;
+    check (c != 0 && sectionAt (32.0)->endBeat == 64.0, "a section starts on its bar and is 8 bars long");
+    b = sections.addSection (4);
+    a = sections.addSection (0);
+    check (sectionAt (16.0) && sectionAt (16.0)->endBeat == 32.0 && sectionAt (0.0) && sectionAt (0.0)->endBeat == 16.0,
+           "...unless the next section starts sooner");
+    check (sections.addSection (5) == 0 && sections.getSections().size() == 3, "no section starts inside another");
+    check (sectionAt (0.0)->name != sectionAt (16.0)->name && sectionAt (0.0)->colour != sectionAt (16.0)->colour,
+           "new sections get names and colors of their own");
+
+    checkUndoRoundTrip (engine, "Rename Section", [&] { sections.renameSection (b, "Chorus 1"); });
+    check (sections.getSection (b)->name == "Chorus 1", "a section can be renamed");
+    checkUndoRoundTrip (engine, "Section Color", [&] { sections.setSectionColour (b, SectionEditor::getSectionColours()[3]); });
+    check (sections.getSection (b)->colour == SectionEditor::getSectionColours()[3], "a section can be recolored");
+
+    checkUndoRoundTrip (engine, "Resize Section", [&]
+    {
+        engine.beginUndoStep ("Resize Section");
+        sections.setSectionRange (c, 32.0, 56.0);
+        sections.setSectionRange (c, 32.0, 64.0 + 8.0);   // a drag: only where it ends up counts
+    });
+    check (sections.getSection (c)->endBeat == 72.0, "a section can be resized");
+    check (! sections.setSectionRange (c, 28.0, 72.0) && sections.getSection (c)->startBeat == 32.0, "sections can't overlap");
+    engine.beginUndoStep ("Resize Section");
+    sections.setSectionRange (c, 32.0, 64.0);
+
+    // The music: 4 bars of chords in A [0, 16) and B [16, 32), a 2-second
+    // (4-beat) file from beat 30 (across the B/C boundary at 32), and pan
+    // automation running through all three.
+    regions.createChordRegion (midi, 0.0);
+    const auto chordsB = regions.createChordRegion (midi, 16.0);
+    const auto plainFile = dir.getChildFile ("Section Clip.wav");
+    writeClickWav (plainFile, 44100.0, 2.0, { 0.0 }, 0.5f);
+    regions.importAudioFiles (audio, { plainFile.getFullPathName() }, 30.0);
+    automation.setPoints (midi, automationTargets::pan, { { 0.0, 0.2f }, { 20.0, 0.8f }, { 40.0, 0.4f } });
+    pumpMessages();
+    check (regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 34.0 } }, "(the file is 4 beats long)");
+
+    std::cout << "Moving a section\n";
+    check (! sections.canMoveSectionTo (b, 40.0, false) && ! sections.canMoveSectionTo (b, 16.0, false)
+            && sections.canMoveSectionTo (b, 16.0, true) && sections.canMoveSectionTo (b, 64.0, false),
+           "a section goes between sections (not inside one, or where it is)");
+    check (! sections.moveSection (b, 40.0, false), "...and nowhere else");
+
+    checkUndoRoundTrip (engine, "Move Section", [&] { sections.moveSection (b, 64.0, false); });
+    check (sections.getSection (b)->startBeat == 48.0 && sections.getSection (b)->endBeat == 64.0
+            && sections.getSection (c)->startBeat == 16.0 && sections.getSection (c)->endBeat == 48.0
+            && sections.getSection (a)->startBeat == 0.0,
+           "moved right, it ends where it's dropped and the section after it slides left");
+    check (regions.getRegion (chordsB) && regions.getRegion (chordsB)->startBeat == 48.0
+            && regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 48.0, 64.0 } },
+           "its regions go with it");
+    check (regionStarts (audio) == std::vector<std::pair<double, double>> { { 16.0, 18.0 }, { 62.0, 64.0 } },
+           "a region across its edge is split there, and each part goes with its section");
+
+    // Pan was 0.2 at 0 rising to 0.8 at 20, then falling to 0.4 at 40: 0.68
+    // at 16 and 0.56 at 32. Each section's part keeps its shape, and the
+    // curve jumps where parts that didn't belong together now meet.
+    check (samePan ({ { 0.0, 0.2f }, { 16.0, 0.68f }, { 16.0, 0.56f }, { 24.0, 0.4f }, { 48.0, 0.4f },
+                      { 48.0, 0.68f }, { 52.0, 0.8f }, { 64.0, 0.56f }, { 64.0, 0.4f } }),
+           "automation goes with its section");
+
+    // Back the other way: B to the start of C, so the song is as it was
+    // (the split file stays split).
+    checkUndoRoundTrip (engine, "Move Section", [&] { sections.moveSection (b, 16.0, false); });
+    check (sections.getSection (b)->startBeat == 16.0 && sections.getSection (c)->startBeat == 32.0,
+           "moved left, it starts where it's dropped");
+    check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 } }
+            && regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 32.0 }, { 32.0, 34.0 } },
+           "regions go back to where they were");
+    check (panFollows ([] (double beat) { return beat; }), "so does the automation");
+
+    std::cout << "Copying a section\n";
+    checkUndoRoundTrip (engine, "Copy Section", [&] { sections.moveSection (a, 16.0, true); });
+    {
+        const auto copy = sectionAt (16.0);
+        check (sections.getSections().size() == 4 && copy && copy->id != a && copy->name == sections.getSection (a)->name
+                && copy->endBeat == 32.0 && sections.getSection (a)->startBeat == 0.0,
+               "a copy goes in where it's dropped, and the original stays");
+        check (sections.getSection (b)->startBeat == 32.0 && sections.getSection (c)->startBeat == 48.0,
+               "everything after it moves later");
+        check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 }, { 32.0, 48.0 } }
+                && regionStarts (audio) == std::vector<std::pair<double, double>> { { 46.0, 48.0 }, { 48.0, 50.0 } },
+               "its regions are copied, and later ones move");
+        check (panFollows ([] (double beat) { return beat < 16.0 ? beat : beat - 16.0; }), "automation too");
+    }
+
+    std::cout << "Deleting a section\n";
+    checkUndoRoundTrip (engine, "Delete Section", [&] { sections.deleteSection (sectionAt (16.0)->id); });
+    check (sections.getSections().size() == 3 && sections.getSection (b)->startBeat == 16.0 && sections.getSection (c)->startBeat == 32.0,
+           "deleting a section closes the gap");
+    check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 } }
+            && regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 32.0 }, { 32.0, 34.0 } },
+           "...and takes its regions with it");
+    check (panFollows ([] (double beat) { return beat; }), "...and its automation");
+
+    checkUndoRoundTrip (engine, "Remove Section Marker", [&] { sections.removeSectionMarker (a); });
+    check (sections.getSections().size() == 2 && regionStarts (midi).size() == 2, "a marker can go without its music");
+    engine.undo();
+    pumpMessages();
+
+    std::cout << "Saving sections\n";
+    {
+        const auto before = sections.getSections();
+        checkSaveAndReopen (engine, dir.getChildFile ("Sections"));
+        const auto after = engine.getTracks().sections().getSections();
+        bool same = before.size() == after.size();
+
+        for (size_t i = 0; same && i < before.size(); ++i)
+            same = before[i].id == after[i].id && before[i].name == after[i].name && before[i].colour == after[i].colour
+                    && before[i].startBeat == after[i].startBeat && before[i].endBeat == after[i].endBeat;
+
+        check (same, "sections are saved with the session");
     }
 }
 
@@ -2518,7 +3156,8 @@ int main (int argc, char* argv[])
             check (eq.getEq (t1).bands[3].gainDb == 0.0f, "separate from the tracks'");
             auto masterReverb = tracks.effects().addEffect (masterTrackId, "reverb");
             pumpMessages();
-            check (masterReverb != 0 && tracks.effects().getEffectChain (masterTrackId).size() == 1,
+            // (New sessions start with a limiter on the master.)
+            check (masterReverb != 0 && tracks.effects().getEffectChain (masterTrackId).size() == 2,
                    "the master can have effects");
             check (tracks.effects().getEffectChain (0).empty() && eq.getEq (0).bands[3].gainDb == 0.0f,
                    "\"no track\" (0) never touches the master");
@@ -2581,7 +3220,7 @@ int main (int argc, char* argv[])
             check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f
                      && std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f,
                    "track and master EQ survive save and reopen");
-            check (tracks.effects().getEffectChain (masterTrackId).size() == 1, "and so do master effects");
+            check (tracks.effects().getEffectChain (masterTrackId).size() == 2, "and so do master effects");
         }
 
         std::cout << "Audio inputs\n";
@@ -3974,6 +4613,114 @@ int main (int argc, char* argv[])
         }
         checkSaveAndReopen (engine, undoSession);
 
+        std::cout << "-- Audio region editor\n";
+        {
+            // A one-second tone that swells up from silence, so its two ends
+            // look different. At 120 bpm it's 2 beats long.
+            const auto rampFile = dir.getChildFile ("Undo Ramp.wav");
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::OutputStream> stream (rampFile.createOutputStream().release());
+                auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                            .withNumChannels (1)
+                                                                                            .withBitsPerSample (16));
+                juce::AudioBuffer<float> buffer (1, 44100);
+
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    buffer.setSample (0, i, 0.8f * (float) i / 44100.0f * std::sin ((float) i * 0.05f));
+
+                check (writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()), "(test audio written)");
+            }
+
+            const auto added = regions.importAudioFiles (audio, { rampFile.getFullPathName() }, 8.0);
+            pumpMessages();
+            const RegionId ramp = added.empty() ? 0 : added.front();
+
+            // The editor's waveform is read on a background thread: ask until it's there.
+            auto waveform = [&] (RegionId id, double from, double to, int columns)
+            {
+                std::vector<WaveformRange> result;
+
+                for (int tries = 0; tries < 300 && ! regions.getWaveform (id, from, to, columns, result); ++tries)
+                    juce::Thread::sleep (10);
+
+                return result;
+            };
+
+            auto loudness = [] (const std::vector<WaveformRange>& w, size_t i) { return i < w.size() ? w[i].max - w[i].min : -1.0f; };
+
+            const auto forwards = waveform (ramp, 8.0, 10.0, 8);
+            check (forwards.size() == 8 && loudness (forwards, 0) < loudness (forwards, 7) * 0.3f,
+                   "the audio editor's waveform shows the recording (here, swelling up)");
+            const auto past = waveform (ramp, 10.0, 12.0, 4);
+            check (past.size() == 4 && loudness (past, 1) == 0.0f, "past the end of the recording it's silent");
+
+            checkUndoRoundTrip (engine, "Region Gain", [&] { engine.beginUndoStep ("Region Gain"); regions.setRegionGain (ramp, -6.0f); });
+            checkUndoRoundTrip (engine, "Reverse Region", [&] { regions.setRegionReversed (ramp, true); });
+            checkUndoRoundTrip (engine, "Transpose Region", [&] { regions.setRegionTranspose (ramp, 3); });
+
+            auto info = regions.getRegion (ramp);
+            check (info && std::abs (info->gainDb + 6.0f) < 0.01f && info->reversed && info->transposeSemitones == 3,
+                   "the region keeps its gain, direction and pitch");
+            check (info && info->peaks.size() > 2 && info->peaks.front() > info->peaks.back(),
+                   "reversed, its waveform in the arrangement fades away instead");
+
+            const auto backwards = waveform (ramp, 8.0, 10.0, 8);
+            check (backwards.size() == 8 && loudness (backwards, 7) < loudness (backwards, 0) * 0.3f,
+                   "and so does the editor's");
+            check (std::abs (loudness (backwards, 0) - loudness (forwards, 7) * 0.5f) < 0.05f,
+                   "the waveform shows the region's gain (-6 dB is about half)");
+
+            regions.setRegionTranspose (ramp, 99);
+            pumpMessages();
+            check (regions.getRegion (ramp)->transposeSemitones == RegionEditor::maxTransposeSemitones, "transpose stops at two octaves");
+            engine.undo();
+            pumpMessages();
+
+            const auto halves = regions.splitRegions ({ ramp }, 9.0);
+            pumpMessages();
+            const auto right = halves.empty() ? std::nullopt : regions.getRegion (halves.front());
+            check (right && right->reversed && right->transposeSemitones == 3 && std::abs (right->gainDb + 6.0f) < 0.01f,
+                   "both halves of a split keep them");
+            engine.undo();
+            pumpMessages();
+
+            // A loop that follows the session key keeps doing so, on top of the transpose.
+            for (auto& loop : engine.getSounds().getLoops())
+            {
+                if (loop.name != "Glass Chords")
+                    continue;
+
+                const auto loopAdded = regions.importAudioFiles (audio, { loop.file.getFullPathName() }, 16.0);
+                pumpMessages();
+                const RegionId chords = loopAdded.empty() ? 0 : loopAdded.front();
+                check (chords != 0, "(loop placed)");
+
+                if (chords == 0)
+                    break;
+
+                const auto shiftBefore = regions.getRegion (chords)->keyShiftSemitones;
+
+                checkUndoRoundTrip (engine, "Transpose Region", [&] { regions.setRegionTranspose (chords, -12); });
+                auto loopInfo = regions.getRegion (chords);
+                check (loopInfo && loopInfo->followsKey && loopInfo->transposeSemitones == -12 && loopInfo->keyShiftSemitones == shiftBefore,
+                       "a transposed loop still follows the key");
+
+                engine.setKey (4, false);   // E major: C major loops go up 4
+                pumpMessages();
+                loopInfo = regions.getRegion (chords);
+                check (loopInfo && loopInfo->transposeSemitones == -12 && loopInfo->keyShiftSemitones == 4,
+                       "and changing the key keeps its transpose");
+                engine.undo();
+                pumpMessages();
+            }
+
+            checkSaveAndReopen (engine, undoSession);
+            info = regions.getRegion (ramp);
+            check (info && std::abs (info->gainDb + 6.0f) < 0.01f && info->reversed && info->transposeSemitones == 3,
+                   "the region's gain, direction and pitch are saved");
+        }
+
         std::cout << "-- Notes\n";
         checkUndoRoundTrip (engine, "Add Note", [&] { notes.addNote (r, { 72, 0.5, 0.25, 90 }); });
         checkUndoRoundTrip (engine, "Move Note", [&]
@@ -4006,6 +4753,17 @@ int main (int argc, char* argv[])
         checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t1, fx, false); });
         checkUndoRoundTrip (engine, "Reverb Mix", [&] { engine.beginUndoStep ("Reverb Mix"); effects.setEffectParameter (t1, fx, 0, 0.9f); });
         checkUndoRoundTrip (engine, "Remove Effect", [&] { effects.removeEffect (t1, fx2); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx2 = effects.addEffect (t1, "ikarosDistortion"); });
+        checkUndoRoundTrip (engine, "Drive", [&] { engine.beginUndoStep ("Drive"); effects.setEffectParameter (t1, fx2, 0, 0.9f); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { effects.addEffect (t1, "ikarosTremolo"); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { effects.addEffect (t1, "ikarosLimiter"); });
+        checkUndoRoundTrip (engine, "Turn Noise Gate On", [&] { effects.setNoiseGateOn (t1, true); });
+        checkUndoRoundTrip (engine, "Noise Gate Threshold", [&]
+        {
+            engine.beginUndoStep ("Noise Gate Threshold");
+            effects.setNoiseGateThreshold (t1, 0.7f);
+        });
+        checkUndoRoundTrip (engine, "Turn Noise Gate Off", [&] { effects.setNoiseGateOn (t1, false); });
         checkUndoRoundTrip (engine, "EQ", [&] { engine.beginUndoStep ("EQ"); tracks.eq().setBand (t1, 1, 800.0f, 6.0f, 1.0f); });
         checkUndoRoundTrip (engine, "Turn EQ Off", [&] { tracks.eq().setEnabled (t1, false); });
         checkUndoRoundTrip (engine, "Reset EQ", [&] { tracks.eq().reset (t1); });
@@ -4024,8 +4782,107 @@ int main (int argc, char* argv[])
         engine.redo();
         checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (96.0); });
         checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignature (3, 4); });
+
+        std::cout << "-- Loops follow the song key\n";
+        {
+            int root = -1;
+            bool minor = false;
+            check (SoundLibrary::parseKey ("F# minor", root, minor) && root == 6 && minor
+                     && SoundLibrary::parseKey ("Bbm", root, minor) && root == 10 && minor
+                     && SoundLibrary::parseKey ("c", root, minor) && root == 0 && ! minor
+                     && SoundLibrary::parseKey ("Eb maj", root, minor) && root == 3 && ! minor
+                     && ! SoundLibrary::parseKey ("H", root, minor) && ! SoundLibrary::parseKey ("C dorian", root, minor),
+                   "loop keys are read the ways packs and Freesound write them");
+
+            auto findLoop = [&] (const juce::String& name) -> std::optional<LibraryFile>
+            {
+                for (auto& l : engine.getSounds().getLoops())
+                    if (l.name == name)
+                        return l;
+
+                return std::nullopt;
+            };
+
+            const auto chords = findLoop ("Glass Chords"), bass = findLoop ("Pluck Bass"), beat = findLoop ("Electro Beat");
+            check (chords && chords->keyRoot == 0 && ! chords->keyMinor && bass && bass->keyRoot == 0 && bass->keyMinor
+                     && beat && beat->unpitched && beat->keyRoot < 0,
+                   "the bundled loops know their keys, and the drum loops are unpitched");
+            check (SoundLibrary::soundsUnpitched ({ "funk", "drums" }) && ! SoundLibrary::soundsUnpitched ({ "bass" }),
+                   "loops tagged as drums count as unpitched");
+
+            // The region on the audio track that starts at this beat.
+            auto regionAt = [&] (double startBeat) -> std::optional<RegionInfo>
+            {
+                for (auto& r : regions.getRegions (audio))
+                    if (std::abs (r.startBeat - startBeat) < 0.001)
+                        return r;
+
+                return std::nullopt;
+            };
+
+            auto shiftAt = [&] (double startBeat)
+            {
+                auto r = regionAt (startBeat);
+                return r && r->followsKey ? r->keyShiftSemitones : 99;
+            };
+
+            engine.setKey (2, false);   // D major
+            pumpMessages();
+
+            if (chords && bass && beat)
+            {
+                checkUndoRoundTrip (engine, "Import Audio File", [&] { regions.importAudioFiles (audio, { chords->file.getFullPathName() }, 32.0); });
+                regions.importAudioFiles (audio, { bass->file.getFullPathName() }, 48.0);
+                regions.importAudioFiles (audio, { beat->file.getFullPathName() }, 64.0);
+                pumpMessages();
+            }
+
+            check (shiftAt (32.0) == 2, "a C major loop placed in D major goes up 2 semitones");
+            check (shiftAt (48.0) == -1, "a C minor loop goes to D major's relative minor, B minor (down 1)");
+            check (regionAt (64.0) && ! regionAt (64.0)->followsKey && regionAt (64.0)->keyShiftSemitones == 0,
+                   "a drum loop isn't moved");
+
+            checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, false); });   // G major
+            check (shiftAt (32.0) == -5 && shiftAt (48.0) == 4,
+                   "changing the key moves the loops already placed, whichever way is nearer (C to G is down 5)");
+
+            engine.setKey (9, true);   // A minor, C major's relative minor
+            pumpMessages();
+            check (shiftAt (32.0) == 0 && shiftAt (48.0) == -3, "loops keep their mode: C major stays put in A minor, C minor goes to A minor");
+            engine.undo();
+            pumpMessages();
+            check (shiftAt (32.0) == -5 && shiftAt (48.0) == 4, "undo puts them back");
+
+            if (auto chordsRegion = regionAt (32.0))
+            {
+                regions.splitRegions ({ chordsRegion->id }, 34.0);
+                pumpMessages();
+                check (shiftAt (32.0) == -5 && shiftAt (34.0) == -5, "both halves of a split loop follow the key");
+                engine.undo();
+                pumpMessages();
+
+                regions.copyRegions ({ chordsRegion->id });
+                regions.pasteRegions (audio, 96.0);
+                pumpMessages();
+                check (shiftAt (96.0) == -5, "so does a pasted copy");
+                engine.setKey (4, false);   // E major
+                pumpMessages();
+                check (shiftAt (96.0) == 4 && shiftAt (32.0) == 4, "and it keeps following the key");
+                engine.undo();
+                pumpMessages();
+                engine.undo();
+                pumpMessages();
+            }
+        }
+
         checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, true); });
         checkSaveAndReopen (engine, undoSession);
+        {
+            auto r = regions.getRegions (audio);
+            auto chords = std::find_if (r.begin(), r.end(), [] (const RegionInfo& i) { return std::abs (i.startBeat - 32.0) < 0.001; });
+            check (chords != r.end() && chords->followsKey && chords->keyShiftSemitones == -2,
+                   "a reopened session's loops still follow the key (C major in G minor = Bb major, down 2)");
+        }
 
         std::cout << "-- Selection after delete, undo and redo\n";
         {
@@ -4329,6 +5186,15 @@ int main (int argc, char* argv[])
 
     if (runs ("preferences"))
         runPreferencesSection (dir);
+
+    if (runs ("effects"))
+        runEffectsSection (dir);
+
+    if (runs ("tempo"))
+        runTempoSection (dir);
+
+    if (runs ("sections"))
+        runSectionsSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

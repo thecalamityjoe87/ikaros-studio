@@ -16,7 +16,8 @@ namespace
 ArrangementView::Ruler::Ruler (ArrangementView& o) : owner (o)
 {
     setTitle ("Bar ruler");
-    setTooltip ("Click to move the playhead, or drag its head. Drag along the top edge to set the loop.");
+    setTooltip ("Click to move the playhead, or drag its head. Drag along the top edge to set the loop. "
+                "Right-click for tempo and time-signature changes.");
 }
 
 void ArrangementView::Ruler::setLoop (bool on, double start, double end)
@@ -84,6 +85,17 @@ void ArrangementView::Ruler::mouseDown (const juce::MouseEvent& e)
     if (e.x < headerWidth)
         return;
 
+    if (e.mods.isPopupMenu())
+    {
+        // Tempo and time-signature changes at the bar nearest the click.
+        juce::PopupMenu menu;
+        owner.addTempoMenuItems (menu, beatAt (e.x));
+        menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+        ignoreDrag = true;
+        return;
+    }
+
+    ignoreDrag = false;
     draggingLoop = e.y < loopStripHeight;
     dragStartBeat = beatAt (e.x);
     mouseDrag (e);
@@ -91,7 +103,7 @@ void ArrangementView::Ruler::mouseDown (const juce::MouseEvent& e)
 
 void ArrangementView::Ruler::mouseDrag (const juce::MouseEvent& e)
 {
-    if (e.mouseDownPosition.x < headerWidth)
+    if (e.mouseDownPosition.x < headerWidth || ignoreDrag)
         return;
 
     auto beat = beatAt (e.x);
@@ -99,13 +111,13 @@ void ArrangementView::Ruler::mouseDrag (const juce::MouseEvent& e)
 
     if (draggingLoop)
     {
-        // Snap the loop to whole bars.
-        auto bpb = owner.geometry.beatsPerBar;
-        auto a = std::floor (juce::jmin (dragStartBeat, beat) / bpb) * bpb;
-        auto b = std::ceil (juce::jmax (dragStartBeat, beat) / bpb) * bpb;
-
-        if (b <= a)
-            b = a + bpb;
+        // Snap the loop to whole bars: from the start of the first bar to
+        // the end of the last (bars can differ in length).
+        const auto& tempo = owner.geometry.tempo;
+        const int firstBar = tempo.barAt (juce::jmin (dragStartBeat, beat));
+        const int lastBar = juce::jmax (firstBar, tempo.barAt (juce::jmax (dragStartBeat, beat) - 1.0e-9));
+        const double a = tempo.barToBeat (firstBar);
+        const double b = tempo.barToBeat (lastBar + 1);
 
         engine.setLoopRangeBeats (a, b);
         engine.setLooping (true);

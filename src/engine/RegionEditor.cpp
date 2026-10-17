@@ -1,5 +1,6 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/LoopKey.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
@@ -100,6 +101,17 @@ static std::vector<RegionId> idsOf (const std::vector<te::Clip*>& clips)
     return ids;
 }
 
+// How far the user moved an audio region in pitch (the audio editor's
+// Transpose), leaving out a loop's move to the session key. A loop that
+// follows the key uses Tracktion's auto-pitch, which adds the clip's
+// "transpose" to the key's move; any other region is moved by its
+// "pitchChange". (TakeEditor's canBecomeTake checks both: a transposed
+// region's audio can't simply become a take.)
+static int userTransposeOf (te::AudioClipBase& clip)
+{
+    return clip.getAutoPitch() ? clip.getTransposeSemiTones (false) : juce::roundToInt (clip.getPitchChange());
+}
+
 static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
 {
     RegionInfo r;
@@ -142,7 +154,15 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
         r.isMidi = false;
 
         if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
+        {
             r.peaks = waveforms.computePeaks (*wave, 256);
+
+            // The waveform shows the region's own volume too, like the audio editor's.
+            const auto gain = wave->getGain();
+
+            for (auto& peak : r.peaks)
+                peak = juce::jmin (1.0f, peak * gain);
+        }
 
         // Fades are stored in seconds; the UI works in beats.
         if (auto* audio = dynamic_cast<te::AudioClipBase*> (&clip))
@@ -151,6 +171,16 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
             const auto range = clip.getPosition().time;
             r.fadeInBeats = timeToBeat (edit, range.getStart() + audio->getFadeIn()) - r.startBeat;
             r.fadeOutBeats = r.startBeat + r.lengthBeats - timeToBeat (edit, range.getEnd() - audio->getFadeOut());
+
+            if (followsSessionKey (*audio))
+            {
+                r.followsKey = true;
+                r.keyShiftSemitones = audio->getTransposeSemiTones (true) - audio->getTransposeSemiTones (false);
+            }
+
+            r.gainDb = audio->getGainDB();
+            r.reversed = audio->getIsReversed();
+            r.transposeSemitones = userTransposeOf (*audio);
         }
     }
 
@@ -184,9 +214,12 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
     if (track == nullptr || isAudioTrack (*track))
         return 0;   // MIDI regions only go on instrument tracks
 
-    const double bpb = owner.beatsPerBar();
-    const double start = std::floor (juce::jmax (0.0, startBeat) / bpb) * bpb;
-    double length = bpb * 4.0;
+    // Four bars from the start of the bar the beat is in. Bars can differ in
+    // length (time-signature changes), so the tempo map works them out.
+    const auto tempoMap = owner.getTempoMap();
+    const int firstBar = tempoMap.barAt (juce::jmax (0.0, startBeat));
+    const double start = tempoMap.barToBeat (firstBar);
+    double length = tempoMap.barToBeat (firstBar + 4) - start;
 
     // Don't stack regions on top of each other: shorten the new one to end at
     // the next region, and give up if there's less than a bar of space.
@@ -202,7 +235,7 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
             length = juce::jmin (length, cs - start);
     }
 
-    if (length < bpb)
+    if (length < tempoMap.barToBeat (firstBar + 1) - start - 1.0e-6)
         return 0;
 
     owner.beginUndoStep ("Add Region");
@@ -228,12 +261,11 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
 
     auto& seq = clip->getSequence();
     auto* um = &edit->getUndoManager();
-    const int numBars = (int) std::round (length / bpb);
-
-    for (int bar = 0; bar < numBars; ++bar)
+    for (int bar = 0; tempoMap.barToBeat (firstBar + bar + 1) - start <= length + 1.0e-6; ++bar)
     {
         auto& chord = progression[(size_t) bar % progression.size()];
-        const double barStart = bar * bpb;
+        const double barStart = tempoMap.barToBeat (firstBar + bar) - start;   // in the region
+        const double bpb = tempoMap.barToBeat (firstBar + bar + 1) - start - barStart;
         const double half = bpb / 2.0;
 
         seq.addNote (chord.bass, te::BeatPosition::fromBeats (barStart),
@@ -557,6 +589,144 @@ void RegionEditor::setFade (RegionId id, bool fadeIn, double lengthBeats)
         clip->setFadeOut (te::TimeDuration::fromSeconds (seconds));
 }
 
+//==============================================================================
+// Audio regions: the audio editor's settings
+void RegionEditor::setRegionGain (RegionId id, float gainDb)
+{
+    auto* clip = dynamic_cast<te::AudioClipBase*> (findClip (owner.getEdit(), id));
+    gainDb = juce::jlimit (minGainDb, maxGainDb, gainDb);
+
+    // Goes into the undo step the caller began (see the header).
+    if (clip != nullptr && std::abs (clip->getGainDB() - gainDb) > 1.0e-4f)
+        clip->setGainDB (gainDb);
+}
+
+void RegionEditor::setRegionReversed (RegionId id, bool reversed)
+{
+    auto* clip = dynamic_cast<te::WaveAudioClip*> (findClip (owner.getEdit(), id));
+
+    if (clip == nullptr || clip->getIsReversed() == reversed)
+        return;
+
+    owner.beginUndoStep ("Reverse Region");
+
+    // Tracktion does the rest when the property changes, in the same undo
+    // step: it turns the region's offset (and loop) round, so it shows the
+    // same stretch of the recording from the other end, and makes the
+    // reversed copy of the file on a background thread. Until that's ready
+    // the region is silent.
+    clip->setIsReversed (reversed);
+}
+
+void RegionEditor::setRegionTranspose (RegionId id, int semitones)
+{
+    auto* clip = dynamic_cast<te::WaveAudioClip*> (findClip (owner.getEdit(), id));
+    semitones = juce::jlimit (-maxTransposeSemitones, maxTransposeSemitones, semitones);
+
+    if (clip == nullptr || semitones == userTransposeOf (*clip))
+        return;
+
+    owner.beginUndoStep ("Transpose Region");
+
+    // See userTransposeOf for why there are two ways.
+    if (clip->getAutoPitch())
+    {
+        clip->setTranspose (semitones);
+    }
+    else
+    {
+        // Pitch shifting needs a time stretcher (as for loops: see importAudioFiles).
+        if (clip->getTimeStretchMode() == te::TimeStretcher::disabled)
+            clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+
+        clip->setPitchChange ((float) semitones);
+    }
+}
+
+bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int numColumns,
+                                std::vector<WaveformRange>& columns)
+{
+    columns.clear();
+    auto* edit = owner.getEdit();
+    auto* clip = dynamic_cast<te::WaveAudioClip*> (findClip (edit, id));
+
+    // A recording that's still being written is read once it's finished.
+    if (clip == nullptr || numColumns <= 0 || toBeat <= fromBeat || edit->getTransport().isRecording())
+        return false;
+
+    // A reversed region's waveform comes from the original file, turned round
+    // below (Tracktion's reversed copy may not be made yet).
+    auto& engine = owner.getTeEngine();
+    const auto file = clip->getOriginalFile();
+    const auto overview = waveforms.getOverview (file, engine.getAudioFileFormatManager().readFormatManager);
+
+    if (overview == nullptr)
+        return false;   // still reading it
+
+    const double fileLength = overview->getLengthInSeconds();
+    const bool reversed = clip->getIsReversed();
+    const bool looping = clip->isLooping();
+    const float gain = clip->getGain();
+    const auto pos = clip->getPosition();
+    const double startBeat = clip->getStartBeat().inBeats();
+    const double offsetSeconds = pos.getOffset().inSeconds();
+    const double speed = clip->getSpeedRatio();
+
+    // Library loops (auto-tempo) are stretched to the session's tempo, so
+    // they're measured in beats of their own recording.
+    const bool beatBased = clip->getAutoTempo();
+    const double fileBeatsPerSecond = beatBased ? clip->getLoopInfo().getBeatsPerSecond (te::AudioFile (engine, file).getInfo()) : 0.0;
+    const double loopLength = beatBased ? clip->getLoopLengthBeats().inBeats() : clip->getLoopLength().inSeconds();
+    const bool canLoop = looping && loopLength > 0.0;
+
+    // x wrapped into 0..length: the same place in every repeat of a loop.
+    auto wrap = [] (double x, double length) { return x - std::floor (x / length) * length; };
+
+    // Where a beat on the timeline falls in the file, in seconds. Mirrors
+    // what Tracktion's AudioClipBase::clipTimeToSourceFileTime does, but
+    // carries on past the region's edges (in both directions).
+    auto secondsAt = [&] (double beat)
+    {
+        double seconds = 0.0;
+
+        if (beatBased && fileBeatsPerSecond > 0.0)
+        {
+            const double fileBeat = canLoop ? clip->getLoopStartBeats().inBeats() + wrap (beat - startBeat + loopOffsetBeats (*clip), loopLength)
+                                            : beat - clip->getContentStartBeat().inBeats();
+            seconds = fileBeat / fileBeatsPerSecond;
+        }
+        else
+        {
+            const double t = (beatToTime (*edit, beat) - pos.getStart()).inSeconds();
+            seconds = (canLoop ? clip->getLoopStart().inSeconds() + wrap (t + offsetSeconds, loopLength)
+                               : t + offsetSeconds) * speed;
+        }
+
+        // The reversed copy's first second is the original's last.
+        return reversed ? fileLength - seconds : seconds;
+    };
+
+    const double beatsPerColumn = (toBeat - fromBeat) / numColumns;
+    columns.reserve ((size_t) numColumns);
+
+    for (int i = 0; i < numColumns; ++i)
+    {
+        // How much of the file one column covers, around the file position
+        // under its middle (simpler than its two edges, which can be a
+        // loop apart).
+        const double from = fromBeat + i * beatsPerColumn;
+        const double secondsWide = beatBased && fileBeatsPerSecond > 0.0
+                                     ? beatsPerColumn / fileBeatsPerSecond
+                                     : (beatToTime (*edit, from + beatsPerColumn) - beatToTime (*edit, from)).inSeconds() * speed;
+        const double middle = secondsAt (from + beatsPerColumn * 0.5);
+
+        auto range = overview->getRange (middle - secondsWide * 0.5, middle + secondsWide * 0.5);
+        columns.push_back ({ juce::jlimit (-1.0f, 1.0f, range.min * gain), juce::jlimit (-1.0f, 1.0f, range.max * gain) });
+    }
+
+    return true;
+}
+
 void RegionEditor::copyRegions (const std::vector<RegionId>& ids)
 {
     auto* edit = owner.getEdit();
@@ -688,9 +858,12 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
 
         // A loop from the library knows its tempo: it lasts that many beats
         // at the session's tempo, stretched to fit (and keeps following the
-        // tempo if it changes).
-        const auto loopBpm = owner.getSounds().getLoopBpm (file);
+        // tempo if it changes). If it knows its key, it follows the
+        // session's key too (see LoopKey.h).
+        const auto* loop = owner.getSounds().findLoop (file);
+        const auto loopBpm = loop != nullptr ? loop->bpm : 0.0;
         const auto loopBeats = fileSeconds * loopBpm / 60.0;
+        const bool hasKey = loop != nullptr && ! loop->unpitched && loop->keyRoot >= 0;
 
         if (loopBpm > 0.0)
             length = beatToTime (*edit, timeToBeat (*edit, start) + loopBeats) - start;
@@ -703,6 +876,13 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
                 clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
                 clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 clip->setAutoTempo (true);
+            }
+
+            if (hasKey)
+            {
+                // Pitch shifting needs a time stretcher, even at the loop's own tempo.
+                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+                setLoopKey (*clip, loop->keyRoot, loop->keyMinor);
             }
 
             ensureEdgeFades (*clip);

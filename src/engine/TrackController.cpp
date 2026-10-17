@@ -54,7 +54,8 @@ TrackController::TrackController (AudioEngine& o)
       effectsController (std::make_unique<EffectsController> (o)),
       sendBuses (std::make_unique<SendBuses> (o)),
       eqController (std::make_unique<EqController> (o)),
-      automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses))
+      automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses)),
+      sectionEditor (std::make_unique<SectionEditor> (o))
 {
 }
 

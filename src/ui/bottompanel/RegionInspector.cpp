@@ -1,0 +1,369 @@
+#include "ui/bottompanel/RegionInspector.h"
+#include "engine/AudioEngine.h"
+#include "engine/TrackController.h"
+#include "ui/widgets/IconButton.h"
+#include "ui/theme/Fonts.h"
+
+namespace ikaros
+{
+
+using namespace tokens;
+
+namespace
+{
+    constexpr int rowHeight = 30;
+    constexpr int rowGap = 8;
+    constexpr int padding = 14;
+    constexpr int labelWidth = 64;
+
+    const juce::String minusSign = juce::String::fromUTF8 ("\xe2\x88\x92");
+
+    IconButton::Colours raisedWithBorder()
+    {
+        auto c = IconButton::raisedColours();
+        c.border = colour::border;
+        return c;
+    }
+}
+
+//==============================================================================
+// The "Audio" section: an audio region's gain, pitch and direction.
+class RegionInspector::AudioControls  : public juce::Component
+{
+public:
+    explicit AudioControls (RegionInspector& o) : owner (o)
+    {
+        gain.setTitle ("Region gain");
+        gain.setTooltip ("The region's own volume. Double-click for 0 dB");
+        gain.setRange (RegionEditor::minGainDb, RegionEditor::maxGainDb, 0.1);
+        gain.setDoubleClickReturnValue (true, 0.0);
+        gain.setScrollWheelEnabled (false);   // every notch would be an undo step of its own
+
+        // A whole drag is one undo step: it starts on mouse-down, and every
+        // change until mouse-up goes into it (see AudioEngine::beginUndoStep).
+        gain.onDragStart = [this]
+        {
+            dragging = true;
+            owner.engine.beginUndoStep ("Region Gain");
+        };
+        gain.onDragEnd = [this] { dragging = false; };
+        gain.onValueChange = [this]
+        {
+            if (! owner.region.has_value())
+                return;
+
+            // A double-click (back to 0 dB) isn't a drag: it's a step of its own.
+            if (! dragging)
+                owner.engine.beginUndoStep ("Region Gain");
+
+            owner.engine.getTracks().regions().setRegionGain (owner.region->id, (float) gain.getValue());
+            repaint();
+        };
+        addAndMakeVisible (gain);
+
+        for (auto* b : { &pitchDown, &pitchUp })
+        {
+            b->setColours (raisedWithBorder());
+            b->setFont (fonts::uiBold (15.0f));
+            b->setCornerRadius (size::radiusSmall);
+            addAndMakeVisible (b);
+        }
+
+        pitchDown.setText (minusSign);
+        pitchDown.setTooltip ("Move the region down a semitone (it keeps its length)");
+        pitchUp.setTooltip ("Move the region up a semitone (it keeps its length)");
+        pitchDown.onClick = [this] { transposeBy (-1); };
+        pitchUp.onClick = [this] { transposeBy (1); };
+
+        // Like the Monitoring button: green while it's on.
+        reverse.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
+        reverse.setFont (fonts::uiSemiBold (12.0f));
+        reverse.setCornerRadius (6.0f);
+        reverse.setTooltip ("Play the region backwards");
+        reverse.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().regions().setRegionReversed (owner.region->id, ! owner.region->reversed);
+        };
+        addAndMakeVisible (reverse);
+    }
+
+    /** Shows the region's settings (it's an audio region). */
+    void refresh (const RegionInfo& r, juce::Colour trackColour)
+    {
+        // dontSendNotification: showing the region's value isn't a change to
+        // make. (Not during a drag: the drag is ahead of the session.)
+        if (! dragging)
+            gain.setValue (r.gainDb, juce::dontSendNotification);
+
+        gain.setColour (juce::Slider::trackColourId, trackColour);
+        pitchDown.setEnabled (r.transposeSemitones > -RegionEditor::maxTransposeSemitones);
+        pitchUp.setEnabled (r.transposeSemitones < RegionEditor::maxTransposeSemitones);
+        reverse.setToggleState (r.reversed, juce::dontSendNotification);
+        reverse.setText (r.reversed ? "Playing backwards" : "Play backwards");
+        repaint();
+    }
+
+    int getIdealHeight() const
+    {
+        return padding / 2 + 3 * (rowHeight + rowGap) + (showsKeyNote() ? 22 : 0) + padding / 2;
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        if (! owner.region.has_value())
+            return;
+
+        g.setFont (fonts::ui (13.0f));
+        g.setColour (colour::textSecondary);
+        g.drawText ("Gain", gainRow, juce::Justification::centredLeft);
+        g.drawText ("Pitch", pitchRow, juce::Justification::centredLeft);
+        g.drawText ("Direction", reverseRow, juce::Justification::centredLeft);
+
+        // The gain as it is now (it follows the slider during a drag).
+        const auto db = gain.getValue();
+        const auto gainText = std::abs (db) < 0.05 ? juce::String ("0.0 dB")
+                                                   : (db > 0.0 ? "+" : minusSign) + juce::String (std::abs (db), 1) + " dB";
+        g.setColour (colour::text);
+        g.setFont (fonts::mono (12.0f));
+        g.drawText (gainText, gainValue, juce::Justification::centredRight);
+
+        // Semitones in a little well between the buttons.
+        const int pitch = owner.region->transposeSemitones;
+        g.setColour (colour::wellBg);
+        g.fillRoundedRectangle (pitchValue.toFloat(), size::radiusSmall);
+        g.setColour (colour::text);
+        g.drawText (pitch == 0 ? juce::String ("0") : (pitch > 0 ? "+" : minusSign) + juce::String (std::abs (pitch)),
+                    pitchValue, juce::Justification::centred);
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (12.0f));
+        g.drawText ("semitones", pitchUnits, juce::Justification::centredLeft);
+
+        if (showsKeyNote())
+        {
+            const int shift = owner.region->keyShiftSemitones;
+            auto note = juce::String ("Follows the song key");
+
+            if (shift != 0)
+                note << " (" << (shift > 0 ? "+" : minusSign) << std::abs (shift) << ")";
+
+            g.drawText (note, keyNote, juce::Justification::centredLeft);
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (padding, padding / 2);
+
+        auto row = [&r]
+        {
+            auto next = r.removeFromTop (rowHeight);
+            r.removeFromTop (rowGap);
+            return next;
+        };
+
+        gainRow = row();
+        auto gainArea = gainRow.withTrimmedLeft (labelWidth);
+        gainValue = gainArea.removeFromRight (62);
+        gain.setBounds (gainArea.withTrimmedRight (6));
+
+        pitchRow = row();
+        auto pitchArea = pitchRow.withTrimmedLeft (labelWidth);
+        pitchDown.setBounds (pitchArea.removeFromLeft (30).withSizeKeepingCentre (30, 26));
+        pitchValue = pitchArea.removeFromLeft (44).reduced (4, 2);
+        pitchUp.setBounds (pitchArea.removeFromLeft (30).withSizeKeepingCentre (30, 26));
+        pitchUnits = pitchArea.withTrimmedLeft (8);
+
+        reverseRow = row();
+        reverse.setBounds (reverseRow.withTrimmedLeft (labelWidth).removeFromLeft (150).withSizeKeepingCentre (150, 26));
+
+        keyNote = r.removeFromTop (22);
+    }
+
+private:
+    RegionInspector& owner;
+    bool dragging = false;   // the gain slider is being dragged
+
+    juce::Slider gain { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    IconButton pitchDown { "Pitch down", std::nullopt, "-" };
+    IconButton pitchUp   { "Pitch up", std::nullopt, "+" };
+    IconButton reverse   { "Reverse", std::nullopt, "Play backwards" };
+
+    juce::Rectangle<int> gainRow, gainValue, pitchRow, pitchValue, pitchUnits, reverseRow, keyNote;
+
+    bool showsKeyNote() const   { return owner.region.has_value() && owner.region->followsKey; }
+
+    void transposeBy (int step)
+    {
+        if (owner.region.has_value())
+            owner.engine.getTracks().regions().setRegionTranspose (owner.region->id, owner.region->transposeSemitones + step);
+    }
+};
+
+//==============================================================================
+// The "Editing" section: the grid, and Quantize for a MIDI region.
+class RegionInspector::EditingControls  : public juce::Component
+{
+public:
+    explicit EditingControls (RegionInspector& o) : owner (o)
+    {
+        for (auto* b : { &gridButton, &quantizeButton })
+        {
+            b->setColours (raisedWithBorder());
+            b->setFont (fonts::ui (12.0f));
+            b->setCornerRadius (size::radiusSmall);
+            addAndMakeVisible (b);
+        }
+
+        gridButton.onClick = [this] { owner.showGridMenu (gridButton); };
+        quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
+        quantizeButton.onClick = [this] { if (owner.onQuantize) owner.onQuantize(); };
+    }
+
+    void refresh (bool midi)
+    {
+        isMidi = midi;
+        gridButton.setText (gridName (owner.grid));
+        gridButton.setTooltip (midi ? "Where notes snap to when you draw, move or resize them"
+                                    : "Where the region's edges snap to when you trim them");
+        quantizeButton.setVisible (midi);
+        resized();
+    }
+
+    int getIdealHeight() const   { return padding / 2 + (isMidi ? 2 : 1) * (rowHeight + rowGap) + padding / 2; }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setFont (fonts::ui (13.0f));
+        g.setColour (colour::textSecondary);
+        g.drawText ("Grid", gridRow, juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (padding, padding / 2);
+        gridRow = r.removeFromTop (rowHeight);
+        gridButton.setBounds (gridRow.withTrimmedLeft (labelWidth).removeFromLeft (110).withSizeKeepingCentre (110, 26));
+        r.removeFromTop (rowGap);
+        quantizeButton.setBounds (r.removeFromTop (rowHeight).withTrimmedLeft (labelWidth).removeFromLeft (110)
+                                    .withSizeKeepingCentre (110, 26));
+    }
+
+private:
+    RegionInspector& owner;
+    bool isMidi = false;
+
+    IconButton gridButton     { "Grid", std::nullopt, "1/16" };
+    IconButton quantizeButton { "Quantize", std::nullopt, "Quantize" };
+    juce::Rectangle<int> gridRow;
+};
+
+//==============================================================================
+RegionInspector::RegionInspector (AudioEngine& e) : engine (e)
+{
+    setTitle ("Region inspector");
+
+    audioControls = std::make_unique<AudioControls> (*this);
+    editingControls = std::make_unique<EditingControls> (*this);
+    audioSection = std::make_unique<CollapsibleSection> ("Audio", *audioControls, true);
+    editingSection = std::make_unique<CollapsibleSection> ("Editing", *editingControls, true);
+
+    for (auto* section : { audioSection.get(), editingSection.get() })
+    {
+        section->onExpandedChanged = [this] { layoutSections(); };
+        sectionHolder.addChildComponent (section);
+    }
+
+    viewport.setViewedComponent (&sectionHolder, false);
+    viewport.setScrollBarsShown (true, false);
+    addAndMakeVisible (viewport);
+}
+
+RegionInspector::~RegionInspector() = default;
+
+void RegionInspector::setRegion (std::optional<RegionInfo> r, juce::Colour trackColour)
+{
+    region = std::move (r);
+    const bool audio = region.has_value() && ! region->isMidi;
+
+    audioSection->setVisible (audio);
+    editingSection->setVisible (region.has_value());
+
+    if (audio)
+        audioControls->refresh (*region, trackColour);
+
+    editingControls->refresh (region.has_value() && region->isMidi);
+    layoutSections();
+    repaint();
+}
+
+void RegionInspector::showGridMenu (juce::Component& target)
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Grid");
+
+    auto add = [&] (const juce::String& name, EditorGrid value)
+    {
+        menu.addItem (juce::PopupMenu::Item (name).setTicked (grid == value).setAction ([this, value]
+        {
+            grid = value;
+            editingControls->refresh (region.has_value() && region->isMidi);
+
+            if (onGridChanged)
+                onGridChanged (grid);
+        }));
+    };
+
+    add ("Bar", EditorGrid::bar);
+    add ("1/4 (beat)", EditorGrid::quarter);
+    add ("1/8", EditorGrid::eighth);
+    add ("1/16", EditorGrid::sixteenth);
+    add ("1/32", EditorGrid::thirtySecond);
+    add ("Off", EditorGrid::off);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target));
+}
+
+void RegionInspector::layoutSections()
+{
+    const int width = viewport.getMaximumVisibleWidth();
+
+    // Contents decide their own height; sections stack them with headers.
+    audioControls->setSize (width, audioControls->getIdealHeight());
+    editingControls->setSize (width, editingControls->getIdealHeight());
+
+    int y = 0;
+
+    for (auto* section : { audioSection.get(), editingSection.get() })
+    {
+        if (! section->isVisible())
+            continue;
+
+        section->setBounds (0, y, width, section->getPreferredHeight());
+        y += section->getHeight();
+    }
+
+    sectionHolder.setSize (width, juce::jmax (y, viewport.getMaximumVisibleHeight()));
+}
+
+void RegionInspector::paint (juce::Graphics& g)
+{
+    g.fillAll (colour::sidebarBg);
+    g.setColour (colour::divider);
+    g.fillRect (getLocalBounds().removeFromRight (1));
+
+    if (! region.has_value())
+    {
+        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (13.0f));
+        g.drawFittedText ("Select a region to see its settings here.", getLocalBounds().reduced (padding),
+                          juce::Justification::centred, 3);
+    }
+}
+
+void RegionInspector::resized()
+{
+    viewport.setBounds (getLocalBounds().withTrimmedRight (1));
+    layoutSections();
+}
+
+} // namespace ikaros

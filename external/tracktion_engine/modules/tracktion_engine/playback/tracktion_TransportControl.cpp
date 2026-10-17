@@ -1506,7 +1506,7 @@ std::optional<std::pair<SyncPoint, std::optional<TimeRange>>> TransportControl::
                 }
 
                 auto prerollStart = transportState->startTime.get();
-                double numCountInBeats = edit.getNumCountInBeats();
+                double numCountInBeats = edit.getNumCountInBeats (transportState->startTime.get());
                 const auto& ts = edit.tempoSequence;
 
                 if (numCountInBeats > 0)

@@ -424,13 +424,19 @@ void SoundLibrary::readPack (const juce::File& pack, bool bundled)
                 for (auto& t : *tags)
                     loop.tags.add (t.toString().toLowerCase());
 
+            // An explicit "unpitched" wins; otherwise drums and percussion are unpitched.
+            loop.unpitched = l.hasProperty ("unpitched") ? (bool) l["unpitched"] : soundsUnpitched (loop.tags);
+
+            if (! loop.unpitched)
+                parseKey (l["key"].toString(), loop.keyRoot, loop.keyMinor);
+
             juce::StringArray detail;
 
             if (loop.bpm > 0.0)
                 detail.add (juce::String (juce::roundToInt (loop.bpm)));
 
-            if (l["key"].toString().isNotEmpty())
-                detail.add (l["key"].toString());
+            if (loop.keyRoot >= 0)
+                detail.add (getKeyName (loop.keyRoot, loop.keyMinor));
 
             loop.detail = detail.joinIntoString (juce::String::fromUTF8 (" \xc2\xb7 "));   // middle dot
 
@@ -458,13 +464,68 @@ std::optional<SoundInfo> SoundLibrary::findSound (const juce::String& id) const
     return std::nullopt;
 }
 
-double SoundLibrary::getLoopBpm (const juce::File& file) const
+const LibraryFile* SoundLibrary::findLoop (const juce::File& file) const
 {
     for (auto& l : loops)
         if (l.file == file)
-            return l.bpm;
+            return &l;
 
-    return 0.0;
+    return nullptr;
+}
+
+bool SoundLibrary::parseKey (const juce::String& text, int& root, bool& minor)
+{
+    auto t = text.trim();
+
+    if (t.isEmpty())
+        return false;
+
+    // The note letter, then an optional sharp or flat.
+    static const int letterRoots[] { 9, 11, 0, 2, 4, 5, 7 };   // A B C D E F G
+    const auto letter = juce::CharacterFunctions::toUpperCase (t[0]);
+
+    if (letter < 'A' || letter > 'G')
+        return false;
+
+    int r = letterRoots[letter - 'A'];
+    t = t.substring (1);
+
+    // (juce::String indexes characters, not bytes, so the sign is one character too.)
+    if (t.startsWithChar ('#') || t.startsWith (juce::String::fromUTF8 ("\xe2\x99\xaf")))       // # or the sharp sign
+    {
+        ++r;
+        t = t.substring (1);
+    }
+    else if (t.startsWithChar ('b') || t.startsWith (juce::String::fromUTF8 ("\xe2\x99\xad")))  // b or the flat sign
+    {
+        --r;
+        t = t.substring (1);
+    }
+
+    // Then the mode: nothing or "major"/"maj"/"M" for major, "minor"/"min"/"m" for minor.
+    t = t.trim();
+    bool isMinor;
+
+    if (t.isEmpty() || t == "M" || t.equalsIgnoreCase ("maj") || t.equalsIgnoreCase ("major"))
+        isMinor = false;
+    else if (t == "m" || t.equalsIgnoreCase ("min") || t.equalsIgnoreCase ("minor"))
+        isMinor = true;
+    else
+        return false;
+
+    root = (r + 12) % 12;
+    minor = isMinor;
+    return true;
+}
+
+bool SoundLibrary::soundsUnpitched (const juce::StringArray& tags)
+{
+    for (auto word : { "drums", "drum", "drumloop", "drum-loop", "percussion", "beat", "beats",
+                       "breakbeat", "hihat", "hi-hat", "hats", "kick", "snare" })
+        if (tags.contains (word, true))
+            return true;
+
+    return false;
 }
 
 const SoundLibrary::SynthPatch* SoundLibrary::findSynthPatch (const juce::String& id)

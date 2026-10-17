@@ -1,4 +1,5 @@
 #include "ui/toolbar/LcdDisplay.h"
+#include "engine/TempoMap.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -20,7 +21,7 @@ LcdDisplay::LcdDisplay()
     bpmLabel.setColour (juce::Label::outlineWhenEditingColourId, colour::accent);
     bpmLabel.setEditable (true, true, false);   // single click edits, losing focus commits
     bpmLabel.setTitle ("Tempo in BPM");
-    bpmLabel.setTooltip ("Tempo (click to type, or scroll)");
+    bpmLabel.setTooltip ("Tempo at the playhead (click to type, or scroll). Tempo changes are in the tempo lane.");
     bpmLabel.setMouseCursor (juce::MouseCursor::IBeamCursor);
     bpmLabel.onTextChange = [this]
     {
@@ -38,6 +39,7 @@ LcdDisplay::LcdDisplay()
     timeSigButton.setFont (fonts::monoBold (15.0f));
     timeSigButton.setText ("4/4");
     timeSigButton.setCornerRadius (4.0f);
+    timeSigButton.setTooltip ("Time signature at the playhead (click to change)");
     timeSigButton.onClick = [this] { showTimeSignatureMenu(); };
     addAndMakeVisible (timeSigButton);
 
@@ -139,7 +141,8 @@ void LcdDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
 
 void LcdDisplay::showTimeSignatureMenu()
 {
-    const std::array<std::pair<int, int>, 5> sigs {{ { 2, 4 }, { 3, 4 }, { 4, 4 }, { 5, 4 }, { 6, 8 } }};
+    // Changes the time signature in effect at the playhead (see AudioEngine::setTimeSignature).
+    const auto& sigs = TempoMap::commonSignatures();
 
     juce::PopupMenu m;
 

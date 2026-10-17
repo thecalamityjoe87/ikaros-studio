@@ -41,10 +41,11 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     arrangement.onOpenRegionInEditor = [this] (RegionId)
     {
         setBottomPanelVisible (true);
-        bottomPanel.setMasterMode (false);   // the Editor works on a track
         bottomPanel.setTab (BottomPanel::Tab::editor);
+        bottomPanel.setRegionMode (true);    // with the region's settings beside it
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
+    arrangement.onTempoLaneToggled = [this] { commands.commandStatusChanged(); };
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
@@ -380,7 +381,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
-                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleDetails,
+                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
@@ -637,9 +638,13 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress ('3', cmd);
             break;
         case CommandIDs::showEditorTab:
-            info.setInfo ("Editor", "Show the piano roll", "View", 0);
+            info.setInfo ("Editor", "Show the selected region close up: the piano roll or the audio editor", "View", 0);
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
+            break;
+        case CommandIDs::toggleTempoLane:
+            info.setInfo ("Show Tempo Lane", "Show the tempo and time-signature changes under the ruler", "View", 0);
+            info.setTicked (arrangement.isTempoLaneShown());
             break;
         case CommandIDs::toggleAutomation:
             // No shortcut: plain A (GarageBand's) plays a note on the computer keyboard here.
@@ -824,6 +829,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
+        case CommandIDs::toggleTempoLane: arrangement.setTempoLaneShown (! arrangement.isTempoLaneShown()); break;
         case CommandIDs::toggleAutomation:
         {
             auto& automation = engine.getTracks().automation();

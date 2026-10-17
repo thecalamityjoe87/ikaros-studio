@@ -66,6 +66,7 @@ namespace CommandIDs
         showEqTab,
         showMixerTab,
         toggleAutomation,
+        toggleTempoLane,
         toggleDetails,
 
         toggleFullScreen,

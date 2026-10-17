@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/arrangement/RegionComponent.h"
+#include "engine/TempoMap.h"
 #include "ui/state/Selection.h"
 #include "ui/arrangement/TrackHeader.h"
 #include "ui/widgets/IconButton.h"
@@ -17,7 +18,9 @@ namespace ikaros
 
     Layout:
         ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
-        │ TRACKS [Snap: Beat] ⟋ ⌕─○ │ ruler  1   2   3   4 ...      │  30px
+        │ TRACKS [Snap: Beat] ⟋ ◷ ⌕─○│ ruler  1   2   3   4 ...      │  30px
+        │ TEMPO                     │ tempo lane (when shown) ▔▔╲▁▁ │  44px
+        │ SECTIONS              [+] │ [Intro   ][Verse      ][Cho.. │  24px
         ├───────────────────────────┼───────────────────────────────┤
         │ TrackHeader               │ lane  [region] [region]       │ 100px
         │ TrackHeader               │ lane                          │ (118 w/ automation)
@@ -41,6 +44,14 @@ namespace ikaros
     reorder, delete...), or an empty part of a lane for the lane menu (add or
     paste a region there, plus the track menu). Drag the playhead's head, or
     click the ruler, to move the playhead.
+
+    The tempo lane (the clock button, or View > Show Tempo Lane) shows the
+    song's tempo and time-signature changes, which happen at bar lines: see
+    TempoLane. Bars can differ in length, so everything that needs a bar
+    asks geometry.tempo (a TempoMap) for the one at a beat.
+
+    The marker strip above the tracks shows the song's sections (Intro,
+    Verse...). Dragging one moves its music on every track: see SectionStrip.
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
@@ -79,8 +90,13 @@ public:
     /** The nearest grid line to a beat (or the beat itself with snap off). */
     double snapBeat (double beat) const;
 
-    /** The distance between grid lines in beats (0 with snap off). */
-    double getSnapBeats() const;
+    /** The distance between grid lines at a beat, in beats (0 with snap
+        off). With the bar grid it's the length of the bar there. */
+    double getSnapBeats (double atBeat) const;
+
+    /** The tempo lane under the ruler (a View preference). */
+    void setTempoLaneShown (bool);
+    bool isTempoLaneShown() const noexcept       { return tempoLaneShown; }
 
     void zoomIn();
     void zoomOut();
@@ -97,6 +113,7 @@ public:
 
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
+    std::function<void()> onTempoLaneToggled;                     // the same, for Show Tempo Lane
 
     //==============================================================================
     void paint (juce::Graphics&) override;
@@ -129,7 +146,7 @@ public:
     struct Geometry
     {
         double pixelsPerBeat = 20.0;
-        double beatsPerBar = 4.0;
+        TempoMap tempo;                // where the bars are (they can differ in length)
         double scrollBeats = 0.0;      // the beat at the left edge of the lanes
         int rowHeight = tokens::size::trackRowHeight;   // track height: grows when zoomed in (see setZoom)
 
@@ -140,6 +157,8 @@ public:
 
 private:
     class Ruler;
+    class TempoLane;
+    class SectionStrip;
     class Lane;
     class DropZone;
     class Playhead;
@@ -155,6 +174,9 @@ private:
     Snap snap = Snap::beat;
 
     std::unique_ptr<Ruler> ruler;
+    std::unique_ptr<TempoLane> tempoLane;
+    bool tempoLaneShown = false;
+    std::unique_ptr<SectionStrip> sectionStrip;
     std::unique_ptr<Content> content;
     std::unique_ptr<Overlay> overlay;
     std::unique_ptr<Playhead> playhead;
@@ -163,6 +185,7 @@ private:
 
     IconButton snapButton { "Snap to grid", std::nullopt, "Snap: Beat" };
     IconButton automationButton { "Show automation", Icon::automation };
+    IconButton tempoLaneButton { "Show tempo lane", Icon::clock };
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Rectangle<int> zoomIconArea;
 
@@ -184,6 +207,10 @@ private:
     void updateScrollBar();
     void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
     void showSnapMenu();
+
+    /** The tempo and time-signature items for the bar nearest a beat, shared
+        by the ruler's and the tempo lane's right-click menus. */
+    void addTempoMenuItems (juce::PopupMenu&, double beat);
     void updateAutomationButton();   // on while every track's automation shows
 
     /** Mouse wheel over the timeline: Ctrl/Cmd zooms (unless the Preferences

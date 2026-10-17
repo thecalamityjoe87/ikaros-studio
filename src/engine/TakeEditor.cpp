@@ -283,8 +283,8 @@ bool TakeEditor::flattenTakes (RegionId id)
 // looped, stretched, pitched or reversed (their take would sound different).
 static bool canBecomeTake (te::WaveAudioClip& clip)
 {
-    return ! clip.isLooping() && ! clip.getAutoTempo() && clip.getSpeedRatio() == 1.0
-            && clip.getPitchChange() == 0.0f && ! clip.getIsReversed()
+    return ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getAutoPitch() && clip.getSpeedRatio() == 1.0
+            && clip.getPitchChange() == 0.0f && clip.getTransposeSemiTones (false) == 0 && ! clip.getIsReversed()
             && clip.getSourceFileReference().getFile().existsAsFile();
 }
 

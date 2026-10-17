@@ -5,6 +5,7 @@
 #include "engine/RecordingTypes.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
+#include "engine/TempoMap.h"
 #include <juce_events/juce_events.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
@@ -230,16 +231,58 @@ public:
     void setCountInBars (int bars);
     int getCountInBars() const;
 
+    /** How many beats of clicks the count-in plays before a take that starts
+        at this beat: one or two bars of the time signature there. */
+    int getCountInBeatsAt (double beat) const;
+
+    /** The tempo at the playhead (the one the LCD shows): changes the tempo
+        change in effect there, or the song's tempo if there are none. */
     void setBpm (double bpm);
+
+    /** The time signature at the playhead, the same way. */
     void setTimeSignature (int numerator, int denominator);
 
     /** The session's key: root 0 = C ... 11 = B, major or minor. */
     void setKey (int root, bool minor);
 
+    /** The playhead, and the tempo, time signature and key there. */
     TransportState getTransportState() const;
     juce::String getKeyName() const;
 
-    double beatsPerBar() const;
+    //==============================================================================
+    // Tempo and time-signature changes (the tempo lane under the ruler).
+    // Both happen at bar lines; bars are numbered from 0. Every change keeps
+    // regions, loops and automation on the beats they were on, so loops and
+    // auto-tempo audio follow the new tempo. Each is one undo step unless
+    // it says otherwise.
+
+    /** Where the song's tempo and time signature change, for the UI. */
+    TempoMap getTempoMap() const;
+
+    /** A new tempo from a bar on ("Add Tempo Change"). If there's already a
+        change on that bar (or it's bar 0), that one gets the new tempo. */
+    void addTempoChange (int bar, double bpm);
+
+    /** Moves tempo change `index` (from getTempoMap) to another beat (the
+        tempo lane passes bar lines) and gives it a tempo. The first one
+        (index 0) stays at beat 0. Starts no undo step: call beginUndoStep
+        when the drag starts. Returns false (and changes nothing) if the beat
+        isn't strictly between its neighbours'. */
+    bool setTempoChange (int index, double beat, double bpm);
+
+    /** "Delete Tempo Change". The first one can't be deleted. */
+    void removeTempoChange (int index);
+
+    /** A new time signature from a bar on ("Add Time Signature Change"), or
+        a new one for the change already on that bar ("Time Signature").
+        Later time-signature changes stay on their bar numbers. */
+    void addTimeSignatureChange (int bar, int numerator, int denominator);
+
+    /** Changes time-signature change `index` ("Time Signature"). */
+    void setTimeSignatureChange (int index, int numerator, int denominator);
+
+    /** "Delete Time Signature Change". The first one can't be deleted. */
+    void removeTimeSignatureChange (int index);
 
     //==============================================================================
     // Undo / redo (Tracktion's UndoManager, shared by every edit operation)
@@ -353,6 +396,7 @@ private:
     friend class EqController;
     friend class SendBuses;
     friend class AutomationEditor;
+    friend class SectionEditor;
     friend class PluginLibrary;
     friend class SongExporter;
     friend class RecordingGuard;
@@ -400,6 +444,10 @@ private:
 
     // ListenerList is safe even if a listener removes itself while being called.
     juce::ListenerList<Listener> listeners;
+
+    /** Writes a new tempo map (time signatures by their bar numbers), keeping
+        everything in the session on the beats it was on. */
+    void changeTempoMap (const std::vector<TempoChange>&, const std::vector<TimeSignatureChange>&);
 
     struct Impl;                                // Tracktion-typed members live in the .cpp
     std::unique_ptr<Impl> impl;

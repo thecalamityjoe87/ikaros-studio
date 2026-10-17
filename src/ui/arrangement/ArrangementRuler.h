@@ -9,8 +9,9 @@ namespace ikaros
 
 //==============================================================================
 // Ruler: bar numbers + loop range. Click/drag the lower part to move the
-// playhead; drag along the top strip to set the loop range. The left part
-// (above the track headers) holds the snap and zoom controls.
+// playhead; drag along the top strip to set the loop range; right-click for
+// tempo and time-signature changes. The left part (above the track headers)
+// holds the snap, automation, tempo lane and zoom controls.
 class ArrangementView::Ruler  : public juce::Component,
                                public juce::SettableTooltipClient   // adds setTooltip()
 {
@@ -26,7 +27,7 @@ public:
 
 private:
     ArrangementView& owner;
-    bool looping = false, draggingLoop = false;
+    bool looping = false, draggingLoop = false, ignoreDrag = false;
     double loopStart = 0.0, loopEnd = 0.0, dragStartBeat = 0.0;
 
     double beatAt (int x) const;

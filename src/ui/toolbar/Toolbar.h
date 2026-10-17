@@ -18,7 +18,8 @@ class AudioEngine;
     Left-side buttons fire application commands, so they behave exactly like
     the matching menu items and keyboard shortcuts.
 */
-class Toolbar  : public juce::Component
+class Toolbar  : public juce::Component,
+                 public juce::TooltipClient   // the CPU readout's tooltip (see getTooltip)
 {
 public:
     Toolbar (AudioEngine&, juce::ApplicationCommandManager&);
@@ -34,6 +35,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    juce::String getTooltip() override;
 
 private:
     AudioEngine& engine;
@@ -47,8 +49,12 @@ private:
     MeterSlider masterVolume;   // the master level and volume in one
 
     juce::String statsLine1, statsLine2;
+    bool realtimeBadge = false;     // "RT" beside the CPU readout
+    bool realtimeKnown = false;     // false where the OS looks after it (no tooltip line then)
     juce::Rectangle<int> masterArea, statsArea;
     int statsCountdown = 0;
+
+    juce::Rectangle<int> getRealtimeBadgeArea() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Toolbar)
 };

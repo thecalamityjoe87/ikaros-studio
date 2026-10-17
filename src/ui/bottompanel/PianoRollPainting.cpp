@@ -2,6 +2,7 @@
 
 #include "ui/bottompanel/PianoRoll.h"
 #include "ui/bottompanel/PianoRollLayout.h"
+#include "ui/widgets/Icons.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -118,9 +119,20 @@ void PianoRoll::paintGrid (juce::Graphics& g)
         }
     };
 
-    drawLines (gridBeats(), 0.025f);
+    if (grid != EditorGrid::bar)
+        drawLines (gridBeats(), 0.025f);
+
     drawLines (1.0, 0.04f);
-    drawLines (beatsPerBar, 0.1f);
+
+    // Bars can differ in length: the tempo map knows where each one starts.
+    if (tempo.shortestBar() * pixelsPerBeat >= 6.0)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.1f));
+        tempo.forEachBar (regionStart + scrollBeats, regionStart + scrollBeats + visibleBeats(), 1, [&] (int, double barBeat)
+        {
+            g.fillRect (beatToX (barBeat - regionStart), area.getY(), 1.0f, area.getHeight());
+        });
+    }
 
     // Past the end of the region (or of the loop): shaded.
     const float endX = beatToX (region->getContentLengthBeats());

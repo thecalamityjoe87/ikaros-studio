@@ -288,6 +288,9 @@ public:
         else
             latency = (int) frames * ((int) periods - 1); // (this is the method JACK uses to guess the latency)
 
+        periodFrames = (int) frames;
+        numPeriods = (int) periods;
+
         JUCE_ALSA_LOG ("frames: " << (int) frames << ", periods: " << (int) periods
                           << ", samplesPerPeriod: " << (int) samplesPerPeriod);
 
@@ -409,18 +412,48 @@ public:
         return true;
     }
 
+    // Ikaros: when an output stream isn't running yet (at the start, or after
+    // recovering from an xrun), fill all but one period with silence. With
+    // input and output open, the audio thread waits for each input period
+    // before writing an output one, so without this the output runs just one
+    // period ahead of the hardware, and a USB interface (which moves audio in
+    // ~1 ms bursts) runs dry at small buffer sizes. The output then really
+    // has the latency `latency` reports, as JACK does it.
+    void primeOutputIfStopped()
+    {
+        if (isInput || numPeriods < 2 || snd_pcm_state (handle) != SND_PCM_STATE_PREPARED)
+            return;
+
+        const auto frames = (snd_pcm_uframes_t) (periodFrames * (numPeriods - 1));
+        const auto bytesPerChannel = (size_t) snd_pcm_samples_to_bytes (handle, (snd_pcm_sframes_t) frames);
+
+        // All zero bytes is silence in every format JUCE opens (signed or float).
+        silence.setSize (bytesPerChannel * (size_t) numChannelsRunning, true);
+
+        if (isInterleaved)
+        {
+            snd_pcm_writei (handle, silence.getData(), frames);
+        }
+        else
+        {
+            std::vector<void*> channels ((size_t) numChannelsRunning, silence.getData());
+            snd_pcm_writen (handle, channels.data(), frames);
+        }
+    }
+
     //==============================================================================
     snd_pcm_t* handle;
     String error;
     int bitDepth, numChannelsRunning, latency;
     int underrunCount = 0, overrunCount = 0;
+    int periodFrames = 0, numPeriods = 0;   // Ikaros: for primeOutputIfStopped
 
 private:
     //==============================================================================
     String deviceID;
     const bool isInput;
     bool isInterleaved;
-    MemoryBlock scratch;
+    MemoryBlock scratch, silence;
     std::unique_ptr<AudioData::Converter> converter;
 
     //==============================================================================
@@ -692,6 +725,14 @@ public:
     {
         while (! threadShouldExit())
         {
+            // Ikaros: reading the first input period starts the (linked) output
+            // too, so it needs its silence first. See primeOutputIfStopped.
+            const bool duplex = inputDevice != nullptr && inputDevice->handle != nullptr
+                                 && outputDevice != nullptr && outputDevice->handle != nullptr;
+
+            if (duplex)
+                outputDevice->primeOutputIfStopped();
+
             if (inputDevice != nullptr && inputDevice->handle != nullptr)
             {
                 if (outputDevice == nullptr || outputDevice->handle == nullptr)
@@ -752,6 +793,10 @@ public:
 
                 if (avail < 0)
                     JUCE_ALSA_FAILED (snd_pcm_recover (outputDevice->handle, (int) avail, 0));
+
+                // Ikaros: an input xrun stops the linked output too.
+                if (duplex)
+                    outputDevice->primeOutputIfStopped();
 
                 audioIoInProgress = true;
 

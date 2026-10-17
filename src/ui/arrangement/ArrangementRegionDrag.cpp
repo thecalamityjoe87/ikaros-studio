@@ -117,7 +117,7 @@ void ArrangementView::RegionDrag::updateMoveDrag (juce::Point<int> pos)
     // Rounding to the nearest line can land just before the limit: use the
     // next line up instead.
     if (newStart < lowestStart - 1.0e-9)
-        newStart += owner.getSnapBeats();
+        newStart += owner.getSnapBeats (newStart);
 
     const double delta = newStart - anchor->startBeat;
 
