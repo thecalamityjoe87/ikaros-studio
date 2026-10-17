@@ -199,6 +199,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/EqController.h       src/engine/EqController.cpp
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
+    src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
@@ -299,6 +300,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
     src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp
+    src/ui/bottompanel/NoiseGateView.h      src/ui/bottompanel/NoiseGateView.cpp
     src/ui/bottompanel/RecordingView.h      src/ui/bottompanel/RecordingView.cpp)
 
 target_sources(IkarosStudio PRIVATE
@@ -487,7 +489,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -508,6 +510,11 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Recording PROPERTIES LABELS "recording")
     set_tests_properties(EngineSmokeTest.Takes PROPERTIES LABELS "takes")
     set_tests_properties(EngineSmokeTest.LongRecording PROPERTIES LABELS "slow" TIMEOUT 1800)
+
+    # The built-in effects (see src/engine/BuiltInEffects.h), heard through
+    # the pretend audio interface.
+    add_test(NAME EngineSmokeTest.Effects COMMAND IkarosEngineSmokeTest --only=effects)
+    set_tests_properties(EngineSmokeTest.Effects PROPERTIES LABELS "effects")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

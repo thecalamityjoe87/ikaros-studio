@@ -1,6 +1,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/AudioDeviceWatcher.h"
 #include "engine/AudioPreview.h"
+#include "engine/BuiltInEffects.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
@@ -250,6 +251,12 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // The hidden plugins behind sampled instruments' Sound tab knobs.
         engine.getPluginManager().createBuiltInType<SoundShaperPlugin>();
         engine.getPluginManager().createBuiltInType<TransposePlugin>();
+
+        // Our own effects, offered beside Tracktion's in "+ Add effect".
+        engine.getPluginManager().createBuiltInType<LimiterPlugin>();
+        engine.getPluginManager().createBuiltInType<NoiseGatePlugin>();
+        engine.getPluginManager().createBuiltInType<DistortionPlugin>();
+        engine.getPluginManager().createBuiltInType<TremoloPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
@@ -839,6 +846,11 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
     setBpm (settings.bpm);
     setTimeSignature (settings.numerator, settings.denominator);
     setKey (settings.keyRoot, settings.minor);
+
+    // A limiter on the master (at -1 dB) keeps the mix and exports from
+    // clipping. Only new sessions get one: older sessions open as they were
+    // saved, since adding it there would change how they sound.
+    trackController->effects().addEffect (masterTrackId, LimiterPlugin::xmlTypeName);
 
     // Instrument tracks take the sound's name ("Soft Piano"). If a sound pack
     // has been removed, the track keeps the built-in synth.

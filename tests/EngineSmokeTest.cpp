@@ -489,8 +489,9 @@ static void runRecordingSection (const juce::File& dir)
         check (s.running && s.sampleRate == rate && s.bufferSize == block, "the pretend device is running");
         check (std::abs (s.inputLatencyMs - 10.0) < 0.01 && std::abs (s.outputLatencyMs - 5.0) < 0.01,
                "its input and output latency are reported");
-        check (std::abs (s.monitoringLatencyMs - 15.0) < 0.01, "the monitoring delay is input + output latency");
-        check (std::abs (s.recordingCompensationMs - 15.0) < 0.01, "and recordings are moved back by as much");
+        // Plus the 2 ms the master's limiter looks ahead (new sessions have one).
+        check (std::abs (s.monitoringLatencyMs - 17.0) < 0.01, "the monitoring delay is input + output + plug-in latency");
+        check (std::abs (s.recordingCompensationMs - 17.0) < 0.01, "and recordings are moved back by as much");
         check (s.dropouts == 0, "no dropouts yet");
     }
 
@@ -1369,6 +1370,227 @@ static void runLongRecordingSection()
 
 // The app-wide settings: the store itself (no engine needed), then what the
 // engine does with them.
+// Root-mean-square level of the first channel (or of part of it).
+static float rmsOf (const juce::AudioBuffer<float>& b, int start = 0, int num = -1)
+{
+    if (num < 0)
+        num = b.getNumSamples() - start;
+
+    return num > 0 ? b.getRMSLevel (0, start, num) : 0.0f;
+}
+
+// The built-in effects (Limiter, Noise Gate, Distortion, Tremolo), heard
+// through the pretend audio interface: a monitored audio track plays the
+// test's tone through its effects and the master's.
+static void runEffectsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    auto device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    const auto rate = device->getSettings().sampleRate;
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    std::cout << "Built-in effects\n";
+    {
+        auto available = effects.getAvailableEffects();
+        auto offered = [&] (const juce::String& name, const juce::String& group)
+        {
+            return std::any_of (available.begin(), available.end(),
+                                [&] (const EffectType& e) { return e.name == name && e.category == group && ! e.isThirdParty; });
+        };
+
+        check (offered ("Limiter", "Dynamics") && offered ("Noise Gate", "Dynamics")
+                 && offered ("Distortion", "Distortion") && offered ("Tremolo", "Modulation"),
+               "Limiter, Noise Gate, Distortion and Tremolo are in the effects menu");
+    }
+
+    std::cout << "Master limiter\n";
+    auto master = effects.getEffectChain (masterTrackId);
+    check (master.size() == 1 && master[0].name == "Limiter" && master[0].enabled, "a new session has a limiter on the master");
+
+    if (master.empty())
+        return;
+
+    const auto limiter = master[0].id;
+    {
+        auto params = effects.getEffectParameters (masterTrackId, limiter);
+        check (params.size() == 3 && params[0].name == "Gain" && params[1].name == "Ceiling" && params[2].name == "Release",
+               "it has Gain, Ceiling and Release knobs");
+        check (params.size() == 3 && params[1].valueText == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "1.0 dB",
+               "its ceiling is -1 dB");
+        check (! engine.canUndo() && ! engine.hasUnsavedChanges(), "adding it isn't an undo step or a change to save");
+    }
+
+    // A monitored audio track: what goes into Input 1 comes out through its
+    // effects and the master's.
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (! inputs.empty(), "(the pretend device has inputs)");
+
+    if (inputs.empty())
+        return;
+
+    auto t = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (t, inputs[0].id);
+    tracks.setSelectedTrack (t);
+    tracks.inputs().setArmed (t, true);
+    tracks.inputs().setMonitoring (t, true);
+    runAudio (*device, 0.3);
+
+    // Plays a tone for a moment (so the effects settle), then returns what
+    // comes out over the next `seconds`.
+    auto listen = [&] (float level, bool square = false, double seconds = 0.5)
+    {
+        runAudio (*device, 0.4, tone (*device, level, square));
+        return device->process (tone (*device, level, square) (0, (int) (rate * seconds)));
+    };
+
+    const auto quietLimited = peakOf (listen (0.25f));
+    effects.setEffectEnabled (masterTrackId, limiter, false);
+    const auto quietPlain = peakOf (listen (0.25f));
+    check (quietPlain > 0.05f && std::abs (quietLimited - quietPlain) < quietPlain * 0.01f,
+           "the limiter leaves audio under its ceiling alone");
+
+    effects.setEffectEnabled (masterTrackId, limiter, true);
+    engine.beginUndoStep ("Limiter Gain");
+    effects.setEffectParameter (masterTrackId, limiter, 0, 1.0f);   // +12 dB into it
+    const auto loud = peakOf (listen (1.0f, true));
+    std::cout << "    (a full-scale square, 12 dB up, peaks at " << loud << ")\n";
+    // The master fader comes after the master's effects (it starts at -3 dB).
+    const auto ceiling = juce::Decibels::decibelsToGain (-1.0f + tracks.getMasterVolumeDb());
+    check (loud <= ceiling * 1.001f && loud > ceiling * 0.95f, "a loud signal is held at the -1 dB ceiling");
+    engine.undo();
+    check (effects.getEffectParameters (masterTrackId, limiter)[0].value == 0.0f, "undo turns its gain back down");
+
+    std::cout << "Noise gate\n";
+    {
+        const float hiss = juce::Decibels::decibelsToGain (-70.0f);
+        const auto hissPlain = peakOf (listen (hiss));
+
+        check (! effects.getNoiseGate (t).exists, "a track starts without a noise gate");
+        check (effects.setNoiseGateOn (t, true), "the inspector can turn one on");
+        auto gate = effects.getNoiseGate (t);
+        auto chain = effects.getEffectChain (t);
+        check (gate.exists && gate.on && ! chain.empty() && chain[0].name == "Noise Gate" && chain[0].id == gate.pluginId,
+               "which adds a Noise Gate at the top of the chain");
+
+        const auto hissGated = peakOf (listen (hiss));
+        std::cout << "    (-70 dB hiss peaks at " << hissPlain << " without the gate, " << hissGated << " with it)\n";
+        check (hissGated < hissPlain * 0.1f, "it silences sound under its threshold");
+        check (std::abs (peakOf (listen (0.25f)) - quietPlain) < quietPlain * 0.05f, "and lets louder sound through");
+
+        engine.beginUndoStep ("Noise Gate Threshold");
+        effects.setNoiseGateThreshold (t, 0.0f);   // -80 dB
+        check (peakOf (listen (hiss)) > hissPlain * 0.5f, "a lower threshold lets quieter sound through");
+        engine.undo();
+        check (effects.getNoiseGate (t).thresholdText == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "50.0 dB",
+               "undo puts the threshold back");
+
+        effects.setNoiseGateOn (t, false);
+        gate = effects.getNoiseGate (t);
+        check (gate.exists && ! gate.on && effects.getEffectChain (t).size() == 1, "turning it off bypasses it (it stays in the chain)");
+        check (peakOf (listen (hiss)) > hissPlain * 0.5f, "and the quiet sound comes back");
+        engine.undo();
+        check (effects.getNoiseGate (t).on, "undo turns it back on");
+        effects.removeEffect (t, gate.pluginId);
+    }
+
+    std::cout << "Distortion\n";
+    {
+        // A sine's peak is 1.41x its RMS; saturation flattens the peaks.
+        const auto plain = listen (0.25f);
+        const auto distortion = effects.addEffect (t, "ikarosDistortion");
+        auto params = effects.getEffectParameters (t, distortion);
+        check (params.size() == 3 && params[0].name == "Drive" && params[1].name == "Tone" && params[2].name == "Output",
+               "it has Drive, Tone and Output knobs");
+
+        const auto driven = listen (0.25f);
+        const auto crestPlain = peakOf (plain) / rmsOf (plain), crestDriven = peakOf (driven) / rmsOf (driven);
+        std::cout << "    (peak/RMS " << crestPlain << " clean, " << crestDriven << " driven; peak "
+                  << peakOf (plain) << " -> " << peakOf (driven) << ")\n";
+        check (crestDriven < crestPlain - 0.1f, "it changes the shape of the sound");
+        check (peakOf (driven) > peakOf (plain) * 0.5f && peakOf (driven) < peakOf (plain) * 2.5f,
+               "without making it much louder or quieter");
+        effects.removeEffect (t, distortion);
+    }
+
+    std::cout << "Tremolo\n";
+    {
+        const auto tremolo = effects.addEffect (t, "ikarosTremolo");
+        auto params = effects.getEffectParameters (t, tremolo);
+        check (params.size() == 3 && params[0].name == "Rate" && params[0].valueText == "5.0 Hz"
+                 && params[1].name == "Depth" && params[2].name == "Shape",
+               "it has Rate, Depth and Shape knobs (5 Hz to start with)");
+
+        // The level in 10 ms slices over a second (five pulses).
+        const auto heard = listen (0.25f, false, 1.0);
+        const int slice = (int) (rate * 0.01);
+        float lowest = 1.0f, highest = 0.0f;
+
+        for (int start = 0; start + slice <= heard.getNumSamples(); start += slice)
+        {
+            lowest = juce::jmin (lowest, rmsOf (heard, start, slice));
+            highest = juce::jmax (highest, rmsOf (heard, start, slice));
+        }
+
+        std::cout << "    (level swings " << lowest << " to " << highest << ")\n";
+        check (highest > lowest * 1.6f && highest < lowest * 2.5f, "the level pulses (down by about half at 50% depth)");
+        effects.removeEffect (t, tremolo);
+    }
+
+    std::cout << "Saving effect settings\n";
+    {
+        const auto distortion = effects.addEffect (t, "ikarosDistortion");
+        const auto tremolo = effects.addEffect (t, "ikarosTremolo");
+        effects.addEffect (t, "ikarosLimiter");
+        effects.setNoiseGateOn (t, true);
+        engine.beginUndoStep ("Drive");
+        effects.setEffectParameter (t, distortion, 0, 0.8f);
+        engine.beginUndoStep ("Rate");
+        effects.setEffectParameter (t, tremolo, 0, 1.0f);
+        engine.beginUndoStep ("Noise Gate Threshold");
+        effects.setNoiseGateThreshold (t, 0.25f);
+        pumpMessages();
+
+        auto session = dir.getChildFile ("Effects");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+
+        t = tracks.getTracks().back().id;
+        auto chain = effects.getEffectChain (t);
+        check (chain.size() == 4 && chain[0].name == "Noise Gate" && chain[1].name == "Distortion"
+                 && chain[2].name == "Tremolo" && chain[3].name == "Limiter",
+               "the new effects survive save and reopen");
+
+        if (chain.size() == 4)
+        {
+            check (std::abs (effects.getEffectParameters (t, chain[1].id)[0].value - 0.8f) < 0.01f
+                     && effects.getEffectParameters (t, chain[2].id)[0].valueText == "15 Hz"
+                     && std::abs (effects.getNoiseGate (t).threshold - 0.25f) < 0.01f,
+                   "and so do their settings");
+        }
+
+        check (effects.getEffectChain (masterTrackId).size() == 1, "and the master limiter");
+
+        // Sessions from before the default limiter don't get one when they open.
+        effects.removeEffect (masterTrackId, effects.getEffectChain (masterTrackId)[0].id);
+        check (engine.saveSession(), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        check (effects.getEffectChain (masterTrackId).empty(), "a session saved without a master limiter opens without one");
+
+        engine.newSession ({ SessionTemplate::voice, 120.0, 4, 4, 0, false });
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        master = effects.getEffectChain (masterTrackId);
+        check (master.size() == 1 && master[0].name == "Limiter", "every new session (from any template) starts with one");
+        check (! engine.canUndo(), "(and it's not an undo step there either)");
+    }
+
+    device.reset();
+}
+
 static void runPreferencesSection (const juce::File& dir)
 {
     auto folder = dir.getChildFile ("Preferences");
@@ -2562,7 +2784,8 @@ int main (int argc, char* argv[])
             check (eq.getEq (t1).bands[3].gainDb == 0.0f, "separate from the tracks'");
             auto masterReverb = tracks.effects().addEffect (masterTrackId, "reverb");
             pumpMessages();
-            check (masterReverb != 0 && tracks.effects().getEffectChain (masterTrackId).size() == 1,
+            // (New sessions start with a limiter on the master.)
+            check (masterReverb != 0 && tracks.effects().getEffectChain (masterTrackId).size() == 2,
                    "the master can have effects");
             check (tracks.effects().getEffectChain (0).empty() && eq.getEq (0).bands[3].gainDb == 0.0f,
                    "\"no track\" (0) never touches the master");
@@ -2625,7 +2848,7 @@ int main (int argc, char* argv[])
             check (std::abs (eq.getEq (t1).bands[1].gainDb - 6.0f) < 0.01f
                      && std::abs (eq.getEq (masterTrackId).bands[3].gainDb + 4.0f) < 0.01f,
                    "track and master EQ survive save and reopen");
-            check (tracks.effects().getEffectChain (masterTrackId).size() == 1, "and so do master effects");
+            check (tracks.effects().getEffectChain (masterTrackId).size() == 2, "and so do master effects");
         }
 
         std::cout << "Audio inputs\n";
@@ -4158,6 +4381,17 @@ int main (int argc, char* argv[])
         checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t1, fx, false); });
         checkUndoRoundTrip (engine, "Reverb Mix", [&] { engine.beginUndoStep ("Reverb Mix"); effects.setEffectParameter (t1, fx, 0, 0.9f); });
         checkUndoRoundTrip (engine, "Remove Effect", [&] { effects.removeEffect (t1, fx2); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { fx2 = effects.addEffect (t1, "ikarosDistortion"); });
+        checkUndoRoundTrip (engine, "Drive", [&] { engine.beginUndoStep ("Drive"); effects.setEffectParameter (t1, fx2, 0, 0.9f); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { effects.addEffect (t1, "ikarosTremolo"); });
+        checkUndoRoundTrip (engine, "Add Effect", [&] { effects.addEffect (t1, "ikarosLimiter"); });
+        checkUndoRoundTrip (engine, "Turn Noise Gate On", [&] { effects.setNoiseGateOn (t1, true); });
+        checkUndoRoundTrip (engine, "Noise Gate Threshold", [&]
+        {
+            engine.beginUndoStep ("Noise Gate Threshold");
+            effects.setNoiseGateThreshold (t1, 0.7f);
+        });
+        checkUndoRoundTrip (engine, "Turn Noise Gate Off", [&] { effects.setNoiseGateOn (t1, false); });
         checkUndoRoundTrip (engine, "EQ", [&] { engine.beginUndoStep ("EQ"); tracks.eq().setBand (t1, 1, 800.0f, 6.0f, 1.0f); });
         checkUndoRoundTrip (engine, "Turn EQ Off", [&] { tracks.eq().setEnabled (t1, false); });
         checkUndoRoundTrip (engine, "Reset EQ", [&] { tracks.eq().reset (t1); });
@@ -4580,6 +4814,9 @@ int main (int argc, char* argv[])
 
     if (runs ("preferences"))
         runPreferencesSection (dir);
+
+    if (runs ("effects"))
+        runEffectsSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

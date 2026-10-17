@@ -1,6 +1,7 @@
 #include "engine/EffectsController.h"
 #include "engine/SoundControls.h"
 #include "engine/AudioEngine.h"
+#include "engine/BuiltInEffects.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
@@ -23,12 +24,16 @@ namespace
     {
         static const std::vector<EffectType> effects {
             { te::CompressorPlugin::xmlTypeName, "Compressor",            "Dynamics" },
+            { LimiterPlugin::xmlTypeName,        "Limiter",               "Dynamics" },
+            { NoiseGatePlugin::xmlTypeName,      "Noise Gate",            "Dynamics" },
             { te::EqualiserPlugin::xmlTypeName,  "EQ",                    "EQ & Filter" },
             { te::LowPassPlugin::xmlTypeName,    "Low/High-Pass Filter",  "EQ & Filter" },
+            { DistortionPlugin::xmlTypeName,     "Distortion",            "Distortion" },
             { te::ReverbPlugin::xmlTypeName,     "Reverb",                "Space" },
             { te::DelayPlugin::xmlTypeName,      "Echo",                  "Space" },
             { te::ChorusPlugin::xmlTypeName,     "Chorus",                "Modulation" },
             { te::PhaserPlugin::xmlTypeName,     "Phaser",                "Modulation" },
+            { TremoloPlugin::xmlTypeName,        "Tremolo",               "Modulation" },
             { te::PitchShiftPlugin::xmlTypeName, "Pitch Shift",           "Pitch" },
         };
         return effects;
@@ -209,6 +214,31 @@ namespace
     }
 
     juce::String percent (float v)    { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; }
+
+    // Turns a built-in effect's knob to 0..1 of its range.
+    // Like setParameterUndoably, but we don't know which state property
+    // backs an arbitrary effect's parameter: the ID isn't it (the Delay's
+    // "mix proportion" lives in "mix", plug-in IDs are numbers), and writing
+    // the ID as a property made saved sessions invalid XML. Instead, setting
+    // the parameter to its current value makes Tracktion store it in the
+    // right property, outside the undo history (it writes its attached
+    // CachedValue with no UndoManager on every notifying set).
+    void setEffectKnob (te::AutomatableParameter& param, float normalised0to1)
+    {
+        param.setParameter (param.getCurrentValue(), juce::sendNotification);
+        param.setParameter (param.valueRange.convertFrom0to1 (normalised0to1), juce::sendNotification);
+    }
+
+    // The track inspector's Noise Gate section works on the first noise
+    // gate in the chain.
+    NoiseGatePlugin* findNoiseGate (te::PluginList& list)
+    {
+        for (auto* p : effectsOn (list))
+            if (auto* gate = dynamic_cast<NoiseGatePlugin*> (p))
+                return gate;
+
+        return nullptr;
+    }
 
     // A few of Tracktion's built-in effects (Chorus, Phaser) keep their
     // settings as plain properties on their state rather than as
@@ -957,16 +987,7 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
 
             if (auto* param = params[index])
             {
-                // Like setParameterUndoably, but we don't know which state
-                // property backs an arbitrary effect's parameter: the ID isn't
-                // it (the Delay's "mix proportion" lives in "mix", plug-in IDs
-                // are numbers), and writing the ID as a property made saved
-                // sessions invalid XML. Instead, setting the parameter to its
-                // current value makes Tracktion store it in the right property,
-                // outside the undo history (it writes its attached CachedValue
-                // with no UndoManager on every notifying set).
-                param->setParameter (param->getCurrentValue(), juce::sendNotification);
-                param->setParameter (param->valueRange.convertFrom0to1 (value), juce::sendNotification);
+                setEffectKnob (*param, value);
             }
             else
             {
@@ -985,6 +1006,77 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
             }
         }
     }
+}
+
+//==============================================================================
+// The track inspector's Noise Gate section
+EffectsController::NoiseGateSettings EffectsController::getNoiseGate (TrackId id) const
+{
+    NoiseGateSettings result;
+    auto* t = findTrack (owner.getEdit(), id);
+    auto* gate = t != nullptr ? findNoiseGate (t->pluginList) : nullptr;
+
+    if (gate == nullptr)
+    {
+        // What a new gate would start at.
+        using Gate = NoiseGatePlugin;
+        result.threshold = juce::jmap (Gate::defaultThresholdDb, Gate::minThresholdDb, Gate::maxThresholdDb, 0.0f, 1.0f);
+        result.thresholdText = Gate::decibels (Gate::defaultThresholdDb);
+        return result;
+    }
+
+    auto* param = gate->getThresholdParameter();
+    result.exists = true;
+    result.on = gate->isEnabled();
+    result.pluginId = gate->itemID.getRawID();
+    result.threshold = param->getCurrentNormalisedValue();
+    result.thresholdText = param->getCurrentValueAsString();
+    return result;
+}
+
+bool EffectsController::setNoiseGateOn (TrackId id, bool on)
+{
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr)
+        return false;
+
+    if (auto* gate = findNoiseGate (t->pluginList))
+    {
+        // Turning it off keeps it (and its threshold) in the chain, bypassed.
+        if (gate->isEnabled() != on)
+        {
+            owner.beginUndoStep (on ? "Turn Noise Gate On" : "Turn Noise Gate Off");
+            gate->setEnabled (on);
+        }
+
+        return true;
+    }
+
+    if (! on)
+        return true;
+
+    // None yet: add one at the top of the chain, so it hears the input
+    // before any other effect (a compressor would bring the noise up first).
+    if ((int) effectsOn (t->pluginList).size() >= maxEffectsPerTrack)
+        return false;
+
+    auto plugin = createPlugin (t->edit, NoiseGatePlugin::xmlTypeName);
+
+    if (plugin == nullptr)
+        return false;
+
+    owner.beginUndoStep ("Turn Noise Gate On");
+    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (t->pluginList, 0), nullptr);
+    return true;
+}
+
+void EffectsController::setNoiseGateThreshold (TrackId id, float normalised0to1)
+{
+    // No beginUndoStep() here: the UI starts one on drag start.
+    if (auto* t = findTrack (owner.getEdit(), id))
+        if (auto* gate = findNoiseGate (t->pluginList))
+            setEffectKnob (*gate->getThresholdParameter(), juce::jlimit (0.0f, 1.0f, normalised0to1));
 }
 
 } // namespace ikaros

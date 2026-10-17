@@ -75,6 +75,28 @@ public:
     std::vector<ParameterInfo> getEffectParameters (TrackId, PluginId) const;
     void setEffectParameter (TrackId, PluginId, int parameterIndex, float normalised0to1);
 
+    //==============================================================================
+    // The track inspector's "Noise Gate" section: a shortcut to the first
+    // Noise Gate effect in a track's chain.
+    struct NoiseGateSettings
+    {
+        bool exists = false;            // the track has a Noise Gate effect
+        bool on = false;                // ...and it isn't bypassed
+        PluginId pluginId = 0;
+        float threshold = 0.0f;         // 0..1 of the knob's range
+        juce::String thresholdText;     // e.g. "-50.0 dB"
+    };
+
+    NoiseGateSettings getNoiseGate (TrackId) const;
+
+    /** Turning it on adds a Noise Gate at the top of the chain if there
+        isn't one (false if the chain is full); turning it off bypasses it,
+        keeping its settings. One undo step. */
+    bool setNoiseGateOn (TrackId, bool on);
+
+    /** Doesn't start an undo step: the UI starts one when a drag begins. */
+    void setNoiseGateThreshold (TrackId, float normalised0to1);
+
 private:
     AudioEngine& owner;
 

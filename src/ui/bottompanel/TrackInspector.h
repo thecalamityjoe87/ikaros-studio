@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/bottompanel/NoiseGateView.h"
 #include "ui/bottompanel/PluginChainView.h"
 #include "ui/bottompanel/RecordingView.h"
 #include "ui/theme/Tokens.h"
@@ -13,10 +14,11 @@ namespace ikaros
     The left column of the bottom panel: settings for the selected track,
     grouped in collapsible sections (like GarageBand's track inspector).
 
-      Recording  input, monitoring and input level (audio tracks)
-      Plug-ins   the instrument and effect chain
+      Recording   input, monitoring and input level (audio tracks)
+      Noise Gate  on/off and threshold (audio tracks)
+      Plug-ins    the instrument and effect chain
 
-    New sections (noise gate, sends to master reverb/echo, ...) slot in here.
+    New sections (sends to master reverb/echo, ...) slot in here.
 */
 class TrackInspector  : public juce::Component
 {
@@ -42,10 +44,13 @@ public:
 
 private:
     RecordingView recording;
+    NoiseGateView noiseGate;
     PluginChainView plugins;
 
     CollapsibleSection recordingSection;
+    CollapsibleSection noiseGateSection;
     CollapsibleSection pluginsSection;
+    bool masterMode = false;
 
     juce::Viewport viewport;
     juce::Component sectionHolder;
