@@ -76,6 +76,15 @@ LAME, which encodes MP3 exports
   LAME's encoder library unchanged; its source is in external/lame.
 
 
+Rubber Band Library, which stretches loops to the song's tempo and key
+  https://breakfastquay.com/rubberband
+  GNU General Public License, version 2 or later
+  Copyright 2007-2024 Particular Programs Ltd. (version 4.0.0)
+  The full license text is in external/rubberband/COPYING. It's built into
+  the app (through Tracktion Engine) from the unchanged source in
+  external/rubberband.
+
+
 Fonts
   Figtree and JetBrains Mono, SIL Open Font License 1.1 (see resources/fonts).
 

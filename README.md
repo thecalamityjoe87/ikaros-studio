@@ -18,7 +18,7 @@ Plug-ins are found by a scan in the background at startup. Each plug-in is loade
 
 ## Building
 
-You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`, sfizz, which plays SFZ instruments, in `external/sfizz`, and miniz, which reads and writes session files, in `external/miniz`. The first build takes a while because it compiles all of them. The projects Ikaros Studio is built on, and their licenses, are listed in `CREDITS`.
+You need CMake 3.22+ and a C++20 compiler. Tracktion Engine (which includes JUCE) lives in `external/tracktion_engine`, sfizz, which plays SFZ instruments, in `external/sfizz`, miniz, which reads and writes session files, in `external/miniz`, and Rubber Band, which stretches loops to the song's tempo and key, in `external/rubberband`. The first build takes a while because it compiles all of them. The projects Ikaros Studio is built on, and their licenses, are listed in `CREDITS`.
 
 ```sh
 git clone --recursive https://github.com/thecalamityjoe87/ikaros-studio.git

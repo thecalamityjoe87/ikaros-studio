@@ -150,6 +150,37 @@ add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
 # has no official git repository; see external/lame/README.ikaros.
 add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_ALL)
 
+# Rubber Band stretches audio regions in time and pitch (loops following the
+# song's tempo and key, Flex Time). Tracktion builds it into its own
+# time-stretch code from Rubber Band's single-file version
+# (single/RubberBandSingle.cpp), so there's no separate library to build or
+# ship: it ends up inside the app on every platform, AppImage and Flatpak
+# included. Rubber Band is GPL (version 2 or later). Pinned to a release tag
+# (4.0.0).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/rubberband/single/RubberBandSingle.cpp")
+    message(FATAL_ERROR
+        "The Rubber Band submodule is missing. Run:\n"
+        "  git submodule update --init external/rubberband")
+endif()
+
+# An "interface" library has no code of its own: linking to it just passes on
+# these settings, so the app and the smoke test build Tracktion the same way.
+#  - Tracktion includes <rubberband/single/RubberBandSingle.cpp>, so the
+#    folder above the submodule goes on the include path.
+#  - SoundTouch stays compiled in so sessions saved with it still open (they're
+#    switched to Rubber Band on load; see engine/TimeStretch.h).
+add_library(ikaros_timestretch INTERFACE)
+target_include_directories(ikaros_timestretch INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/external")
+target_compile_definitions(ikaros_timestretch INTERFACE
+    TRACKTION_ENABLE_TIMESTRETCH_RUBBERBAND=1
+    TRACKTION_BUILD_RUBBERBAND=1
+    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+
+if(APPLE)
+    # Rubber Band uses Apple's vDSP for its FFT on macOS.
+    target_link_libraries(ikaros_timestretch INTERFACE "-framework Accelerate")
+endif()
+
 # Third-party plug-in formats: VST3 everywhere, LV2 on Linux and Windows, Audio
 # Units on macOS. JUCE ships everything needed to host them.
 if(APPLE)
@@ -210,6 +241,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
     src/engine/LoopKey.h
+    src/engine/TimeStretch.h
     src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
@@ -345,8 +377,7 @@ target_compile_definitions(IkarosStudio PRIVATE
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_MODAL_LOOPS_PERMITTED=0
-    ${IKAROS_PLUGIN_HOST_DEFINITIONS}
-    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+    ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
 # The version, as the engine records it in saved sessions.
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
@@ -363,6 +394,7 @@ target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        ikaros_timestretch
         miniz
         mp3lame
         sfizz::sfizz
@@ -482,10 +514,10 @@ if(IKAROS_BUILD_TESTS)
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
-        ${IKAROS_PLUGIN_HOST_DEFINITIONS}
-        TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+        ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        ikaros_timestretch
         miniz
         mp3lame
         sfizz::sfizz
@@ -511,7 +543,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -541,6 +573,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Tempo PROPERTIES LABELS "tempo")
     add_test(NAME EngineSmokeTest.Sections COMMAND IkarosEngineSmokeTest --only=sections)
     set_tests_properties(EngineSmokeTest.Sections PROPERTIES LABELS "sections")
+    add_test(NAME EngineSmokeTest.Stretch COMMAND IkarosEngineSmokeTest --only=stretch)
+    set_tests_properties(EngineSmokeTest.Stretch PROPERTIES LABELS "stretch")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

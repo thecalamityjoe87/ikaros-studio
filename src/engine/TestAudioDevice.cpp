@@ -131,4 +131,9 @@ juce::AudioBuffer<float> TestAudioDevice::processLoopedBack (int numSamples)
     return output;
 }
 
+tracktion::Edit* TestAudioDevice::getEditOf (AudioEngine& engine)
+{
+    return engine.getEdit();   // TestAudioDevice is one of AudioEngine's friends
+}
+
 } // namespace ikaros

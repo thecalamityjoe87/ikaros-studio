@@ -14,6 +14,7 @@
 #include "engine/SoundLibrary.h"
 #include "engine/SongExporter.h"
 #include "engine/TakeHelpers.h"
+#include "engine/TimeStretch.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
@@ -1061,16 +1062,30 @@ bool AudioEngine::openSession (const juce::File& file)
 // notes (so reading a region never has to change the session), and the
 // short edge fades on audio (so cuts don't click). For recordings, and for
 // sessions from before these existed.
-static void prepareRegions (te::Edit& edit)
+static void prepareRegions (te::Edit& edit, const SoundLibrary& sounds)
 {
     for (auto* track : te::getAudioTracks (edit))
     {
         for (auto* clip : track->getClips())
         {
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+            {
                 detail::assignNoteIdsToEveryTake (*midi);   // the piano roll needs them on whichever take plays
+            }
             else if (auto* audio = dynamic_cast<te::AudioClipBase*> (clip))
+            {
                 detail::ensureEdgeFades (*audio);
+
+                // Older sessions stretched with SoundTouch (see TimeStretch.h).
+                // A saved session plays copies of its loops (in its Audio
+                // folder), which the library doesn't know: a loop that
+                // follows the tempo but not the key was placed as an
+                // unpitched one (see RegionEditor::importAudioFiles).
+                const auto* loop = sounds.findLoop (audio->getOriginalFile());
+                const bool percussive = loop != nullptr ? loop->unpitched
+                                                        : audio->getAutoTempo() && ! detail::followsSessionKey (*audio);
+                detail::upgradeLegacyStretcher (*audio, percussive);
+            }
         }
     }
 }
@@ -1106,7 +1121,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->legacySessionFile = legacySessionFile;
     impl->untitled = bundle == juce::File();
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
-    prepareRegions (*impl->edit);
+    prepareRegions (*impl->edit, *sounds);
     impl->keepUnsavedAfterSetup = false;
 
     impl->autosaver.attach (*impl->edit, workFolder, [this]
@@ -1658,7 +1673,7 @@ bool AudioEngine::recoverSession (const RecoverableSession& session)
         if (take.recordedAfter == autosaveId || ! autosave.existsAsFile())
             restoreTake (*impl->edit, take, folder);
 
-    prepareRegions (*impl->edit);
+    prepareRegions (*impl->edit, *sounds);
 
     auto tracks = trackController->getTracks();
     trackController->setSelectedTrack (tracks.empty() ? 0 : tracks.front().id);
@@ -1741,7 +1756,7 @@ void AudioEngine::finishTake()
         trackController->takes().gatherRecordedTakes (recorded, impl->midiTakesThisTake);
     }
 
-    prepareRegions (*impl->edit);
+    prepareRegions (*impl->edit, *sounds);
 
     if (impl->autoArmedTrack != 0)
         trackController->inputs().setArmed (std::exchange (impl->autoArmedTrack, TrackId {}), false);

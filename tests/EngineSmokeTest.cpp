@@ -12,6 +12,7 @@
 #include "engine/SessionRecovery.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
+#include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "platform/AppFolders.h"
 #include "engine/SongExporter.h"
 #include "ui/state/Selection.h"                    // plain logic, no components
@@ -2347,6 +2348,317 @@ static void runSectionsSection (const juce::File& dir)
 
         check (same, "sections are saved with the session");
     }
+}
+
+//==============================================================================
+// Time-stretching: loops that follow the tempo and key play through Rubber
+// Band (see engine/TimeStretch.h). The bundled loops are at 120 BPM.
+static void runStretchSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    std::cout << "Time-stretching\n";
+
+    AudioEngine engine { testSettings, false };   // the pretend device, to time playback
+    TestAudioDevice device { engine, {} };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& exporter = engine.getExporter();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (100.0);   // so the loops are stretched to 1.2 times as long
+
+    std::optional<LibraryFile> beat, chords;
+
+    for (auto& l : engine.getSounds().getLoops())
+    {
+        if (l.name == "Electro Beat")  beat = l;
+        if (l.name == "Glass Chords")  chords = l;
+    }
+
+    check (beat && chords, "(the bundled loops are there)");
+
+    if (! beat || ! chords)
+        return;
+
+    auto clipOf = [&] (RegionId id) { return dynamic_cast<te::AudioClipBase*> (detail::findClip (TestAudioDevice::getEditOf (engine), id)); };
+    auto modeOf = [&] (RegionId id)
+    {
+        auto* clip = clipOf (id);
+        return clip != nullptr ? clip->getTimeStretchMode() : te::TimeStretcher::disabled;
+    };
+
+    // The drum loop at beat 4; the chords well after it, at beat 40, so the
+    // drums' hits can be found on their own.
+    const auto drums = tracks.addAudioTrack();
+    const auto keys = tracks.addAudioTrack();
+    RegionId beatRegion = 0, chordsRegion = 0;
+    checkUndoRoundTrip (engine, "Import Audio File", [&]
+    {
+        beatRegion = regions.importAudioFiles (drums, { beat->file.getFullPathName() }, 4.0).front();
+    });
+    chordsRegion = regions.importAudioFiles (keys, { chords->file.getFullPathName() }, 40.0).front();
+    pumpMessages();
+    check (modeOf (beatRegion) == te::TimeStretcher::rubberbandPercussive, "a drum loop is stretched by Rubber Band, in its percussive mode");
+    check (modeOf (chordsRegion) == te::TimeStretcher::rubberbandMelodic, "a loop with a key, in its melodic mode");
+
+    // A plain recording only gets a stretcher when it's transposed.
+    const auto plainFile = dir.getChildFile ("Plain.wav");
+    writeClickWav (plainFile, 44100.0, 2.0, { 0.0 }, 0.5f);
+    const auto plainRegion = regions.importAudioFiles (keys, { plainFile.getFullPathName() }, 60.0).front();
+    pumpMessages();
+    check (modeOf (plainRegion) == te::TimeStretcher::disabled, "a recording isn't stretched");
+    checkUndoRoundTrip (engine, "Transpose Region", [&] { regions.setRegionTranspose (plainRegion, 3); });
+    check (modeOf (plainRegion) == te::TimeStretcher::rubberbandMelodic, "a transposed recording is (melodic)");
+    engine.undo();
+    pumpMessages();
+    check (modeOf (plainRegion) == te::TimeStretcher::disabled, "undo takes the stretcher away again");
+    regions.setRegionTranspose (beatRegion, 2);
+    pumpMessages();
+    check (modeOf (beatRegion) == te::TimeStretcher::rubberbandPercussive, "a transposed drum loop keeps its percussive mode");
+    engine.undo();
+    pumpMessages();
+
+    // Where the hits start in the loop's file, in seconds: the first sample
+    // over a third of the file's peak after 50 ms below it.
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+
+    auto findHits = [&] (const juce::File& f, double toSeconds)
+    {
+        std::vector<double> hits;
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+        if (reader == nullptr)
+            return hits;
+
+        const auto rate = reader->sampleRate;
+        juce::AudioBuffer<float> audio (1, (int) juce::jmin ((juce::int64) (toSeconds * rate), reader->lengthInSamples));
+        reader->read (&audio, 0, audio.getNumSamples(), 0, true, false);
+        const auto threshold = audio.getMagnitude (0, audio.getNumSamples()) / 3.0f;
+        const int minGap = (int) (0.05 * rate);
+        int quiet = minGap;
+
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+        {
+            if (std::abs (audio.getSample (0, i)) > threshold)
+            {
+                if (quiet >= minGap)
+                    hits.push_back (i / rate);
+
+                quiet = 0;
+            }
+            else
+            {
+                ++quiet;
+            }
+        }
+
+        return hits;
+    };
+
+    // Exports the song (the file it wrote).
+    auto exportSong = [&] (const juce::String& name)
+    {
+        ExportSettings settings;
+        settings.destination = dir.getChildFile ("Stretch Export").getChildFile (name + ".wav");
+        bool done = false;
+
+        if (exporter.start (settings, [&] (const ExportResult&) { done = true; }).failed())
+            return juce::File();
+
+        for (int i = 0; i < 1200 && ! done; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        return settings.destination;
+    };
+
+    // The loop's own hits, moved to where they should play: from the
+    // region's start, stretched by (loop tempo / session tempo).
+    const auto loopHits = findHits (beat->file, 60.0);
+
+    auto expectedHits = [&] (double bpm)
+    {
+        std::vector<double> hits;
+
+        for (auto h : loopHits)
+            hits.push_back (4.0 * 60.0 / bpm + h * 120.0 / bpm);
+
+        return hits;
+    };
+
+    // How far the drum loop's hits are from where they should be in an
+    // export, at worst, in ms. Each one is looked for within 80 ms of its
+    // place: where the sound first gets over half as loud as it gets there.
+    // (Not with findHits: stretching changes how loud the hits are against
+    // each other, and Rubber Band keeps the hi-hats sharp enough to count.)
+    auto worstMs = [&] (const juce::File& f, const std::vector<double>& expected)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+        if (reader == nullptr || expected.empty())
+            return 1.0e6;
+
+        const auto rate = reader->sampleRate;
+        const int window = (int) (0.08 * rate);
+        juce::AudioBuffer<float> audio (1, 2 * window);
+        double worst = 0.0;
+
+        for (auto e : expected)
+        {
+            const auto from = (juce::int64) (e * rate) - window;
+            reader->read (&audio, 0, audio.getNumSamples(), from, true, false);
+            const auto threshold = audio.getMagnitude (0, audio.getNumSamples()) / 2.0f;
+            int onset = 0;
+
+            while (onset < audio.getNumSamples() && std::abs (audio.getSample (0, onset)) <= threshold)
+                ++onset;
+
+            worst = std::max (worst, std::abs ((double) (from + onset) / rate - e) * 1000.0);
+        }
+
+        return worst;
+    };
+
+    constexpr double toleranceMs = 5.0;
+    const auto rubberBand = exportSong ("Rubber Band");
+    std::cout << "  (" << loopHits.size() << " hits in the loop; Rubber Band puts them within "
+              << worstMs (rubberBand, expectedHits (100.0)) << " ms)\n";
+    check (loopHits.size() >= 4 && worstMs (rubberBand, expectedHits (100.0)) < toleranceMs,
+           "a stretched drum loop's hits land on their (stretched) beats");
+
+    // A session from before Rubber Band: its loops were stretched with SoundTouch.
+    clipOf (beatRegion)->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+    clipOf (chordsRegion)->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+    pumpMessages();
+    // (SoundTouch lets hits wander tens of ms off the beat, as it picks
+    // where to splice the audio; Rubber Band keeps them on it.)
+    const auto soundTouch = exportSong ("SoundTouch");
+    std::cout << "  (SoundTouch puts them within " << worstMs (soundTouch, expectedHits (100.0)) << " ms)\n";
+
+    const auto oldSession = dir.getChildFile ("Old Stretch.iksession");
+    check (engine.saveSessionAs (oldSession) && engine.openSession (oldSession), "(an older session is saved and reopened)");
+    pumpMessages();
+    check (modeOf (beatRegion) == te::TimeStretcher::rubberbandPercussive && modeOf (chordsRegion) == te::TimeStretcher::rubberbandMelodic,
+           "an older session's SoundTouch loops switch to Rubber Band when it opens (drums percussive, chords melodic)");
+    check (! engine.hasUnsavedChanges(), "without the session showing as changed");
+    check (worstMs (exportSong ("Upgraded"), expectedHits (100.0)) < toleranceMs,
+           "the upgraded loop plays in the same place, its hits on the beat");
+
+    checkSaveAndReopen (engine, dir.getChildFile ("Stretch"));
+    check (modeOf (beatRegion) == te::TimeStretcher::rubberbandPercussive, "the stretcher is saved with the session");
+
+    // Tempo and time signature changes (the loops stay on their beats).
+    engine.setBpm (80.0);
+    pumpMessages();
+    const auto slower = exportSong ("80 BPM");
+    std::cout << "  (at 80 BPM: within " << worstMs (slower, expectedHits (80.0)) << " ms)\n";
+    check (worstMs (slower, expectedHits (80.0)) < toleranceMs, "at a new tempo, the hits follow the beats");
+
+    engine.setTimeSignature (6, 8);
+    pumpMessages();
+    check (worstMs (exportSong ("Six Eight"), expectedHits (80.0)) < toleranceMs, "a new time signature doesn't move them");
+    engine.undo();
+    pumpMessages();
+
+    // A key change moves the chords (pitch shifted by Rubber Band) and they
+    // still fill their region.
+    engine.setKey (2, false);   // D major: up 2
+    pumpMessages();
+    {
+        const auto song = exportSong ("Key");
+        auto chordsInfo = regions.getRegion (chordsRegion);
+        engine.setPositionBeats (chordsInfo->startBeat);
+        const auto from = engine.getTransportState().positionSeconds;
+        engine.setPositionBeats (chordsInfo->startBeat + chordsInfo->lengthBeats);
+        const auto to = engine.getTransportState().positionSeconds;
+
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (song));
+        float early = 1.0f, late = 0.0f;
+
+        if (reader != nullptr)
+        {
+            juce::AudioBuffer<float> audio (2, (int) reader->lengthInSamples);
+            reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+            const auto at = [&] (double t) { return juce::jlimit (0, audio.getNumSamples() - 1, (int) (t * reader->sampleRate)); };
+            early = audio.getMagnitude (at (from - 1.0), at (from - 0.05) - at (from - 1.0));
+            late = audio.getMagnitude (at (to - 0.5), at (to - 0.1) - at (to - 0.5));
+        }
+
+        check (early < 1.0e-4 && late > 0.01f, "a loop moved to a new key plays from its start to its end");
+    }
+
+    // A dozen stretched loops: how long Tracktion takes to stretch them
+    // (in the background, after placing them or changing the tempo), and
+    // how much of a core playing them takes.
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (100.0);
+    std::vector<RegionId> dozen;
+
+    for (int i = 0; i < 12; ++i)
+    {
+        const auto& l = engine.getSounds().getLoops()[(size_t) i % engine.getSounds().getLoops().size()];
+        const auto t = tracks.addAudioTrack();
+        auto ids = regions.importAudioFiles (t, { l.file.getFullPathName() }, 0.0);
+        regions.loopRegion (ids.front(), 32.0);   // 8 bars
+        dozen.push_back (ids.front());
+    }
+
+    pumpMessages();
+
+    // Waits for every loop's stretched copy; returns how long that took (s).
+    auto timeStretching = [&]
+    {
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+
+        for (auto id : dozen)
+            if (auto* clip = clipOf (id))
+                clip->beginRenderingNewProxyIfNeeded();
+
+        // A stretched copy can be read once it's finished. (Tracktion's
+        // isGeneratingPlaybackFile is true for any stretched clip.)
+        for (int i = 0; i < 1500; ++i)
+        {
+            bool busy = false;
+
+            for (auto id : dozen)
+                if (auto* clip = clipOf (id))
+                    busy = busy || clip->getPlaybackFile().getSampleRate() <= 0.0;
+
+            if (! busy)
+                break;
+
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+        }
+
+        return (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+    };
+
+    auto timePlaying = [&]
+    {
+        engine.setPositionBeats (0.0);
+        engine.play();
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        runAudio (device, 10.0);
+        const auto seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+        engine.stop();
+        pumpMessages();
+        return seconds / 10.0 * 100.0;   // % of one core
+    };
+
+    const auto rubberBandRender = timeStretching();
+    const auto rubberBandPlay = timePlaying();
+
+    for (auto id : dozen)
+        clipOf (id)->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+
+    const auto soundTouchRender = timeStretching();
+    const auto soundTouchPlay = timePlaying();
+    std::cout << "  (12 loops, 8 bars each: stretching takes " << rubberBandRender << " s with Rubber Band, "
+              << soundTouchRender << " s with SoundTouch; playing them takes " << rubberBandPlay << "% / "
+              << soundTouchPlay << "% of a core, Debug build)\n";
+    check (rubberBandRender < 30.0, "a dozen loops are stretched in good time");
 }
 
 int main (int argc, char* argv[])
@@ -5195,6 +5507,9 @@ int main (int argc, char* argv[])
 
     if (runs ("sections"))
         runSectionsSection (dir);
+
+    if (runs ("stretch"))
+        runStretchSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

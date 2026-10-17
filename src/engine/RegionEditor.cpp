@@ -3,6 +3,7 @@
 #include "engine/LoopKey.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TakeHelpers.h"
+#include "engine/TimeStretch.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -635,10 +636,8 @@ void RegionEditor::setRegionTranspose (RegionId id, int semitones)
     }
     else
     {
-        // Pitch shifting needs a time stretcher (as for loops: see importAudioFiles).
-        if (clip->getTimeStretchMode() == te::TimeStretcher::disabled)
-            clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
-
+        // Pitch shifting needs a time stretcher (see TimeStretch.h).
+        ensureStretcher (*clip);
         clip->setPitchChange ((float) semitones);
     }
 }
@@ -871,19 +870,19 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
         // ClipPosition = { time range on the timeline, offset into the file }.
         if (auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file, { { start, start + length }, {} }, false))
         {
+            // Following the tempo or the key needs a time stretcher (pitch
+            // shifting too, even at the loop's own tempo): see TimeStretch.h.
+            if (loopBpm > 0.0 || hasKey)
+                useStretcher (*clip, loop->unpitched);
+
             if (loopBpm > 0.0)
             {
                 clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
-                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 clip->setAutoTempo (true);
             }
 
             if (hasKey)
-            {
-                // Pitch shifting needs a time stretcher, even at the loop's own tempo.
-                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 setLoopKey (*clip, loop->keyRoot, loop->keyMinor);
-            }
 
             ensureEdgeFades (*clip);
             added.push_back (clip.get());

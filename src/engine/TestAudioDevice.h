@@ -2,6 +2,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+namespace tracktion { inline namespace engine { class Edit; } }
+
 namespace ikaros
 {
 
@@ -59,6 +61,11 @@ public:
     void reopen();
 
     const Settings& getSettings() const noexcept    { return settings; }
+
+    /** The engine's Tracktion Edit, which only the engine normally sees: for
+        tests that check what Tracktion was asked to do (a region's
+        stretcher, say). */
+    static tracktion::Edit* getEditOf (AudioEngine&);
 
 private:
     AudioEngine& engine;
