@@ -54,6 +54,9 @@ public:
     /** Lines the selected notes (or all of them) up with the grid, as one undo step. */
     void quantize();
 
+    /** Quantize's strength and swing, 0..1 each (see QuantizeSettings). */
+    void setQuantizeFeel (double strength, double swing);
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -93,6 +96,7 @@ private:
     bool needsFit = true;           // zoom to fit the region on the next layout
 
     EditorGrid grid = EditorGrid::sixteenth;
+    double quantizeStrength = 1.0, quantizeSwing = 0.0;   // see setQuantizeFeel
     double lastNoteLength = 0.25;   // new notes get the length of the last one drawn or resized
     std::vector<NoteId> selected;   // note IDs, sorted
     Gesture gesture;

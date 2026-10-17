@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/Quantize.h"
 
 namespace ikaros
 {
@@ -30,9 +31,11 @@ public:
 
     void deleteNotes (RegionId, const std::vector<NoteId>&);
 
-    /** Moves note starts to the nearest grid line (on the song's timeline).
-        An empty list quantises every note in the region. */
-    void quantiseNotes (RegionId, const std::vector<NoteId>&, double gridBeats);
+    /** Moves note starts towards the nearest grid line (on the song's
+        timeline, following its time signatures), as far as the settings'
+        strength says, as one "Quantize" undo step. An empty list quantises
+        every note in the region. */
+    void quantiseNotes (RegionId, const std::vector<NoteId>&, const QuantizeSettings&);
 
 private:
     AudioEngine& owner;

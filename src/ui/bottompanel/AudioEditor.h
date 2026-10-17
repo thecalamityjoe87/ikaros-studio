@@ -31,6 +31,12 @@ class AudioEngine;
     neighbours. A moved hit gets a marker (a brighter line with a handle at
     the bottom); double-click a marker to take it away again.
 
+    Quantize (Q, the Region inspector's button, or the right-click menu)
+    lines the hits up with the grid, like the piano roll's Quantize: those
+    in the selection (drag across the waveform to select some), or all of
+    them. It turns Flex on for the track if it's off; the hits are found
+    first if they haven't been, and the toolbar says so meanwhile.
+
     The region's settings (gain, pitch, reverse, the grid) are in the
     Region inspector on the panel's left (see RegionInspector).
 
@@ -51,8 +57,16 @@ public:
     void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, const TempoMap&);
     void setPlayheadBeat (double editBeat);
 
-    /** Where the region's edges snap to when they're dragged (see RegionInspector). */
+    /** Where the region's edges snap to when they're dragged, and what
+        Quantize lines the hits up with (see RegionInspector). */
     void setGrid (EditorGrid);
+
+    /** Quantizes the hits in the selection, or all of them, as one undo step
+        (see FlexEditor::quantize). */
+    void quantize();
+
+    /** Quantize's strength and swing, 0..1 each (see QuantizeSettings). */
+    void setQuantizeFeel (double strength, double swing);
 
     /** Called by the panel's ~30 Hz timer: picks up the waveform once it's been read. */
     void update();
@@ -72,12 +86,13 @@ private:
     // `start`/`end`/the fades as they'll end up.
     struct Drag
     {
-        enum class Mode { none, trimStart, trimEnd, fadeIn, fadeOut, playhead, flex };
+        enum class Mode { none, trimStart, trimEnd, fadeIn, fadeOut, playhead, select, flex };
 
         Mode mode = Mode::none;
         int startX = 0;
         double start = 0.0, end = 0.0;           // the region's edges, in beats on the timeline
         double fadeIn = 0.0, fadeOut = 0.0;      // in beats
+        double selectFrom = 0.0;                 // select: where it started, in beats from the region's start
 
         // Flex: the hit (or marker) being dragged, as a moment of the
         // recording, and where it's going, in beats on the timeline (of the
@@ -107,7 +122,17 @@ private:
     bool needsFit = true;           // zoom to fit the region on the next layout
 
     EditorGrid grid = EditorGrid::sixteenth;
+    double quantizeStrength = 1.0, quantizeSwing = 0.0;   // see setQuantizeFeel
     Drag drag;
+
+    // The part of the region that's selected, in beats from its start (so
+    // it stays on the same audio when the region moves). Quantize only
+    // moves the hits in it.
+    std::optional<juce::Range<double>> selection;
+
+    // A short message in the toolbar (e.g. "already on the grid"), until noticeUntil (ms counter).
+    juce::String notice;
+    juce::uint32 noticeUntil = 0;
     FlexInfo flex;   // the region's Flex state (re-read while it's busy, see update())
 
     // The waveform for the current view, one column per pixel. Re-read when
@@ -156,6 +181,8 @@ private:
     // Editing
     void updateDrag (const juce::MouseEvent&);
     void finishDrag();
+    void showMenu();
+    void showNotice (const juce::String&);
 
     // Painting
     void paintToolbar (juce::Graphics&);

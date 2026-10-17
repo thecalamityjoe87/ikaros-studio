@@ -246,7 +246,7 @@ private:
 };
 
 //==============================================================================
-// The "Editing" section: the grid, and Quantize for a MIDI region.
+// The "Editing" section: the grid, and Quantize with its strength and swing.
 class RegionInspector::EditingControls  : public juce::Component
 {
 public:
@@ -261,37 +261,85 @@ public:
         }
 
         gridButton.onClick = [this] { owner.showGridMenu (gridButton); };
-        quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
         quantizeButton.onClick = [this] { if (owner.onQuantize) owner.onQuantize(); };
+
+        // Percentages; the editors get them as 0..1.
+        setUpPercent (strength, "Quantize strength", 100.0,
+                      "How far Quantize moves each note or hit towards the grid: 100% all the way, "
+                      "less keeps some of the feel. Double-click for 100%");
+        setUpPercent (swing, "Quantize swing", 0.0,
+                      "Makes every second grid line late, for a shuffle: 100% is a triplet feel. Double-click for none");
     }
 
-    void refresh (bool midi)
+    /** Shows the region's editing settings. */
+    void refresh (const RegionInfo& r)
     {
-        isMidi = midi;
+        isMidi = r.isMidi;
         gridButton.setText (gridName (owner.grid));
-        gridButton.setTooltip (midi ? "Where notes snap to when you draw, move or resize them"
-                                    : "Where the region's edges snap to when you trim them");
-        quantizeButton.setVisible (midi);
-        resized();
+        gridButton.setTooltip (isMidi ? "Where notes snap to when you draw, move or resize them, and what Quantize lines them up with"
+                                      : "Where the region's edges snap to when you trim them, and what Quantize lines its hits up with");
+
+        if (isMidi)
+        {
+            quantizeButton.setEnabled (true);
+            quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
+        }
+        else
+        {
+            // Audio is quantized with Flex: a region that can't be flexed
+            // (a loop that follows the tempo, a reversed region) says why.
+            const auto flex = owner.engine.getTracks().flex().getFlex (r.id);
+            quantizeButton.setEnabled (flex.available);
+            quantizeButton.setTooltip (! flex.available ? flex.unavailableReason
+                                       : flex.trackFlex ? juce::String ("Line the hits in the selection (or all of them) up with the grid (Q)")
+                                                        : juce::String ("Line the hits in the selection (or all of them) up with the grid (Q). "
+                                                                        "This turns on Flex for the track"));
+        }
+
+        repaint();
     }
 
-    int getIdealHeight() const   { return padding / 2 + (isMidi ? 2 : 1) * (rowHeight + rowGap) + padding / 2; }
+    int getIdealHeight() const   { return padding / 2 + 4 * (rowHeight + rowGap) + padding / 2; }
 
     void paint (juce::Graphics& g) override
     {
         g.setFont (fonts::ui (13.0f));
         g.setColour (colour::textSecondary);
         g.drawText ("Grid", gridRow, juce::Justification::centredLeft);
+        g.drawText ("Strength", strengthRow, juce::Justification::centredLeft);
+        g.drawText ("Swing", swingRow, juce::Justification::centredLeft);
+
+        g.setColour (colour::text);
+        g.setFont (fonts::mono (12.0f));
+        g.drawText (juce::String (juce::roundToInt (strength.getValue())) + "%", strengthValue, juce::Justification::centredRight);
+        g.drawText (juce::String (juce::roundToInt (swing.getValue())) + "%", swingValue, juce::Justification::centredRight);
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (padding, padding / 2);
-        gridRow = r.removeFromTop (rowHeight);
+
+        auto row = [&r]
+        {
+            auto next = r.removeFromTop (rowHeight);
+            r.removeFromTop (rowGap);
+            return next;
+        };
+
+        gridRow = row();
         gridButton.setBounds (gridRow.withTrimmedLeft (labelWidth).removeFromLeft (110).withSizeKeepingCentre (110, 26));
-        r.removeFromTop (rowGap);
-        quantizeButton.setBounds (r.removeFromTop (rowHeight).withTrimmedLeft (labelWidth).removeFromLeft (110)
-                                    .withSizeKeepingCentre (110, 26));
+        quantizeButton.setBounds (row().withTrimmedLeft (labelWidth).removeFromLeft (110).withSizeKeepingCentre (110, 26));
+
+        auto sliderRow = [&] (juce::Slider& slider, juce::Rectangle<int>& label, juce::Rectangle<int>& value)
+        {
+            label = row();
+            auto area = label.withTrimmedLeft (labelWidth);
+            value = area.removeFromRight (44);
+            slider.setBounds (area.withTrimmedRight (6));
+        };
+
+        sliderRow (strength, strengthRow, strengthValue);
+        sliderRow (swing, swingRow, swingValue);
     }
 
 private:
@@ -300,7 +348,27 @@ private:
 
     IconButton gridButton     { "Grid", std::nullopt, "1/16" };
     IconButton quantizeButton { "Quantize", std::nullopt, "Quantize" };
-    juce::Rectangle<int> gridRow;
+    juce::Slider strength     { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider swing        { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Rectangle<int> gridRow, strengthRow, strengthValue, swingRow, swingValue;
+
+    void setUpPercent (juce::Slider& slider, const juce::String& title, double initial, const juce::String& tip)
+    {
+        slider.setTitle (title);
+        slider.setTooltip (tip);
+        slider.setRange (0.0, 100.0, 1.0);
+        slider.setValue (initial, juce::dontSendNotification);
+        slider.setDoubleClickReturnValue (true, initial);
+        slider.setColour (juce::Slider::trackColourId, colour::accent);
+        slider.onValueChange = [this]
+        {
+            if (owner.onQuantizeFeelChanged)
+                owner.onQuantizeFeelChanged (strength.getValue() / 100.0, swing.getValue() / 100.0);
+
+            repaint();
+        };
+        addAndMakeVisible (slider);
+    }
 };
 
 //==============================================================================
@@ -337,7 +405,9 @@ void RegionInspector::setRegion (std::optional<RegionInfo> r, juce::Colour track
     if (audio)
         audioControls->refresh (*region, trackColour);
 
-    editingControls->refresh (region.has_value() && region->isMidi);
+    if (region.has_value())
+        editingControls->refresh (*region);
+
     layoutSections();
     repaint();
 }
@@ -352,7 +422,9 @@ void RegionInspector::showGridMenu (juce::Component& target)
         menu.addItem (juce::PopupMenu::Item (name).setTicked (grid == value).setAction ([this, value]
         {
             grid = value;
-            editingControls->refresh (region.has_value() && region->isMidi);
+
+            if (region.has_value())
+                editingControls->refresh (*region);
 
             if (onGridChanged)
                 onGridChanged (grid);

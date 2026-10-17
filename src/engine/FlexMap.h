@@ -174,6 +174,78 @@ namespace flexmap
         return lowest <= highest ? juce::jlimit (lowest, highest, wantedWarp) : here.warp;
     }
 
+    /** True if the part between markers i - 1 and i can be played: the
+        second is later in the file and in the content, and the part isn't
+        squashed more than minStretch allows. */
+    inline bool partFits (const std::vector<WarpPoint>& markers, size_t i)
+    {
+        const double source = markers[i].source - markers[i - 1].source;
+        const double warp = markers[i].warp - markers[i - 1].warp;
+        return source > 0.0 && warp >= source * minStretch - 1.0e-9;
+    }
+
+    /** True if every part between the markers can be played (see partFits). */
+    inline bool isPlayable (const std::vector<WarpPoint>& markers)
+    {
+        for (size_t i = 1; i < markers.size(); ++i)
+            if (! partFits (markers, i))
+                return false;
+
+        return true;
+    }
+
+    /** Moves several markers at once (Quantize): `moves` pairs a marker's
+        index with the warp time wanted for it, sorted by index. Each goes
+        as near there as its neighbours allow (as limitMove does for one),
+        judged by where they're going rather than where they are, so markers
+        moving together don't hold each other back. One that still can't fit
+        (it would cross a marker that stays put) goes back where it was. The
+        first and last markers stay put. */
+    inline void moveMarkers (std::vector<WarpPoint>& markers, const std::vector<std::pair<int, double>>& moves)
+    {
+        const auto before = markers;
+        std::vector<int> moved;
+
+        // Everything where it's wanted first, then first to last, each one
+        // between where the one before ended up and where the next is going.
+        for (auto [index, warp] : moves)
+        {
+            if (index > 0 && index < (int) markers.size() - 1)
+            {
+                markers[(size_t) index].warp = warp;
+                moved.push_back (index);
+            }
+        }
+
+        for (auto index : moved)
+            markers[(size_t) index].warp = limitMove (markers, index, markers[(size_t) index].warp);
+
+        // Put back the moved markers next to a part that still doesn't fit,
+        // one at a time, until everything fits. (With every moved marker
+        // back, it's the list it was, which did.)
+        while (! moved.empty() && ! isPlayable (markers))
+        {
+            size_t bad = 1;
+
+            while (partFits (markers, bad))
+                ++bad;
+
+            auto it = std::find (moved.begin(), moved.end(), (int) bad);
+
+            if (it == moved.end())
+                it = std::find (moved.begin(), moved.end(), (int) bad - 1);
+
+            if (it == moved.end())
+                break;   // neither end was moved: the markers were like that already
+
+            markers[(size_t) *it].warp = before[(size_t) *it].warp;
+            moved.erase (it);
+        }
+
+        if (! isPlayable (markers) && isPlayable (before))
+            markers = before;
+    }
+
     /** True if any marker plays somewhere other than its own place in the
         recording: the region sounds different from the plain recording. */
     inline bool isWarped (const std::vector<WarpPoint>& markers)

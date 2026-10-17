@@ -60,6 +60,7 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, const 
     if (! sameRegion)
     {
         drag = {};
+        selection.reset();
         needsFit = true;
     }
     else if (drag.mode != Drag::Mode::none
@@ -95,6 +96,44 @@ void AudioEditor::setGrid (EditorGrid newGrid)
     grid = newGrid;
 }
 
+void AudioEditor::setQuantizeFeel (double strength, double swing)
+{
+    quantizeStrength = strength;
+    quantizeSwing = swing;
+}
+
+void AudioEditor::quantize()
+{
+    if (! hasRegion())
+        return;
+
+    // The selection is kept from the region's start; the engine wants it on the timeline.
+    std::optional<juce::Range<double>> range;
+
+    if (selection.has_value())
+        range = *selection + region->startBeat;
+
+    switch (engine.getTracks().flex().quantize (region->id, quantizeSettingsFor (grid, quantizeStrength, quantizeSwing), range))
+    {
+        case FlexQuantizeResult::unavailable:    showNotice (flex.unavailableReason); break;
+        case FlexQuantizeResult::alreadyOnGrid:  showNotice (selection.has_value() ? "The selected hits are already on the grid"
+                                                                                   : "The hits are already on the grid"); break;
+        case FlexQuantizeResult::findingHits:    // the toolbar shows how it's getting on (see flexStatus)
+        case FlexQuantizeResult::quantized:      break;
+    }
+
+    refreshFlex();
+    waveformDirty = true;
+    repaint();
+}
+
+void AudioEditor::showNotice (const juce::String& text)
+{
+    notice = text;
+    noticeUntil = juce::Time::getMillisecondCounter() + 3000;
+    repaint (toolbarArea);
+}
+
 void AudioEditor::setPlayheadBeat (double editBeat)
 {
     const double beat = hasRegion() ? editBeat : -1.0;
@@ -127,12 +166,19 @@ void AudioEditor::update()
         repaint (waveArea);
     }
 
-    // Flex is finding the hits or stretching the audio, in the background:
-    // nothing in the session changes then, so ask how it's getting on.
-    if (hasRegion() && flex.on && (flex.analysing || flex.stretchProgress >= 0.0f) && isShowing())
+    // Flex is finding the hits or stretching the audio, in the background
+    // (or Quantize is waiting for the hits): nothing in the session changes
+    // then, so ask how it's getting on.
+    if (hasRegion() && (flex.on || flex.quantizePending) && (flex.analysing || flex.stretchProgress >= 0.0f) && isShowing())
     {
         refreshFlex();
         repaint();
+    }
+
+    if (notice.isNotEmpty() && juce::Time::getMillisecondCounter() > noticeUntil)
+    {
+        notice.clear();
+        repaint (toolbarArea);
     }
 }
 
@@ -148,7 +194,8 @@ juce::String AudioEditor::flexStatus() const
     auto percent = [] (float p) { return p >= 0.0f ? " " + juce::String (juce::roundToInt (p * 100.0f)) + "%" : juce::String(); };
 
     if (flex.analysing)
-        return juce::String::fromUTF8 ("Finding the hits\xe2\x80\xa6") + percent (flex.analysisProgress);
+        return juce::String::fromUTF8 (flex.quantizePending ? "Finding the hits to quantize\xe2\x80\xa6" : "Finding the hits\xe2\x80\xa6")
+                 + percent (flex.analysisProgress);
 
     if (flex.stretchProgress >= 0.0f)
         return juce::String::fromUTF8 ("Stretching the audio\xe2\x80\xa6") + percent (flex.stretchProgress);
@@ -388,7 +435,10 @@ void AudioEditor::mouseMove (const juce::MouseEvent& e)
         case Drag::Mode::fadeIn:
         case Drag::Mode::fadeOut:
         case Drag::Mode::flex:      setMouseCursor (juce::MouseCursor::LeftRightResizeCursor); break;
-        case Drag::Mode::playhead:
+
+        // Empty waveform: drag to select.
+        case Drag::Mode::playhead:  setMouseCursor (juce::MouseCursor::IBeamCursor); break;
+        case Drag::Mode::select:
         case Drag::Mode::none:      setMouseCursor (juce::MouseCursor::NormalCursor); break;
     }
 }
@@ -400,11 +450,29 @@ void AudioEditor::mouseDown (const juce::MouseEvent& e)
 
     grabKeyboardFocus();
     drag = {};
+
+    if (e.mods.isPopupMenu())
+    {
+        showMenu();
+        return;
+    }
+
     const auto p = e.getPosition();
-    const auto mode = rulerArea.contains (p) ? Drag::Mode::playhead : modeAt (p);
+    auto mode = rulerArea.contains (p) ? Drag::Mode::playhead : modeAt (p);
 
     if (mode == Drag::Mode::none)
         return;
+
+    // In the waveform, a click moves the playhead (and drops the selection),
+    // and a drag selects. The ruler only moves the playhead.
+    if (mode == Drag::Mode::playhead && waveArea.contains (p))
+    {
+        mode = Drag::Mode::select;
+        drag.selectFrom = juce::jlimit (0.0, region->lengthBeats, xToBeat ((float) p.x));
+        selection.reset();
+        engine.setPositionBeats (juce::jmax (0.0, region->startBeat + xToBeat ((float) p.x)));
+        repaint();
+    }
 
     drag.mode = mode;
     drag.startX = p.x;
@@ -438,7 +506,9 @@ void AudioEditor::mouseUp (const juce::MouseEvent& e)
     if (drag.mode == Drag::Mode::none || ! hasRegion())
         return;
 
-    if (drag.mode == Drag::Mode::playhead || ! e.mouseWasDraggedSinceMouseDown())
+    // The playhead and the selection follow the mouse as it goes: there's
+    // nothing left to do.
+    if (drag.mode == Drag::Mode::playhead || drag.mode == Drag::Mode::select || ! e.mouseWasDraggedSinceMouseDown())
     {
         drag = {};
         repaint();
@@ -458,6 +528,18 @@ void AudioEditor::updateDrag (const juce::MouseEvent& e)
         case Drag::Mode::playhead:
             engine.setPositionBeats (juce::jmax (0.0, region->startBeat + xToBeat ((float) e.x)));
             return;
+
+        // Inside the region only (that's what Quantize can move).
+        case Drag::Mode::select:
+        {
+            const double to = juce::jlimit (0.0, length, xToBeat ((float) e.x));
+            selection = juce::Range<double>::between (drag.selectFrom, to);
+
+            if (selection->getLength() * pixelsPerBeat < 3.0)
+                selection.reset();   // a wobble of the mouse, not a selection
+
+            break;
+        }
 
         case Drag::Mode::trimStart:
             drag.start = juce::jlimit (juce::jmax (0.0, region->minStartBeat), region->getEndBeat() - RegionEditor::minRegionBeats,
@@ -512,6 +594,7 @@ void AudioEditor::finishDrag()
         case Drag::Mode::fadeOut:   regions.setFade (id, false, finished.fadeOut); break;
         case Drag::Mode::flex:      engine.getTracks().flex().moveMarker (id, finished.flexSource, finished.flexBeat); break;
         case Drag::Mode::playhead:
+        case Drag::Mode::select:
         case Drag::Mode::none:      break;
     }
 
@@ -572,7 +655,52 @@ bool AudioEditor::keyPressed (const juce::KeyPress& key)
         return true;
     }
 
+    // Otherwise it drops the selection.
+    if (key == juce::KeyPress::escapeKey && selection.has_value())
+    {
+        selection.reset();
+        repaint();
+        return true;
+    }
+
+    if (key == juce::KeyPress ('q') && hasRegion())   // KeyPress compares letters case-insensitively
+    {
+        quantize();
+        return true;
+    }
+
     return false;   // everything else is the app's (Space to play, undo...)
+}
+
+void AudioEditor::showMenu()
+{
+    if (! hasRegion())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addItem (juce::PopupMenu::Item (selection.has_value() ? "Quantize Selection" : "Quantize All")
+                      .setEnabled (flex.available)
+                      .setAction ([this] { quantize(); }));
+    menu.addItem (juce::PopupMenu::Item ("Reset Flex")
+                      .setEnabled (flex.on && flex.hasEdits)
+                      .setAction ([this]
+                      {
+                          engine.getTracks().flex().resetFlex (region->id);
+                          refreshFlex();
+                          waveformDirty = true;
+                          repaint();
+                      }));
+
+    if (selection.has_value())
+    {
+        menu.addSeparator();
+        menu.addItem (juce::PopupMenu::Item ("Deselect").setAction ([this] { selection.reset(); repaint(); }));
+    }
+
+    // The menu is asynchronous: its actions run after this function returns.
+    // With this editor as its target, JUCE closes the menu if the editor is
+    // deleted while it's open, so they never run on a deleted editor.
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition());
 }
 
 //==============================================================================
@@ -607,12 +735,16 @@ void AudioEditor::paintToolbar (juce::Graphics& g)
     // With Flex on: how it's getting on, or how to use it.
     auto hint = juce::String::fromUTF8 ("Drag the edges to trim \xc2\xb7 Drag the dots to fade \xc2\xb7 Click to move the playhead");
 
-    if (flex.on)
+    if (flex.on || flex.quantizePending)
     {
         const auto status = flexStatus();
         hint = status.isNotEmpty() ? status
-                                   : juce::String::fromUTF8 ("Drag a hit to move it \xc2\xb7 Double-click a marker to remove it \xc2\xb7 Drag the edges to trim");
+                                   : juce::String::fromUTF8 ("Drag a hit to move it \xc2\xb7 Double-click a marker to remove it \xc2\xb7 "
+                                                             "Drag across hits to select \xc2\xb7 Q to quantize");
     }
+
+    if (notice.isNotEmpty())
+        hint = notice;
 
     g.drawFittedText (hint, hintArea, juce::Justification::centredLeft, 1, 1.0f);
 
@@ -725,6 +857,17 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
 
     if (flex.on)
         paintFlex (g, area);
+
+    // The selection: a light wash with its edges marked.
+    if (selection.has_value())
+    {
+        const float from = beatToX (selection->getStart()), to = beatToX (selection->getEnd());
+        g.setColour (colour::accent.withAlpha (0.14f));
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, area.getY(), to, area.getBottom()));
+        g.setColour (colour::accent.withAlpha (0.6f));
+        g.fillRect (from, area.getY(), 1.0f, area.getHeight());
+        g.fillRect (to - 1.0f, area.getY(), 1.0f, area.getHeight());
+    }
 
     // Outside the region (the rest of the recording, or the loop going
     // round again): dimmed.

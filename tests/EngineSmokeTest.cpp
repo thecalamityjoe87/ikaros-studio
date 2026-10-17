@@ -2664,6 +2664,61 @@ static void runStretchSection (const juce::File& dir)
 }
 
 //==============================================================================
+// Exports the song to "Song <number>.wav" in `folder` and returns the file
+// (waiting for the export to finish).
+static juce::File exportForHits (AudioEngine& engine, const juce::File& folder, int number)
+{
+    ExportSettings settings;
+    settings.destination = folder.getChildFile ("Song " + juce::String (number) + ".wav");
+    bool done = false;
+
+    if (engine.getExporter().start (settings, [&] (const ExportResult&) { done = true; }).failed())
+        return juce::File();
+
+    for (int i = 0; i < 1200 && ! done; ++i)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+    return settings.destination;
+}
+
+// Checks each hit in an exported click track is where it should be (seconds
+// on the timeline): returns how far off the worst one is, in ms. Each one
+// is looked for within 80 ms of its place: where the sound first gets over
+// half as loud as it gets there.
+static double worstHitErrorMs (const juce::File& f, const std::vector<double>& expected)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+    if (reader == nullptr || expected.empty())
+        return 1.0e6;
+
+    const auto rate = reader->sampleRate;
+    const int window = (int) (0.08 * rate);
+    juce::AudioBuffer<float> audio (1, 2 * window);
+    double worst = 0.0;
+
+    for (auto e : expected)
+    {
+        const auto from = (juce::int64) (e * rate) - window;
+        reader->read (&audio, 0, audio.getNumSamples(), from, true, false);
+        const auto threshold = audio.getMagnitude (0, audio.getNumSamples()) / 2.0f;
+        int onset = 0;
+
+        if (threshold < 0.01f)
+            return 1.0e6;   // silence where a hit should be
+
+        while (onset < audio.getNumSamples() && std::abs (audio.getSample (0, onset)) <= threshold)
+            ++onset;
+
+        worst = std::max (worst, std::abs ((double) (from + onset) / rate - e) * 1000.0);
+    }
+
+    return worst;
+}
+
+//==============================================================================
 // Flex Time (see engine/FlexEditor.h): dragging the hits in a recording.
 // A click track stands in for a drum recording: its hits are easy to find
 // in an export, so the test can check exactly where they play.
@@ -2677,7 +2732,6 @@ static void runFlexSection (const juce::File& dir)
     auto& tracks = engine.getTracks();
     auto& regions = tracks.regions();
     auto& flex = tracks.flex();
-    auto& exporter = engine.getExporter();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
     engine.newSession();
     pumpMessages();
@@ -2725,58 +2779,9 @@ static void runFlexSection (const juce::File& dir)
         for (auto& t : info.transients)
             std::cout << "         hit at " << t.sourceSeconds << " s, beat " << t.beat << "\n";
 
-    // Exports the song, and checks each hit is where it should be (seconds
-    // on the timeline), within a few ms. Each one is looked for within 80 ms
-    // of its place: where the sound first gets over half as loud as it gets there.
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
     int exportNumber = 0;
-
-    auto exportSong = [&]
-    {
-        ExportSettings settings;
-        settings.destination = dir.getChildFile ("Flex Export").getChildFile ("Song " + juce::String (++exportNumber) + ".wav");
-        bool done = false;
-
-        if (exporter.start (settings, [&] (const ExportResult&) { done = true; }).failed())
-            return juce::File();
-
-        for (int i = 0; i < 1200 && ! done; ++i)
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-
-        return settings.destination;
-    };
-
-    auto worstMs = [&] (const juce::File& f, const std::vector<double>& expected)
-    {
-        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
-
-        if (reader == nullptr || expected.empty())
-            return 1.0e6;
-
-        const auto rate = reader->sampleRate;
-        const int window = (int) (0.08 * rate);
-        juce::AudioBuffer<float> audio (1, 2 * window);
-        double worst = 0.0;
-
-        for (auto e : expected)
-        {
-            const auto from = (juce::int64) (e * rate) - window;
-            reader->read (&audio, 0, audio.getNumSamples(), from, true, false);
-            const auto threshold = audio.getMagnitude (0, audio.getNumSamples()) / 2.0f;
-            int onset = 0;
-
-            if (threshold < 0.01f)
-                return 1.0e6;   // silence where a hit should be
-
-            while (onset < audio.getNumSamples() && std::abs (audio.getSample (0, onset)) <= threshold)
-                ++onset;
-
-            worst = std::max (worst, std::abs ((double) (from + onset) / rate - e) * 1000.0);
-        }
-
-        return worst;
-    };
+    auto exportSong = [&] { return exportForHits (engine, dir.getChildFile ("Flex Export"), ++exportNumber); };
+    auto worstMs = [] (const juce::File& f, const std::vector<double>& expected) { return worstHitErrorMs (f, expected); };
 
     constexpr double toleranceMs = 5.0;
     auto hitsAt = [&] (const char* what, const std::vector<double>& beats, double secondsPerBeat)
@@ -3032,6 +3037,300 @@ static void runFlexSection (const juce::File& dir)
 
     flex.setFlexOn (drums, false);
     flex.setFlexOn (other, false);
+    pumpMessages();
+}
+
+//==============================================================================
+// Quantize (engine/Quantize.h): lining notes, and the hits in a recording
+// (FlexEditor::quantize), up with the grid.
+static void runQuantizeSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    std::cout << "Quantize: the grid\n";
+
+    // The maths, on a song that's in 4/4 for two bars (beats 0-8), then 6/8
+    // (a beat is an eighth note there, so its bars are 6 beats: 8, 14, 20).
+    {
+        const TempoMap song ({ TempoChange {} }, { TimeSignatureChange {}, TimeSignatureChange { 8.0, 2, 6, 8 } });
+        auto settings = [] (double note, double strength = 1.0, double swing = 0.0) { return QuantizeSettings { note, strength, swing }; };
+        auto near = [] (double a, double b) { return std::abs (a - b) < 1.0e-9; };
+
+        check (near (quantize::gridLine (1.1, settings (1.0 / 16.0), song), 1.0)
+                 && near (quantize::gridLine (9.3, settings (1.0 / 16.0), song), 9.5),
+               "a sixteenth is a quarter of a beat in 4/4, half of one in 6/8");
+        check (near (quantize::gridLine (12.9, settings (0.0), song), 14.0) && near (quantize::gridLine (7.1, settings (0.0), song), 8.0),
+               "the bar grid follows the bars of each time signature");
+        check (near (quantize::quantizedBeat (1.1, settings (1.0 / 16.0, 0.5), song), 1.05), "strength 50% moves halfway to the grid");
+        check (near (quantize::gridLine (0.7, settings (1.0 / 8.0, 0.0, 1.0), song), 0.5 + 0.5 / 3.0)
+                 && near (quantize::gridLine (0.9, settings (1.0 / 8.0, 0.0, 1.0), song), 1.0),
+               "full swing makes every second eighth a triplet late");
+        check (near (quantize::gridLine (8.6, settings (1.0 / 16.0, 0.0, 1.0), song), 8.5 + 0.5 / 3.0),
+               "swing pairs count from the bar line, in each time signature");
+        check (near (quantize::gridLineAtOrAfter (8.1, settings (0.0), song), 14.0)
+                 && near (quantize::gridLineAtOrAfter (8.1, settings (1.0 / 16.0), song), 8.5),
+               "the next grid line after a beat");
+    }
+
+    AudioEngine engine { testSettings, false };   // the pretend device (export needs no real one)
+    TestAudioDevice device { engine, {} };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& flex = tracks.flex();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);   // a beat every half second
+
+    //==============================================================================
+    std::cout << "Quantize: notes\n";
+    {
+        const auto keys = tracks.addInstrumentTrack();
+        const auto midi = regions.createChordRegion (keys, 0.0);
+        pumpMessages();
+        std::vector<NoteId> chord;
+
+        // A copy first: looping over a member of the optional getRegion
+        // returns would read it after it's gone.
+        const auto chordRegion = regions.getRegion (midi);
+
+        for (auto& n : chordRegion->notes)
+            chord.push_back (n.id);
+
+        tracks.notes().deleteNotes (midi, chord);
+        const auto a = tracks.notes().addNote (midi, { 60, 1.1, 0.5, 100, 0 });
+        const auto b = tracks.notes().addNote (midi, { 62, 9.3, 0.5, 100, 0 });
+        pumpMessages();
+
+
+        auto startOf = [&] (NoteId id)
+        {
+            const auto r = regions.getRegion (midi);
+
+            for (auto& n : r->notes)
+                if (n.id == id)
+                    return n.startBeat;
+
+            return -1.0;
+        };
+
+        checkUndoRoundTrip (engine, "Quantize", [&] { tracks.notes().quantiseNotes (midi, {}, { 1.0 / 16.0, 0.5, 0.0 }); });
+        check (std::abs (startOf (a) - 1.05) < 1.0e-6 && std::abs (startOf (b) - 9.275) < 1.0e-6, "notes quantized at 50% strength move halfway");
+
+        engine.undo();
+        pumpMessages();
+
+        // In 6/8 from bar 3, the bar grid follows its 6-beat bars.
+        engine.addTimeSignatureChange (2, 6, 8);
+        pumpMessages();
+        tracks.notes().quantiseNotes (midi, {}, { 0.0 });
+        pumpMessages();
+        check (std::abs (startOf (a) - 0.0) < 1.0e-6 && std::abs (startOf (b) - 8.0) < 1.0e-6,
+               "notes quantized to bars follow the time signature");
+        engine.undo();
+        engine.undo();
+        pumpMessages();
+        regions.deleteRegion (midi);
+        pumpMessages();
+    }
+
+    //==============================================================================
+    std::cout << "Quantize: Flex\n";
+    auto clipOf = [&] (RegionId id) { return dynamic_cast<te::WaveAudioClip*> (detail::findClip (TestAudioDevice::getEditOf (engine), id)); };
+
+    // Hits a little off the beat. Placed at beat 4 (2 s), they play on
+    // beats 5.1, 6, 6.86, 7.6, 8.16 and 9.
+    const auto clicksFile = dir.getChildFile ("Loose Clicks.wav");
+    const std::vector<double> playedBeats { 5.1, 6.0, 6.86, 7.6, 8.16, 9.0 };
+    std::vector<double> clickSeconds;
+
+    for (auto b : playedBeats)
+        clickSeconds.push_back ((b - 4.0) * 0.5);
+
+    writeClickWav (clicksFile, 44100.0, 4.0, clickSeconds, 0.5f);
+
+    const auto drums = tracks.addAudioTrack();
+    const auto region = regions.importAudioFiles (drums, { clicksFile.getFullPathName() }, 4.0).front();
+    pumpMessages();
+
+    // The markers' beats, for the hits that have one (by which click it is).
+    auto markerBeatOf = [&] (size_t click)
+    {
+        for (auto& m : flex.getFlex (region).markers)
+            if (std::abs (m.sourceSeconds - clickSeconds[click]) < 0.003)
+                return m.beat;
+
+        return -1.0;
+    };
+
+    auto waitForQuantize = [&]
+    {
+        for (int i = 0; i < 400 && flex.getFlex (region).quantizePending; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+
+        pumpMessages();
+    };
+
+    int exportNumber = 0;
+    auto hitsAt = [&] (const char* what, const std::vector<double>& seconds)
+    {
+        const auto worst = worstHitErrorMs (exportForHits (engine, dir.getChildFile ("Quantize Export"), ++exportNumber), seconds);
+        std::cout << "  (" << what << ": hits within " << worst << " ms)\n";
+        return worst < 5.0;
+    };
+
+    auto atBpm120 = [] (std::vector<double> beats)
+    {
+        for (auto& b : beats)
+            b *= 0.5;
+
+        return beats;
+    };
+
+    // Flex is off and the region has never been flexed: its hits are found
+    // first, and only then does anything change, all as one undo step.
+    {
+        pumpMessages();
+        const auto before = engine.getStateSnapshot();
+        const auto undoBefore = engine.getUndoDescription();
+        check (flex.quantize (region, { 1.0 / 4.0 }) == FlexQuantizeResult::findingHits, "Quantize with Flex off finds the hits first");
+        check (flex.getFlex (region).quantizePending && engine.getStateSnapshot() == before && engine.getUndoDescription() == undoBefore,
+               "...without changing the session (or its undo history) while it looks");
+        check (flex.quantize (region, { 1.0 / 4.0 }) == FlexQuantizeResult::findingHits && engine.getStateSnapshot() == before,
+               "asking again while it looks just waits for the same hits");
+
+        waitForQuantize();
+        check (! flex.getFlex (region).quantizePending, "(the hits were found)");
+        check (engine.getUndoDescription() == "Quantize" && flex.isFlexOn (drums), "then it quantizes, turning Flex on, as one undo step");
+
+        // Quarter notes: 8.16 is nearer beat 8 than 7.6 is, so 7.6 gets no
+        // marker and moves along with the audio around it.
+        const std::vector<double> expected { 5.0, 6.0, 7.0, -1.0, 8.0, 9.0 };
+        bool onGrid = true;
+
+        for (size_t i = 0; i < expected.size(); ++i)
+            onGrid = onGrid && std::abs (markerBeatOf (i) - expected[i]) < 1.0e-6;
+
+        check (onGrid, "each hit is on its quarter note (and two hits never share one)");
+
+        engine.undo();
+        pumpMessages();
+        checkSameState (before, engine.getStateSnapshot(), "one undo takes Quantize and Flex back off");
+        engine.redo();
+        pumpMessages();
+        check (flex.isFlexOn (drums) && std::abs (markerBeatOf (2) - 7.0) < 1.0e-6, "redo quantizes again");
+        check (hitsAt ("quantized", atBpm120 ({ 5.0, 6.0, 7.0, 8.0, 9.0 })), "the export plays the quantized hits on the beat");
+        engine.undo();
+        pumpMessages();
+    }
+
+    // With Flex on (and the hits known), Quantize is immediate.
+    flex.setFlexOn (drums, true);
+    pumpMessages();
+
+    for (int i = 0; i < 400 && flex.getFlex (region).analysing; ++i)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+
+    // (The step that first flexed the region was undone above: its warp
+    // markers must come back whole, or the hits can't be shown or moved.)
+    check (flex.getFlex (region).transients.size() == playedBeats.size() && clipOf (region)->state.getChildWithName (te::IDs::WARPTIME)
+                                                                                .getChildWithName (te::IDs::WARPMARKERS).getNumChildren() == 2,
+           "Flex back on after undoing the step that first flexed a region brings back its markers and hits");
+
+    checkUndoRoundTrip (engine, "Quantize", [&] { flex.quantize (region, { 1.0 / 16.0, 0.5, 0.0 }); });
+    // (The hits are found a fraction of a millisecond early, so halfway is
+    // from there.)
+    check (std::abs (markerBeatOf (0) - 5.05) < 0.005 && std::abs (markerBeatOf (2) - 6.805) < 0.005,
+           "at 50% strength each hit moves halfway to its sixteenth");
+    engine.undo();
+    pumpMessages();
+
+    checkUndoRoundTrip (engine, "Quantize", [&] { flex.quantize (region, { 1.0 / 8.0, 1.0, 1.0 }); });
+    check (std::abs (markerBeatOf (3) - (7.5 + 0.5 / 3.0)) < 1.0e-6 && std::abs (markerBeatOf (2) - 7.0) < 1.0e-6,
+           "with swing, hits near the second eighth go a triplet late");
+    engine.undo();
+    pumpMessages();
+
+    // A selection: only the hits in it move, and the ones either side stay.
+    checkUndoRoundTrip (engine, "Quantize", [&] { flex.quantize (region, { 1.0 / 4.0 }, juce::Range<double> (6.5, 7.5)); });
+    {
+        const auto info = flex.getFlex (region);
+        bool othersStay = info.transients.size() == playedBeats.size();
+
+        for (size_t i = 0; othersStay && i < playedBeats.size(); ++i)
+            if (i != 2)
+                othersStay = std::abs (info.transients[i].beat - playedBeats[i]) < 0.005;
+
+        check (std::abs (markerBeatOf (2) - 7.0) < 1.0e-6 && othersStay, "only the selected hits are quantized");
+        check (hitsAt ("selection quantized", atBpm120 ({ 5.1, 6.0, 7.0, 7.6, 8.16, 9.0 })), "...and only they play somewhere else");
+    }
+    engine.undo();
+    pumpMessages();
+
+    // Quantizing what's already on the grid changes nothing.
+    flex.quantize (region, { 1.0 / 4.0 });
+    pumpMessages();
+    const auto onGridState = engine.getStateSnapshot();
+    check (flex.quantize (region, { 1.0 / 4.0 }) == FlexQuantizeResult::alreadyOnGrid && engine.getStateSnapshot() == onGridState,
+           "quantizing again changes nothing (and adds no undo step)");
+
+    //==============================================================================
+    std::cout << "Quantize: tempo and time signature\n";
+
+    // Quantized hits stay on their beats at a new tempo (100 BPM: 0.6 s a beat).
+    engine.setBpm (100.0);
+    pumpMessages();
+    check (std::abs (markerBeatOf (2) - 7.0) < 1.0e-6, "a new tempo keeps quantized hits on their beats");
+    {
+        std::vector<double> seconds;
+
+        for (double b : { 5.0, 6.0, 7.0, 8.0, 9.0 })
+            seconds.push_back (b * 0.6);
+
+        check (hitsAt ("quantized, at 100 BPM", seconds), "...and plays them there");
+    }
+    engine.undo();   // the tempo
+    engine.undo();   // the quantize
+    pumpMessages();
+
+    // A tempo change inside the region (80 BPM from beat 8, 4 s in): each
+    // hit is quantized to the beat at its own tempo. (Made with Flex off, so
+    // the recording keeps its timing in seconds: the hits after beat 8 play
+    // on beats 8.11 and 8.67.)
+    flex.setFlexOn (drums, false);
+    engine.addTempoChange (2, 80.0);
+    pumpMessages();
+    checkUndoRoundTrip (engine, "Quantize", [&] { flex.quantize (region, { 1.0 / 4.0 }); });
+    check (std::abs (markerBeatOf (4) - 8.0) < 1.0e-6 && std::abs (markerBeatOf (5) - 9.0) < 1.0e-6,
+           "quantize follows a tempo change inside the region");
+    check (hitsAt ("across a tempo change", { 2.5, 3.0, 3.5, 4.0, 4.75 }), "...and the hits play on those beats");
+    engine.undo();   // the quantize
+    engine.undo();   // the tempo change
+    engine.undo();   // Flex Off
+    pumpMessages();
+
+    // In 6/8 a sixteenth is half a beat: 6.86 goes to 7, not 6.75.
+    engine.setTimeSignature (6, 8);
+    pumpMessages();
+    checkUndoRoundTrip (engine, "Quantize", [&] { flex.quantize (region, { 1.0 / 16.0 }); });
+    check (std::abs (markerBeatOf (2) - 7.0) < 1.0e-6, "quantize follows the time signature");
+    engine.undo();
+    pumpMessages();
+    engine.setTimeSignature (4, 4);
+    pumpMessages();
+
+    flex.quantize (region, { 1.0 / 4.0 });
+    pumpMessages();
+    checkSaveAndReopen (engine, dir.getChildFile ("Quantize"));
+    check (flex.isFlexOn (drums) && std::abs (markerBeatOf (2) - 7.0) < 1.0e-6, "quantized hits are saved with the session");
+
+    // A region that can't be flexed can't be quantized either.
+    regions.setRegionReversed (region, true);
+    pumpMessages();
+    check (flex.quantize (region, { 1.0 / 4.0 }) == FlexQuantizeResult::unavailable, "a reversed region can't be quantized");
+    engine.undo();
+    pumpMessages();
+
+    flex.setFlexOn (drums, false);
     pumpMessages();
 }
 
@@ -3662,7 +3961,7 @@ int main (int argc, char* argv[])
                      && note->velocity == 40, "move, resize and velocity keep the note's ID");
             check (engine.getUndoDescription() == "Move Note", "the note edit has its own undo step");
 
-            tracks.notes().quantiseNotes (r2, { id }, 0.25);
+            tracks.notes().quantiseNotes (r2, { id }, QuantizeSettings { 1.0 / 16.0 });   // 1/16 = a quarter beat in 4/4
             pumpMessages();
             note = findNote (id);
             check (note && note->pitch == 74 && std::abs (note->startBeat - 2.25) < 1e-6, "quantize snaps to the grid, same ID");
@@ -5423,7 +5722,7 @@ int main (int argc, char* argv[])
             for (auto& n : regions.getRegion (r)->notes)
                 ids.push_back (n.id);
 
-            notes.quantiseNotes (r, ids, 1.0);
+            notes.quantiseNotes (r, ids, QuantizeSettings { 1.0 / 4.0 });
         });
         checkUndoRoundTrip (engine, "Delete Note", [&] { notes.deleteNotes (r, { regions.getRegion (r)->notes.front().id }); });
         checkSaveAndReopen (engine, undoSession);
@@ -5887,6 +6186,9 @@ int main (int argc, char* argv[])
 
     if (runs ("flex"))
         runFlexSection (dir);
+
+    if (runs ("quantize"))
+        runQuantizeSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");
