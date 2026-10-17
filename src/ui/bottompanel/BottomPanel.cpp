@@ -413,6 +413,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addChildComponent (*masterPage);
     addChildComponent (eqView);
     addChildComponent (pianoRoll);
+    addChildComponent (audioEditor);
     addChildComponent (mixer);
 
     // Segmented controls (the tabs, Track | Master): the panel draws the
@@ -434,7 +435,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     }
 
     // Track | Master: the same look, a radio group of its own.
-    for (auto* b : { &trackModeButton, &masterModeButton })
+    for (auto* b : { &trackModeButton, &masterModeButton, &regionModeButton })
     {
         b->setColours (tabColours);
         b->setCornerRadius (segmentRadius);
@@ -445,8 +446,30 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
 
     trackModeButton.setTooltip ("Controls for the selected track");
     masterModeButton.setTooltip ("Controls for the master channel: the whole mix");
-    trackModeButton.onClick = [this] { setMasterMode (false); if (onViewStateChanged) onViewStateChanged(); };
+    trackModeButton.onClick = [this]
+    {
+        // On the Editor tab, Track is the other side of Track | Region.
+        if (tab == Tab::editor)
+            setRegionMode (false);
+        else
+            setMasterMode (false);
+
+        if (onViewStateChanged)
+            onViewStateChanged();
+    };
     masterModeButton.onClick = [this] { setMasterMode (true); if (onViewStateChanged) onViewStateChanged(); };
+    regionModeButton.setTooltip ("Settings for the region in the Editor");
+    regionModeButton.onClick = [this] { setRegionMode (true); };
+
+    // The Editor's grid and Quantize live in the region inspector, but
+    // they're the editors' to use.
+    regionInspector.onGridChanged = [this] (EditorGrid grid)
+    {
+        pianoRoll.setGrid (grid);
+        audioEditor.setGrid (grid);
+    };
+    regionInspector.onQuantize = [this] { pianoRoll.quantize(); };
+    addChildComponent (regionInspector);
 
     auto mixerColours = IconButton::raisedColours();
     mixerColours.border = colour::border;
@@ -500,9 +523,18 @@ void BottomPanel::setMasterMode (bool shouldShowMaster)
     if (isShowingEffect())
         closeEffect();   // it was the other channel's effect
 
-    inspector.setMasterMode (masterMode);
     showTabPage();
     refresh();
+}
+
+void BottomPanel::setRegionMode (bool shouldShowRegion)
+{
+    regionMode = shouldShowRegion;
+
+    if (regionMode && isShowingEffect())
+        closeEffect();   // the effect belongs to the track
+
+    showTabPage();
 }
 
 void BottomPanel::setMixerShown (bool shouldShow)
@@ -514,7 +546,7 @@ void BottomPanel::setMixerShown (bool shouldShow)
 
 TrackId BottomPanel::getTarget() const
 {
-    return masterMode ? masterTrackId : selection.getTrack();
+    return showsMaster() ? masterTrackId : selection.getTrack();
 }
 
 void BottomPanel::showTabPage()
@@ -526,17 +558,32 @@ void BottomPanel::showTabPage()
     soundPage->setVisible (tabPage && tab == Tab::sound && ! masterMode);
     masterPage->setVisible (tabPage && tab == Tab::sound && masterMode);
     eqView.setVisible (tabPage && tab == Tab::eq);
-    pianoRoll.setVisible (tabPage && tab == Tab::editor && ! masterMode);   // the Editor is about a track's regions
+    // The Editor is about a track's regions: a MIDI region's notes, or an audio region's waveform.
+    pianoRoll.setVisible (tabPage && tab == Tab::editor && ! editingAudio);
+    audioEditor.setVisible (tabPage && tab == Tab::editor && editingAudio);
     effectViewport.setVisible (open && ! mixerShown && effect);
     mixer.setVisible (open && mixerShown);
 
     // The header stays the same in the full mixer (picking a tab, or Track
     // or Master, leaves it); only the inspector column makes way for it.
-    inspector.setVisible (open && ! mixerShown);
+    inspector.setVisible (open && ! mixerShown && ! showsRegionInspector());
+    regionInspector.setVisible (open && showsRegionInspector());
+
+    // The Editor tab has Track | Region where the others have Track | Master,
+    // and its Track is never the master (see showsMaster).
+    if (inspectorShowsMaster != showsMaster())
+    {
+        inspectorShowsMaster = showsMaster();
+        inspector.setMasterMode (inspectorShowsMaster);
+        inspector.refresh();
+    }
 
     for (auto* c : std::initializer_list<juce::Component*> { &detailsButton, &soundTab, &eqTab, &editorTab, &mixerButton,
-                                                             &trackModeButton, &masterModeButton })
+                                                             &trackModeButton })
         c->setVisible (open);
+
+    masterModeButton.setVisible (open && tab != Tab::editor);
+    regionModeButton.setVisible (open && tab == Tab::editor);
     updateTabButtons();
     resized();
     repaint();
@@ -567,14 +614,14 @@ void BottomPanel::openEffect (PluginId id)
     // A track's effect, or in Master mode one of the master's.
     auto t = engine.getTracks().getTrack (selection.getTrack());
 
-    if (! masterMode && ! t.has_value())
+    if (! showsMaster() && ! t.has_value())
         return;
 
     if (isShowingEffect() && effectEditor->getPluginId() == id)
         return;
 
     effectViewport.setViewedComponent (nullptr, false);
-    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, masterMode ? colour::accent : t->colour);
+    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::accent : t->colour);
 
     // onClose runs from inside the editor (its Done button or its timer), so
     // the editor can't be deleted right there; close on the next message-loop
@@ -638,8 +685,9 @@ void BottomPanel::updateTabButtons()
     soundTab.setToggleState (tabShowing && tab == Tab::sound, juce::dontSendNotification);
     eqTab.setToggleState (tabShowing && tab == Tab::eq, juce::dontSendNotification);
     editorTab.setToggleState (tabShowing && tab == Tab::editor, juce::dontSendNotification);
-    trackModeButton.setToggleState (! masterMode, juce::dontSendNotification);
+    trackModeButton.setToggleState (tab == Tab::editor ? ! regionMode : ! masterMode, juce::dontSendNotification);
     masterModeButton.setToggleState (masterMode, juce::dontSendNotification);
+    regionModeButton.setToggleState (regionMode, juce::dontSendNotification);
     mixerButton.setToggleState (mixerShown, juce::dontSendNotification);
 }
 
@@ -670,7 +718,7 @@ void BottomPanel::refreshTrack()
     inspector.refresh();
     soundPage->refresh (track, detailsVisible);
     masterPage->refresh();
-    eqView.setTarget (getTarget(), masterMode ? colour::accent : track.has_value() ? track->colour : colour::accent);
+    eqView.setTarget (getTarget(), showsMaster() ? colour::accent : track.has_value() ? track->colour : colour::accent);
 
     if (mixer.isVisible())
         mixer.refresh();
@@ -682,17 +730,47 @@ void BottomPanel::refreshEditor()
 {
     auto& tc = engine.getTracks();
 
-    // Editor: the selected region, or else the selected track's first MIDI region.
+    // Editor: the selected region, or else the selected track's first
+    // region (MIDI on an instrument track, audio on an audio track).
     std::optional<RegionInfo> region;
+    const bool audioTrack = track.has_value() && track->kind == TrackKind::audio;
 
     if (selection.getRegion() != 0)
         region = tc.regions().getRegion (selection.getRegion());
 
     if (! region.has_value() && track.has_value())
         for (auto& r : tc.regions().getRegions (track->id))
-            if (r.isMidi) { region = r; break; }
+            if (r.isMidi != audioTrack) { region = r; break; }
 
-    pianoRoll.setRegion (region, track.has_value() ? track->colour : colour::accent, engine.beatsPerBar());
+    // The region picks the editor; with none, the track does.
+    const bool audio = region.has_value() ? ! region->isMidi : audioTrack;
+    const auto trackColour = track.has_value() ? track->colour : colour::accent;
+
+    // Only one of them has the region, so the other forgets its drag and view.
+    pianoRoll.setRegion (audio ? std::nullopt : region, trackColour, engine.beatsPerBar());
+    audioEditor.setRegion (audio ? region : std::nullopt, trackColour, engine.beatsPerBar());
+    regionInspector.setRegion (region, trackColour);
+    editorRegion = region;
+
+    // Picking a region (in the arrangement) shows its settings, like GarageBand.
+    bool layoutChanged = audio != editingAudio;
+    editingAudio = audio;
+
+    if (selection.getRegion() != lastSelectedRegion)
+    {
+        lastSelectedRegion = selection.getRegion();
+
+        if (lastSelectedRegion != 0 && ! regionMode)
+        {
+            regionMode = true;
+            layoutChanged = true;
+        }
+    }
+
+    if (layoutChanged)
+        showTabPage();
+
+    repaint (headerArea);
 }
 
 void BottomPanel::update()
@@ -707,8 +785,15 @@ void BottomPanel::update()
         mixer.updateMeters();
     else if (masterPage->isVisible())
         masterPage->updateMeter();
+    else if (tab == Tab::editor && editingAudio)
+    {
+        audioEditor.setPlayheadBeat (engine.getTransportState().positionBeats);
+        audioEditor.update();
+    }
     else if (tab == Tab::editor)
+    {
         pianoRoll.setPlayheadBeat (engine.getTransportState().positionBeats);
+    }
 }
 
 void BottomPanel::paint (juce::Graphics& g)
@@ -751,7 +836,28 @@ void BottomPanel::paint (juce::Graphics& g)
     {
         // The full mixer has the whole panel: no name to show.
     }
-    else if (masterMode)
+    else if (! collapsed && showsRegionInspector())
+    {
+        // Region mode: the region in the Editor, in its track's colour.
+        if (editorRegion.has_value())
+        {
+            if (track.has_value())
+            {
+                g.setColour (track->colour);
+                g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), 3.0f);
+                r.removeFromLeft (8);
+            }
+
+            drawTitle (editorRegion->name, editorRegion->isMidi ? "MIDI region" : "Audio region");
+        }
+        else
+        {
+            g.setColour (colour::textSecondary);
+            g.setFont (fonts::ui (14.0f));
+            g.drawText ("No region selected", r, juce::Justification::centredLeft);
+        }
+    }
+    else if (showsMaster())
     {
         drawTitle ("Master", "The whole mix");
     }
@@ -790,15 +896,6 @@ void BottomPanel::paint (juce::Graphics& g)
             g.drawRoundedRectangle (area.toFloat().reduced (0.5f), segmentOutlineRadius, 1.0f);
         }
     }
-
-    // The Editor works on a track's regions, so in Master mode it explains.
-    if (! collapsed && ! mixerShown && masterMode && tab == Tab::editor && ! isShowingEffect())
-    {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
-        g.drawText ("The Editor works on a track's regions. Click Track to edit them.",
-                    contentArea, juce::Justification::centred);
-    }
 }
 
 void BottomPanel::mouseUp (const juce::MouseEvent& e)
@@ -829,6 +926,7 @@ void BottomPanel::resized()
     auto m = modeArea.reduced (segmentInset);
     trackModeButton.setBounds (m.removeFromLeft (m.getWidth() / 2));
     masterModeButton.setBounds (m);
+    regionModeButton.setBounds (m);
 
     header = header.reduced (14, 8);
     collapseButton.setBounds (header.removeFromRight (32).withSizeKeepingCentre (32, 32));
@@ -854,12 +952,13 @@ void BottomPanel::resized()
         nameStrip = column.removeFromTop (nameHeight).withTrimmedTop (1);
         headerArea = nameStrip.reduced (14, 0);
         inspector.setBounds (column);
+        regionInspector.setBounds (column);
     }
 
     r.removeFromTop (1);
     contentArea = r;
 
-    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pianoRoll, &mixer })
+    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pianoRoll, &audioEditor, &mixer })
         page->setBounds (r);
 
     layoutEffectEditor();

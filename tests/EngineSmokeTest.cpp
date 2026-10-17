@@ -1132,6 +1132,50 @@ static void runTakesSection (const juce::File& dir)
         checkSameState (before, engine.getStateSnapshot(), "undo puts the old region back exactly");
     }
 
+    std::cout << "Recording over a reversed or transposed region\n";
+    {
+        // The audio editor's Reverse and Transpose change how a region
+        // sounds, so what it plays can't simply be kept as a take (see
+        // TakeEditor's canBecomeTake). Like a stretched loop, it's left as
+        // it was, under the new recording.
+        engine.setPositionBeats (0.0);
+        pumpMessages();
+        const auto before = engine.getStateSnapshot();
+
+        for (bool reversed : { true, false })
+        {
+            if (reversed)
+                tracks.regions().setRegionReversed (cycle, true);
+            else
+                tracks.regions().setRegionTranspose (cycle, 5);
+
+            tracks.setSelectedTrack (rec);
+            tracks.inputs().setArmed (rec, true);
+            runAudio (*device, 0.3);
+            engine.setPositionBeats (9.0);
+            engine.toggleRecord();
+            runAudio (*device, 1.0, steps (0.6f, 100.0));
+            engine.toggleRecord();
+            pumpMessages();
+
+            auto regions = regionsOn (rec);
+            std::sort (regions.begin(), regions.end(), [] (auto& a, auto& b) { return a.startBeat < b.startBeat; });
+            const auto old = tracks.regions().getRegion (cycle);
+            check (regions.size() == 2 && regions[1].id != cycle && regions[1].takeCount == 0
+                     && old && old->reversed == reversed && old->transposeSemitones == (reversed ? 0 : 5)
+                     && std::abs (old->startBeat - 8.0) < 0.01 && std::abs (old->getEndBeat() - 12.0) < 0.01,
+                   reversed ? "recording over a reversed region doesn't keep it as a take, and leaves it as it was"
+                            : "nor over a transposed one");
+
+            engine.undo();   // the recording
+            engine.undo();   // reversing or transposing
+            engine.setPositionBeats (0.0);
+            pumpMessages();
+        }
+
+        checkSameState (before, engine.getStateSnapshot(), "(undo puts the region back)");
+    }
+
     std::cout << "MIDI cycle recording\n";
     {
         tracks.setSelectedTrack (keys);
@@ -3973,6 +4017,114 @@ int main (int argc, char* argv[])
             pumpMessages();
         }
         checkSaveAndReopen (engine, undoSession);
+
+        std::cout << "-- Audio region editor\n";
+        {
+            // A one-second tone that swells up from silence, so its two ends
+            // look different. At 120 bpm it's 2 beats long.
+            const auto rampFile = dir.getChildFile ("Undo Ramp.wav");
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::OutputStream> stream (rampFile.createOutputStream().release());
+                auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (44100.0)
+                                                                                            .withNumChannels (1)
+                                                                                            .withBitsPerSample (16));
+                juce::AudioBuffer<float> buffer (1, 44100);
+
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    buffer.setSample (0, i, 0.8f * (float) i / 44100.0f * std::sin ((float) i * 0.05f));
+
+                check (writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()), "(test audio written)");
+            }
+
+            const auto added = regions.importAudioFiles (audio, { rampFile.getFullPathName() }, 8.0);
+            pumpMessages();
+            const RegionId ramp = added.empty() ? 0 : added.front();
+
+            // The editor's waveform is read on a background thread: ask until it's there.
+            auto waveform = [&] (RegionId id, double from, double to, int columns)
+            {
+                std::vector<WaveformRange> result;
+
+                for (int tries = 0; tries < 300 && ! regions.getWaveform (id, from, to, columns, result); ++tries)
+                    juce::Thread::sleep (10);
+
+                return result;
+            };
+
+            auto loudness = [] (const std::vector<WaveformRange>& w, size_t i) { return i < w.size() ? w[i].max - w[i].min : -1.0f; };
+
+            const auto forwards = waveform (ramp, 8.0, 10.0, 8);
+            check (forwards.size() == 8 && loudness (forwards, 0) < loudness (forwards, 7) * 0.3f,
+                   "the audio editor's waveform shows the recording (here, swelling up)");
+            const auto past = waveform (ramp, 10.0, 12.0, 4);
+            check (past.size() == 4 && loudness (past, 1) == 0.0f, "past the end of the recording it's silent");
+
+            checkUndoRoundTrip (engine, "Region Gain", [&] { engine.beginUndoStep ("Region Gain"); regions.setRegionGain (ramp, -6.0f); });
+            checkUndoRoundTrip (engine, "Reverse Region", [&] { regions.setRegionReversed (ramp, true); });
+            checkUndoRoundTrip (engine, "Transpose Region", [&] { regions.setRegionTranspose (ramp, 3); });
+
+            auto info = regions.getRegion (ramp);
+            check (info && std::abs (info->gainDb + 6.0f) < 0.01f && info->reversed && info->transposeSemitones == 3,
+                   "the region keeps its gain, direction and pitch");
+            check (info && info->peaks.size() > 2 && info->peaks.front() > info->peaks.back(),
+                   "reversed, its waveform in the arrangement fades away instead");
+
+            const auto backwards = waveform (ramp, 8.0, 10.0, 8);
+            check (backwards.size() == 8 && loudness (backwards, 7) < loudness (backwards, 0) * 0.3f,
+                   "and so does the editor's");
+            check (std::abs (loudness (backwards, 0) - loudness (forwards, 7) * 0.5f) < 0.05f,
+                   "the waveform shows the region's gain (-6 dB is about half)");
+
+            regions.setRegionTranspose (ramp, 99);
+            pumpMessages();
+            check (regions.getRegion (ramp)->transposeSemitones == RegionEditor::maxTransposeSemitones, "transpose stops at two octaves");
+            engine.undo();
+            pumpMessages();
+
+            const auto halves = regions.splitRegions ({ ramp }, 9.0);
+            pumpMessages();
+            const auto right = halves.empty() ? std::nullopt : regions.getRegion (halves.front());
+            check (right && right->reversed && right->transposeSemitones == 3 && std::abs (right->gainDb + 6.0f) < 0.01f,
+                   "both halves of a split keep them");
+            engine.undo();
+            pumpMessages();
+
+            // A loop that follows the session key keeps doing so, on top of the transpose.
+            for (auto& loop : engine.getSounds().getLoops())
+            {
+                if (loop.name != "Glass Chords")
+                    continue;
+
+                const auto loopAdded = regions.importAudioFiles (audio, { loop.file.getFullPathName() }, 16.0);
+                pumpMessages();
+                const RegionId chords = loopAdded.empty() ? 0 : loopAdded.front();
+                check (chords != 0, "(loop placed)");
+
+                if (chords == 0)
+                    break;
+
+                const auto shiftBefore = regions.getRegion (chords)->keyShiftSemitones;
+
+                checkUndoRoundTrip (engine, "Transpose Region", [&] { regions.setRegionTranspose (chords, -12); });
+                auto loopInfo = regions.getRegion (chords);
+                check (loopInfo && loopInfo->followsKey && loopInfo->transposeSemitones == -12 && loopInfo->keyShiftSemitones == shiftBefore,
+                       "a transposed loop still follows the key");
+
+                engine.setKey (4, false);   // E major: C major loops go up 4
+                pumpMessages();
+                loopInfo = regions.getRegion (chords);
+                check (loopInfo && loopInfo->transposeSemitones == -12 && loopInfo->keyShiftSemitones == 4,
+                       "and changing the key keeps its transpose");
+                engine.undo();
+                pumpMessages();
+            }
+
+            checkSaveAndReopen (engine, undoSession);
+            info = regions.getRegion (ramp);
+            check (info && std::abs (info->gainDb + 6.0f) < 0.01f && info->reversed && info->transposeSemitones == 3,
+                   "the region's gain, direction and pitch are saved");
+        }
 
         std::cout << "-- Notes\n";
         checkUndoRoundTrip (engine, "Add Note", [&] { notes.addNote (r, { 72, 0.5, 0.25, 90 }); });

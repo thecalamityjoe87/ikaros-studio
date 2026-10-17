@@ -41,8 +41,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     arrangement.onOpenRegionInEditor = [this] (RegionId)
     {
         setBottomPanelVisible (true);
-        bottomPanel.setMasterMode (false);   // the Editor works on a track
         bottomPanel.setTab (BottomPanel::Tab::editor);
+        bottomPanel.setRegionMode (true);    // with the region's settings beside it
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
@@ -637,7 +637,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress ('3', cmd);
             break;
         case CommandIDs::showEditorTab:
-            info.setInfo ("Editor", "Show the piano roll", "View", 0);
+            info.setInfo ("Editor", "Show the selected region close up: the piano roll or the audio editor", "View", 0);
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;

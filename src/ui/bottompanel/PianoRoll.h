@@ -1,7 +1,8 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
-#include "ui/widgets/IconButton.h"
+#include "ui/bottompanel/EditorGrid.h"
+#include <juce_gui_basics/juce_gui_basics.h>
 #include <optional>
 
 namespace ikaros
@@ -13,7 +14,7 @@ class AudioEngine;
 /**
     The "Editor" tab: a piano roll for the selected MIDI region.
 
-        ┌ [Grid: 1/16] [Quantize]  hints...                ⌕──○  ♪──○ ┐  toolbar
+        ┌ hints...                                         ⌕──○  ♪──○ ┐  toolbar
         │ keys │ note grid                                           │▲│
         │      │   ▬▬▬   ▬▬▬▬▬                                       │ │
         ├──────┼─────────────────────────────────────────────────────┤ │
@@ -25,7 +26,8 @@ class AudioEngine;
     to select several, drag a stem in the velocity lane to change velocity,
     click a key to hear it. Right-click for more.
     Keys: Delete, Ctrl/Cmd+A, Escape (deselect, or cancel a drag), Q
-    (quantize), arrows (move/transpose).
+    (quantize), arrows (move/transpose). The grid and Quantize button are in
+    the Region inspector on the panel's left (see RegionInspector).
 
     The code is in three files: PianoRoll.cpp (the region, view and editing),
     PianoRollGestures.cpp (mouse, wheel and keys) and PianoRollPainting.cpp,
@@ -46,6 +48,12 @@ public:
     void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, double beatsPerBar);
     void setPlayheadBeat (double editBeat);
 
+    /** Where notes snap to when they're drawn, moved or resized (see RegionInspector). */
+    void setGrid (EditorGrid);
+
+    /** Lines the selected notes (or all of them) up with the grid, as one undo step. */
+    void quantize();
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -57,8 +65,6 @@ public:
     void focusLost (FocusChangeType) override;
 
 private:
-    enum class Grid { bar, quarter, eighth, sixteenth, thirtySecond, off };
-
     // What a mouse drag is doing.
     struct Gesture
     {
@@ -86,14 +92,12 @@ private:
     double topRow = 50.0;
     bool needsFit = true;           // zoom to fit the region on the next layout
 
-    Grid grid = Grid::sixteenth;
+    EditorGrid grid = EditorGrid::sixteenth;
     double lastNoteLength = 0.25;   // new notes get the length of the last one drawn or resized
     std::vector<NoteId> selected;   // note IDs, sorted
     Gesture gesture;
     int previewNote = -1;           // the note sounding while the mouse is held, or -1
 
-    IconButton gridButton     { "Grid", std::nullopt, "Grid: 1/16" };
-    IconButton quantizeButton { "Quantize", std::nullopt, "Quantize" };
     juce::Slider timeZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Slider noteZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::ScrollBar timeScroll { false }, noteScroll { true };
@@ -116,8 +120,6 @@ private:
     // Grid
     double gridBeats() const;                              // 0 = off
     double snapToGrid (double beat, bool roundDown) const; // on the song's timeline
-    juce::String gridName() const;
-    void showGridMenu();
 
     // View
     void fitToRegion();
@@ -141,7 +143,6 @@ private:
     void rereadRegion();
     void applyChanges (const std::vector<NoteInfo>&, const juce::String& undoName);
     void deleteSelected();
-    void quantize();
     void nudgeSelected (double beats, int semitones);
     void showNoteMenu();
 

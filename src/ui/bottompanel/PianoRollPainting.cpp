@@ -2,6 +2,7 @@
 
 #include "ui/bottompanel/PianoRoll.h"
 #include "ui/bottompanel/PianoRollLayout.h"
+#include "ui/widgets/Icons.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 

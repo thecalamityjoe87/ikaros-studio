@@ -89,6 +89,13 @@ struct RegionInfo
     bool followsKey = false;
     int keyShiftSemitones = 0;
 
+    // Audio regions only, set in the audio editor: the region's own volume
+    // (dB, 0 = as recorded), whether it plays backwards, and how far the
+    // user moved it in pitch (semitones; on top of keyShiftSemitones).
+    float gainDb = 0.0f;
+    bool reversed = false;
+    int transposeSemitones = 0;
+
     double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
     bool hasTakes() const noexcept          { return takeCount > 0; }
     bool isLooped() const noexcept          { return loopLengthBeats > 0.0; }
