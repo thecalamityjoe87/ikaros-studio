@@ -4024,8 +4024,107 @@ int main (int argc, char* argv[])
         engine.redo();
         checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (96.0); });
         checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignature (3, 4); });
+
+        std::cout << "-- Loops follow the song key\n";
+        {
+            int root = -1;
+            bool minor = false;
+            check (SoundLibrary::parseKey ("F# minor", root, minor) && root == 6 && minor
+                     && SoundLibrary::parseKey ("Bbm", root, minor) && root == 10 && minor
+                     && SoundLibrary::parseKey ("c", root, minor) && root == 0 && ! minor
+                     && SoundLibrary::parseKey ("Eb maj", root, minor) && root == 3 && ! minor
+                     && ! SoundLibrary::parseKey ("H", root, minor) && ! SoundLibrary::parseKey ("C dorian", root, minor),
+                   "loop keys are read the ways packs and Freesound write them");
+
+            auto findLoop = [&] (const juce::String& name) -> std::optional<LibraryFile>
+            {
+                for (auto& l : engine.getSounds().getLoops())
+                    if (l.name == name)
+                        return l;
+
+                return std::nullopt;
+            };
+
+            const auto chords = findLoop ("Glass Chords"), bass = findLoop ("Pluck Bass"), beat = findLoop ("Electro Beat");
+            check (chords && chords->keyRoot == 0 && ! chords->keyMinor && bass && bass->keyRoot == 0 && bass->keyMinor
+                     && beat && beat->unpitched && beat->keyRoot < 0,
+                   "the bundled loops know their keys, and the drum loops are unpitched");
+            check (SoundLibrary::soundsUnpitched ({ "funk", "drums" }) && ! SoundLibrary::soundsUnpitched ({ "bass" }),
+                   "loops tagged as drums count as unpitched");
+
+            // The region on the audio track that starts at this beat.
+            auto regionAt = [&] (double startBeat) -> std::optional<RegionInfo>
+            {
+                for (auto& r : regions.getRegions (audio))
+                    if (std::abs (r.startBeat - startBeat) < 0.001)
+                        return r;
+
+                return std::nullopt;
+            };
+
+            auto shiftAt = [&] (double startBeat)
+            {
+                auto r = regionAt (startBeat);
+                return r && r->followsKey ? r->keyShiftSemitones : 99;
+            };
+
+            engine.setKey (2, false);   // D major
+            pumpMessages();
+
+            if (chords && bass && beat)
+            {
+                checkUndoRoundTrip (engine, "Import Audio File", [&] { regions.importAudioFiles (audio, { chords->file.getFullPathName() }, 32.0); });
+                regions.importAudioFiles (audio, { bass->file.getFullPathName() }, 48.0);
+                regions.importAudioFiles (audio, { beat->file.getFullPathName() }, 64.0);
+                pumpMessages();
+            }
+
+            check (shiftAt (32.0) == 2, "a C major loop placed in D major goes up 2 semitones");
+            check (shiftAt (48.0) == -1, "a C minor loop goes to D major's relative minor, B minor (down 1)");
+            check (regionAt (64.0) && ! regionAt (64.0)->followsKey && regionAt (64.0)->keyShiftSemitones == 0,
+                   "a drum loop isn't moved");
+
+            checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, false); });   // G major
+            check (shiftAt (32.0) == -5 && shiftAt (48.0) == 4,
+                   "changing the key moves the loops already placed, whichever way is nearer (C to G is down 5)");
+
+            engine.setKey (9, true);   // A minor, C major's relative minor
+            pumpMessages();
+            check (shiftAt (32.0) == 0 && shiftAt (48.0) == -3, "loops keep their mode: C major stays put in A minor, C minor goes to A minor");
+            engine.undo();
+            pumpMessages();
+            check (shiftAt (32.0) == -5 && shiftAt (48.0) == 4, "undo puts them back");
+
+            if (auto chordsRegion = regionAt (32.0))
+            {
+                regions.splitRegions ({ chordsRegion->id }, 34.0);
+                pumpMessages();
+                check (shiftAt (32.0) == -5 && shiftAt (34.0) == -5, "both halves of a split loop follow the key");
+                engine.undo();
+                pumpMessages();
+
+                regions.copyRegions ({ chordsRegion->id });
+                regions.pasteRegions (audio, 96.0);
+                pumpMessages();
+                check (shiftAt (96.0) == -5, "so does a pasted copy");
+                engine.setKey (4, false);   // E major
+                pumpMessages();
+                check (shiftAt (96.0) == 4 && shiftAt (32.0) == 4, "and it keeps following the key");
+                engine.undo();
+                pumpMessages();
+                engine.undo();
+                pumpMessages();
+            }
+        }
+
         checkUndoRoundTrip (engine, "Key", [&] { engine.setKey (7, true); });
         checkSaveAndReopen (engine, undoSession);
+        {
+            auto r = regions.getRegions (audio);
+            auto chords = std::find_if (r.begin(), r.end(), [] (const RegionInfo& i) { return std::abs (i.startBeat - 32.0) < 0.001; });
+            check (chords != r.end() && chords->followsKey && chords->keyShiftSemitones == -2,
+                   "a reopened session's loops still follow the key (C major in G minor = Bb major, down 2)");
+        }
 
         std::cout << "-- Selection after delete, undo and redo\n";
         {

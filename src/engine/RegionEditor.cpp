@@ -1,5 +1,6 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/LoopKey.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
@@ -151,6 +152,12 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
             const auto range = clip.getPosition().time;
             r.fadeInBeats = timeToBeat (edit, range.getStart() + audio->getFadeIn()) - r.startBeat;
             r.fadeOutBeats = r.startBeat + r.lengthBeats - timeToBeat (edit, range.getEnd() - audio->getFadeOut());
+
+            if (followsSessionKey (*audio))
+            {
+                r.followsKey = true;
+                r.keyShiftSemitones = audio->getTransposeSemiTones (true) - audio->getTransposeSemiTones (false);
+            }
         }
     }
 
@@ -688,9 +695,12 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
 
         // A loop from the library knows its tempo: it lasts that many beats
         // at the session's tempo, stretched to fit (and keeps following the
-        // tempo if it changes).
-        const auto loopBpm = owner.getSounds().getLoopBpm (file);
+        // tempo if it changes). If it knows its key, it follows the
+        // session's key too (see LoopKey.h).
+        const auto* loop = owner.getSounds().findLoop (file);
+        const auto loopBpm = loop != nullptr ? loop->bpm : 0.0;
         const auto loopBeats = fileSeconds * loopBpm / 60.0;
+        const bool hasKey = loop != nullptr && ! loop->unpitched && loop->keyRoot >= 0;
 
         if (loopBpm > 0.0)
             length = beatToTime (*edit, timeToBeat (*edit, start) + loopBeats) - start;
@@ -703,6 +713,13 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
                 clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
                 clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 clip->setAutoTempo (true);
+            }
+
+            if (hasKey)
+            {
+                // Pitch shifting needs a time stretcher, even at the loop's own tempo.
+                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+                setLoopKey (*clip, loop->keyRoot, loop->keyMinor);
             }
 
             ensureEdgeFades (*clip);

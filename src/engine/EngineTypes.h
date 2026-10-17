@@ -84,6 +84,11 @@ struct RegionInfo
     int takeCount = 0;
     int currentTake = 0;    // index into the takes
 
+    // Loops that know their key follow the session's key (see LoopKey.h):
+    // how many semitones the region is moved to fit it (-6..+6).
+    bool followsKey = false;
+    int keyShiftSemitones = 0;
+
     double getEndBeat() const noexcept      { return startBeat + lengthBeats; }
     bool hasTakes() const noexcept          { return takeCount > 0; }
     bool isLooped() const noexcept          { return loopLengthBeats > 0.0; }
@@ -349,6 +354,9 @@ struct LibraryFile
     bool isFolder = false;
     double bpm = 0.0;              // loops: the tempo it was made at (0 = unknown)
     juce::StringArray tags;        // loops: lowercase words that describe it, for the browser's filters
+    int keyRoot = -1;              // loops: the key it was made in, 0 = C ... 11 = B (-1 = unknown)
+    bool keyMinor = false;
+    bool unpitched = false;        // loops: drums and the like, which never change key
 };
 
 // A third-party plug-in found by the plug-in scan.

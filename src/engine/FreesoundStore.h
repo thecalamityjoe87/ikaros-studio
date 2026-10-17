@@ -28,7 +28,7 @@ struct FreesoundSound
     juce::String license;          // SPDX identifier: "CC0-1.0" or "CC-BY-4.0" (just "CC-BY" if the version is unknown)
     juce::String pageUrl;          // its page on freesound.org
     juce::String previewUrl;       // the OGG preview we download
-    juce::String key;              // e.g. "C minor", if Freesound worked it out
+    juce::String key;              // e.g. "C min", from Freesound's analysis or the tags (never for drums)
     double bpm = 0.0, duration = 0.0;
 
     bool attributionRequired() const    { return license.startsWith ("CC-BY"); }

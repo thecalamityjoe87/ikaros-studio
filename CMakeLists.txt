@@ -190,6 +190,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
+    src/engine/LoopKey.h
     src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp

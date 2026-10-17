@@ -6,6 +6,7 @@
 #include "engine/PackStore.h"
 #include "engine/RealtimeAudioThread.h"
 #include "engine/FreesoundStore.h"
+#include "engine/LoopKey.h"
 #include "engine/RecordingGuard.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
@@ -1966,6 +1967,9 @@ void AudioEngine::setKey (int root, bool minor)
         beginUndoStep ("Key");
         pitch->setPitch (60 + juce::jlimit (0, 11, root));   // stored as a MIDI note: the root above middle C
         pitch->setScaleID (minor ? te::Scale::minor : te::Scale::major);
+
+        // Loops already in the arrangement move to the new key, in the same undo step.
+        detail::followSessionKey (*impl->edit);
     }
 }
 

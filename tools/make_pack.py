@@ -14,7 +14,7 @@ just the zip's name, relative to the index).
 
 The pack must have a format 2 pack.json (with an id and a version); see
 src/engine/SoundLibrary.h for the pack layout and src/engine/PackStore.h for
-the index format.
+the index format. Loop keys in Loops/loops.json are checked first.
 
 The zip is made the same way every time (sorted entries, fixed dates), so
 packaging the same files again gives the same SHA-256.
@@ -23,9 +23,38 @@ packaging the same files again gives the same SHA-256.
 import argparse
 import hashlib
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
+
+
+# Loop keys, as SoundLibrary::parseKey reads them: "C", "C major", "F# minor", "Bbm".
+KEY_PATTERN = re.compile(r"^[A-Ga-g](#|b|\u266f|\u266d)?\s*(|M|maj|major|m|min|minor)$", re.IGNORECASE)
+DRUM_TAGS = {"drums", "drum", "drumloop", "drum-loop", "percussion", "beat", "beats",
+             "breakbeat", "hihat", "hi-hat", "hats", "kick", "snare"}
+
+
+def check_loops(pack: Path):
+    """Stops on a loop key the app can't read, and warns about drum loops with a key."""
+    loops_file = pack / "Loops" / "loops.json"
+    if not loops_file.exists():
+        return
+
+    for loop in json.loads(loops_file.read_text(encoding="utf-8")):
+        name = loop.get("name", loop.get("file"))
+        key = loop.get("key")
+        unpitched = loop.get("unpitched")
+
+        if unpitched is not None and not isinstance(unpitched, bool):
+            sys.exit(f"{loops_file}: {name!r} has \"unpitched\": {unpitched!r}, which should be true or false")
+        if key and not KEY_PATTERN.match(str(key).strip()):
+            sys.exit(f"{loops_file}: {name!r} has the key {key!r}; write it like \"C\", \"F# minor\" or \"Bbm\"")
+        if key and unpitched:
+            print(f"warning: {name!r} has a key but is unpitched, so its key is ignored", file=sys.stderr)
+        if key and unpitched is None and DRUM_TAGS & {t.lower() for t in loop.get("tags", [])}:
+            print(f"warning: {name!r} is tagged as drums, so the app treats it as unpitched and ignores its key "
+                  f"(add \"unpitched\": false if it should follow the song's key)", file=sys.stderr)
 
 
 def package(pack: Path, out: Path, category: str, base_url: str) -> dict:
@@ -34,6 +63,8 @@ def package(pack: Path, out: Path, category: str, base_url: str) -> dict:
     for field in ("id", "name", "version"):
         if not info.get(field):
             sys.exit(f"{pack}/pack.json has no {field!r}: packs for download need format 2 (see SoundLibrary.h)")
+
+    check_loops(pack)
 
     files = sorted(p for p in pack.rglob("*") if p.is_file() and not p.name.startswith("."))
     zip_name = f"{info['id']}-{info['version']}.zip"

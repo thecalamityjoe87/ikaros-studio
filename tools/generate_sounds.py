@@ -406,7 +406,7 @@ def write_loops():
             mix_into(beat, kit[39][1], beat_to_sample(b, bpm), 0.6)
     for e in range(16):
         mix_into(beat, kit[46 if e % 4 == 3 else 42][1], beat_to_sample(e * 0.5, bpm), 0.35 if e % 2 else 0.25)
-    loops.append(("Electro Beat", "Electro Beat", beat, "C"))
+    loops.append(("Electro Beat", "Electro Beat", beat, None))
 
     # Hat Groove: sixteenth hats with accents and a little swing.
     hats = [0.0] * length
@@ -418,21 +418,21 @@ def write_loops():
     mix_into(hats, kit[56][1], beat_to_sample(5.5, bpm), 0.25)
     loops.append(("Hat Groove", "Hat Groove", hats, None))
 
-    # Pluck Bass: a two-bar line in C.
+    # Pluck Bass: a two-bar line in C minor (C, Bb, G).
     bass = [0.0] * length
     line = [(0, 36, 0.75), (0.75, 36, 0.5), (1.5, 48, 0.5), (2.0, 36, 1.0), (3.0, 34, 1.0),
             (4.0, 31, 0.75), (4.75, 31, 0.5), (5.5, 43, 0.5), (6.0, 34, 1.0), (7.0, 35, 1.0)]
     for start, note, dur in line:
         pluck = karplus_strong(note, dur * 0.5 + 0.1, brightness=0.25, decay=0.6)
         mix_into(bass, pluck, beat_to_sample(start, bpm), 0.8)
-    loops.append(("Pluck Bass", "Pluck Bass", bass, "C"))
+    loops.append(("Pluck Bass", "Pluck Bass", bass, "C minor"))
 
     # Glass Chords: electric piano, Cmaj7 to Am7.
     chords = [0.0] * length
     for start, notes in ((0, (48, 55, 59, 64)), (2.5, (48, 55, 59, 64)), (4, (45, 52, 55, 60)), (6.5, (45, 52, 55, 60))):
         for note in notes:
             mix_into(chords, electric_piano_note(note, 1.4), beat_to_sample(start, bpm), 0.28)
-    loops.append(("Glass Chords", "Glass Chords", chords, "C"))
+    loops.append(("Glass Chords", "Glass Chords", chords, "C major"))
 
     # What the loop browser's instrument, genre and mood filters look for.
     loop_tags = {
@@ -446,8 +446,12 @@ def write_loops():
     for stem, name, samples, key in loops:
         file_name = write_audio(folder / stem, fade_out(normalise(samples, 0.8), 0.01))
         entry = {"file": file_name, "name": name, "bpm": bpm}
+        # A loop with a key follows the session's key; drums have none, so
+        # they're marked unpitched (they'd sound wrong moved up or down).
         if key:
             entry["key"] = key
+        else:
+            entry["unpitched"] = True
         entry["tags"] = loop_tags[name]
         entries.append(entry)
         print(f"  loop: {name}")
