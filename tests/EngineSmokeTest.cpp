@@ -1977,6 +1977,178 @@ static void runPreferencesSection (const juce::File& dir)
     }
 }
 
+//==============================================================================
+// Tempo and time-signature changes (the tempo lane).
+static void runTempoSection (const juce::File& dir)
+{
+    std::cout << "Tempo map\n";
+    {
+        const TempoMap map ({ { 0.0, 120.0 }, { 16.0, 90.0 } }, { { 0.0, 0, 4, 4 }, { 16.0, 0, 3, 4 } });
+        check (map.getTimeSignatureChanges()[1].bar == 4, "a 3/4 change at beat 16 starts the 5th bar");
+        check (map.barToBeat (6) == 22.0 && map.barAt (21.9) == 5 && map.barAt (22.0) == 6 && map.beatsPerBarAt (20.0) == 3.0,
+               "bars after it are 3 beats long");
+        check (map.nearestBarLine (17.4) == 16.0 && map.nearestBarLine (17.6) == 19.0 && map.nearestBar (17.6) == 5,
+               "the nearest bar line");
+        check (map.tempoAt (15.9).bpm == 120.0 && map.tempoAt (16.0).bpm == 90.0, "the tempo in effect at a beat");
+
+        int bars = 0;
+        map.forEachBar (0.0, 22.0, 1, [&] (int, double) { ++bars; });
+        check (bars == 7, "every bar line is visited");
+
+        const TempoMap odd ({}, { { 0.0, 0, 4, 4 }, { 18.0, 0, 3, 4 } });
+        check (odd.getTimeSignatureChanges()[1].beat == 20.0 && odd.getTimeSignatureChanges()[1].bar == 5,
+               "a time signature off a bar line starts at the next one, as in Tracktion");
+    }
+
+    AudioEngine engine { testSettings };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+
+    const auto midi = tracks.getTracks().front().id;
+    const auto audio = tracks.addAudioTrack();
+    engine.setBpm (120.0);              // 2 beats a second
+
+    // A chord region at bar 9, a loop (auto-tempo) at bar 5 and a plain
+    // 2-second file (a recording, as far as tempo goes) at bar 13.
+    const auto chords = regions.createChordRegion (midi, 32.0);
+    std::optional<LibraryFile> loop;
+
+    for (auto& l : engine.getSounds().getLoops())
+        if (l.name == "Glass Chords")
+            loop = l;
+
+    const auto plainFile = dir.getChildFile ("Two Seconds.wav");
+    writeClickWav (plainFile, 44100.0, 2.0, { 0.0 }, 0.5f);
+    check (loop.has_value(), "(the bundled loop is there)");
+
+    if (loop)
+        regions.importAudioFiles (audio, { loop->file.getFullPathName() }, 16.0);
+
+    regions.importAudioFiles (audio, { plainFile.getFullPathName() }, 48.0);
+    pumpMessages();
+
+    auto regionAt = [&] (TrackId track, double startBeat) -> std::optional<RegionInfo>
+    {
+        for (auto& r : regions.getRegions (track))
+            if (std::abs (r.startBeat - startBeat) < 0.001)
+                return r;
+
+        return std::nullopt;
+    };
+
+    auto secondsAt = [&] (double beat)
+    {
+        engine.setPositionBeats (beat);
+        return engine.getTransportState().positionSeconds;
+    };
+
+    const auto loopBeats = loop ? regionAt (audio, 16.0)->lengthBeats : 0.0;
+    check (std::abs (regionAt (audio, 48.0).value_or (RegionInfo {}).lengthBeats - 4.0) < 0.01, "(the 2-second file is 4 beats long at 120 BPM)");
+
+    std::cout << "Tempo changes\n";
+    checkUndoRoundTrip (engine, "Add Tempo Change", [&] { engine.addTempoChange (2, 60.0); });   // from bar 3 (beat 8)
+    {
+        const auto map = engine.getTempoMap();
+        check (map.getTempoChanges().size() == 2 && map.getTempoChanges()[1].beat == 8.0 && map.getTempoChanges()[1].bpm == 60.0,
+               "a tempo change goes on its bar line");
+        check (std::abs (secondsAt (10.0) - 6.0) < 1.0e-6, "beat 10 is 6 seconds in (4 at 120 BPM, then 2 at 60)");
+        check (engine.getTransportState().bpm == 60.0, "the LCD shows the tempo at the playhead");
+        check (secondsAt (4.0) >= 0.0 && engine.getTransportState().bpm == 120.0, "...before the change too");
+
+        auto chordRegion = regions.getRegion (chords);
+        check (chordRegion && chordRegion->startBeat == 32.0 && chordRegion->lengthBeats == 16.0,
+               "MIDI regions stay on their beats");
+        check (! loop || std::abs (regionAt (audio, 16.0).value_or (RegionInfo {}).lengthBeats - loopBeats) < 0.01,
+               "loops stay on their beats and follow the new tempo (the same length in beats)");
+        check (std::abs (regionAt (audio, 48.0).value_or (RegionInfo {}).lengthBeats - 2.0) < 0.01,
+               "a recording keeps its length in seconds (2 beats at 60 BPM)");
+    }
+
+    checkUndoRoundTrip (engine, "Tempo Change", [&]
+    {
+        engine.beginUndoStep ("Tempo Change");   // as the tempo lane does when a drag starts
+        engine.setTempoChange (1, 12.0, 90.0);
+    });
+    check (! engine.setTempoChange (1, 0.0, 90.0) && engine.getTempoMap().getTempoChanges()[1].beat == 12.0,
+           "a tempo change can't be moved onto or past its neighbour");
+
+    engine.setPositionBeats (20.0);
+    checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (100.0); });
+    check (engine.getTempoMap().getTempoChanges()[0].bpm == 120.0 && engine.getTempoMap().getTempoChanges()[1].bpm == 100.0,
+           "the LCD's tempo changes the tempo change at the playhead");
+    checkUndoRoundTrip (engine, "Delete Tempo Change", [&] { engine.removeTempoChange (1); });
+    check (engine.getTempoMap().getTempoChanges().size() == 1 && std::abs (secondsAt (10.0) - 5.0) < 1.0e-6,
+           "deleting it puts the song back to one tempo");
+
+    std::cout << "Time-signature changes\n";
+    engine.addTempoChange (8, 100.0);   // bar 9 (beat 32)
+    checkUndoRoundTrip (engine, "Add Time Signature Change", [&] { engine.addTimeSignatureChange (4, 3, 4); });
+    {
+        const auto map = engine.getTempoMap();
+        check (map.getTimeSignatureChanges().size() == 2 && map.getTimeSignatureChanges()[1].beat == 16.0 && map.barToBeat (8) == 28.0,
+               "a 3/4 change from bar 5 makes later bars 3 beats long");
+        check (map.getTempoChanges()[1].beat == 32.0 && regions.getRegion (chords)->startBeat == 32.0,
+               "tempo changes and regions stay on their beats");
+
+        engine.setPositionBeats (17.0);
+        const auto t = engine.getTransportState();
+        check (t.timeSigNumerator == 3 && t.timeSigDenominator == 4 && t.bar == 5 && t.beat == 2,
+               "the LCD shows the time signature, bar and beat at the playhead");
+    }
+
+    engine.addTimeSignatureChange (8, 4, 4);   // bar 9 (beat 28)
+    checkUndoRoundTrip (engine, "Time Signature", [&] { engine.setTimeSignatureChange (1, 2, 4); });
+    check (engine.getTempoMap().getTimeSignatureChanges()[2].bar == 8 && engine.getTempoMap().getTimeSignatureChanges()[2].beat == 24.0,
+           "a later time-signature change stays on its bar when earlier bars get shorter");
+
+    {
+        const double before = secondsAt (60.0), beforeLoop = secondsAt (16.0);
+        const auto temposBefore = engine.getTempoMap().getTempoChanges();
+        checkUndoRoundTrip (engine, "Add Time Signature Change", [&] { engine.addTimeSignatureChange (10, 6, 8); });
+        check (std::abs (secondsAt (60.0) - before) < 1.0e-6 && std::abs (secondsAt (16.0) - beforeLoop) < 1.0e-6,
+               "a 6/8 change doesn't change when anything plays");
+        check (engine.getTempoMap().getTempoChanges() == temposBefore, "...nor the tempo the lane shows");
+
+        engine.setPositionBeats (engine.getTempoMap().barToBeat (10) + 1.0);
+        check (engine.getTransportState().bpm == 100.0 && engine.getTransportState().timeSigDenominator == 8,
+               "the LCD's tempo counts the eighth notes in 6/8");
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Tempo"));
+        check (engine.getTempoMap().getTempoChanges() == temposBefore && engine.getTempoMap().getTimeSignatureChanges().size() == 4,
+               "tempo and time-signature changes are saved");
+
+        const int sixEight = engine.getTempoMap().indexOfSignatureAt (engine.getTempoMap().barToBeat (10));
+        checkUndoRoundTrip (engine, "Delete Time Signature Change", [&] { engine.removeTimeSignatureChange (sixEight); });
+        check (std::abs (secondsAt (60.0) - before) < 1.0e-6 && engine.getTempoMap().getTempoChanges() == temposBefore,
+               "deleting it doesn't change when anything plays either");
+    }
+
+    std::cout << "Count-in\n";
+    {
+        // A bar of the time signature where recording starts (Tracktion only
+        // looked at the first one until external/patches/tracktion-count-in-time-signature.patch).
+        const auto map = engine.getTempoMap();
+        engine.setCountInBars (1);
+        const auto at = [&] (double beat) { return engine.getCountInBeatsAt (beat); };
+        // 4/4, then 2/4 from bar 5 and 4/4 again from bar 9 (see above).
+        check (at (0.0) == 4 && at (map.barToBeat (4)) == 2 && at (map.barToBeat (6)) == 2 && at (map.barToBeat (8)) == 4,
+               "the count-in is a bar of the time signature where recording starts");
+        engine.setCountInBars (0);
+    }
+
+    std::cout << "Chord regions and the loop range follow the bars\n";
+    {
+        const auto map = engine.getTempoMap();   // 4/4, 3/4 from bar 5, 2/4 from bar 6... (see above)
+        const auto id = regions.createChordRegion (midi, map.barToBeat (5) + 0.5);
+        auto r = regions.getRegion (id);
+        check (r && r->startBeat == map.barToBeat (5) && std::abs (r->lengthBeats - (map.barToBeat (9) - map.barToBeat (5))) < 1.0e-6,
+               "a chord region starts on its bar and is 4 bars long, whatever their lengths");
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -4817,6 +4989,9 @@ int main (int argc, char* argv[])
 
     if (runs ("effects"))
         runEffectsSection (dir);
+
+    if (runs ("tempo"))
+        runTempoSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

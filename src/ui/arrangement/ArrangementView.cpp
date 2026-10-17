@@ -4,6 +4,7 @@
 #include "ui/arrangement/ArrangementOverlays.h"
 #include "ui/arrangement/ArrangementRegionDrag.h"
 #include "ui/arrangement/ArrangementRuler.h"
+#include "ui/arrangement/ArrangementTempoLane.h"
 #include "app/CommandIDs.h"
 #include "engine/AudioPreview.h"
 #include "engine/PluginLibrary.h"
@@ -45,12 +46,14 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     : engine (e), selection (s), commands (cm)
 {
     ruler = std::make_unique<Ruler> (*this);
+    tempoLane = std::make_unique<TempoLane> (*this);
     content = std::make_unique<Content> (*this);
     overlay = std::make_unique<Overlay>();
     playhead = std::make_unique<Playhead> (*this);
     regionDrag = std::make_unique<RegionDrag> (*this);
 
     addAndMakeVisible (*ruler);
+    addChildComponent (*tempoLane);   // hidden until setTempoLaneShown
 
     viewport.setViewedComponent (content.get(), false);
     viewport.setScrollBarsShown (true, false);
@@ -86,6 +89,14 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     };
     addAndMakeVisible (automationButton);
 
+    // The tempo lane's button: amber while the lane shows, like automation's.
+    tempoLaneButton.setColours (automationColours);
+    tempoLaneButton.setCornerRadius (size::radiusSmall);
+    tempoLaneButton.setIconSize (15.0f);
+    tempoLaneButton.setTooltip ("Show the tempo lane: tempo and time-signature changes");
+    tempoLaneButton.onClick = [this] { setTempoLaneShown (! tempoLaneShown); };
+    addAndMakeVisible (tempoLaneButton);
+
     zoomSlider.setTitle ("Zoom");
     zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
     zoomSlider.setRange (0.0, 1.0);
@@ -96,6 +107,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     addAndMakeVisible (*playhead);   // added last so it's drawn on top
 
     applySnapPreference();
+    setTempoLaneShown (engine.getPreferences().get (settings::tempoLaneShown));
     refresh();
 }
 
@@ -116,7 +128,7 @@ void ArrangementView::refresh()
     for (auto& t : tracks)
         regions[t.id] = tc.regions().getRegions (t.id);
 
-    geometry.beatsPerBar = engine.beatsPerBar();
+    geometry.tempo = engine.getTempoMap();
     updateAutomationButton();
     content->sync (tracks, regions);
     contentEndBeat = content->getEndBeat();
@@ -190,8 +202,8 @@ double ArrangementView::getVisibleBeats() const
 double ArrangementView::getTotalBeats() const
 {
     // You can scroll to 16 bars past the last region (and at least 32 bars in).
-    const double bpb = geometry.beatsPerBar;
-    return juce::jmax (32.0 * bpb, (std::ceil (contentEndBeat / bpb) + 16.0) * bpb);
+    const auto& tempo = geometry.tempo;
+    return juce::jmax (tempo.barToBeat (32), tempo.barToBeat (tempo.barAt (contentEndBeat - 1.0e-9) + 1 + 16));
 }
 
 void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
@@ -253,6 +265,7 @@ void ArrangementView::timelineChanged()
 
     content->timelineChanged();
     ruler->repaint();
+    tempoLane->repaint();
     updateScrollBar();
     zoomSlider.setValue (zoomToSlider (geometry.pixelsPerBeat), juce::dontSendNotification);
     playhead->setX (geometry.beatToX (engine.getTransportState().positionBeats));
@@ -265,7 +278,7 @@ void ArrangementView::updateScrollBar()
     timeScrollBar.setRangeLimits (0.0, juce::jmax (getTotalBeats(), geometry.scrollBeats + getVisibleBeats()),
                                   juce::dontSendNotification);
     timeScrollBar.setCurrentRange (geometry.scrollBeats, getVisibleBeats(), juce::dontSendNotification);
-    timeScrollBar.setSingleStepSize (geometry.beatsPerBar);
+    timeScrollBar.setSingleStepSize (geometry.tempo.beatsPerBarAt (geometry.scrollBeats));
 }
 
 void ArrangementView::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
@@ -324,15 +337,70 @@ void ArrangementView::applySnapPreference()
         setSnap (prefs.get (settings::snapGrid) == settings::Grid::bar ? Snap::bar : Snap::beat);
 }
 
-double ArrangementView::getSnapBeats() const
+double ArrangementView::getSnapBeats (double atBeat) const
 {
-    return snap == Snap::bar ? geometry.beatsPerBar : snap == Snap::beat ? 1.0 : 0.0;
+    return snap == Snap::bar ? geometry.tempo.beatsPerBarAt (atBeat) : snap == Snap::beat ? 1.0 : 0.0;
 }
 
 double ArrangementView::snapBeat (double beat) const
 {
-    const double grid = getSnapBeats();
-    return grid > 0.0 ? std::round (beat / grid) * grid : beat;
+    // Bars can differ in length, so the bar grid comes from the tempo map.
+    if (snap == Snap::bar)
+        return geometry.tempo.nearestBarLine (beat);
+
+    return snap == Snap::beat ? std::round (beat) : beat;
+}
+
+void ArrangementView::setTempoLaneShown (bool shouldShow)
+{
+    tempoLaneShown = shouldShow;
+    tempoLane->setVisible (shouldShow);
+    tempoLaneButton.setToggleState (shouldShow, juce::dontSendNotification);
+    engine.getPreferences().set (settings::tempoLaneShown, shouldShow);
+    resized();
+
+    if (onTempoLaneToggled)
+        onTempoLaneToggled();
+}
+
+void ArrangementView::addTempoMenuItems (juce::PopupMenu& menu, double beat)
+{
+    const auto& tempo = geometry.tempo;
+    const int bar = tempo.nearestBar (beat);
+    const double barBeat = tempo.barToBeat (bar);
+    const auto barName = "Bar " + juce::String (bar + 1);   // bars show from 1
+
+    // The lambdas run after the menu closes; AudioEngine outlives every menu,
+    // so capturing it by reference is safe.
+    auto& e = engine;
+
+    const int tempoIndex = tempo.indexOfTempoAt (barBeat);
+    const bool tempoHere = std::abs (tempo.getTempoChanges()[(size_t) tempoIndex].beat - barBeat) < 1.0e-6;
+
+    if (tempoHere && tempoIndex > 0)
+        menu.addItem ("Delete Tempo Change at " + barName, [&e, tempoIndex] { e.removeTempoChange (tempoIndex); });
+    else if (! tempoHere)
+        menu.addItem ("Add Tempo Change at " + barName, [&e, bar, bpm = tempo.tempoAt (barBeat).bpm] { e.addTempoChange (bar, bpm); });
+
+    const int sigIndex = tempo.indexOfSignatureAt (barBeat);
+    const auto& sig = tempo.getTimeSignatureChanges()[(size_t) sigIndex];
+    const bool sigHere = sig.bar == bar;
+    juce::PopupMenu signatures;
+
+    for (auto& choice : TempoMap::commonSignatures())
+    {
+        const int n = choice.first, d = choice.second;
+        signatures.addItem (juce::String (n) + "/" + juce::String (d), true, sigHere && sig.numerator == n && sig.denominator == d,
+                            [&e, bar, n, d] { e.addTimeSignatureChange (bar, n, d); });   // or changes the one there
+    }
+
+    menu.addSubMenu (sigHere ? "Time Signature at " + barName : "Add Time Signature Change at " + barName, signatures);
+
+    if (sigHere && sigIndex > 0)
+        menu.addItem ("Delete Time Signature Change at " + barName, [&e, sigIndex] { e.removeTimeSignatureChange (sigIndex); });
+
+    menu.addSeparator();
+    menu.addItem (tempoLaneShown ? "Hide Tempo Lane" : "Show Tempo Lane", [this] { setTempoLaneShown (! tempoLaneShown); });
 }
 
 void ArrangementView::showSnapMenu()
@@ -409,11 +477,15 @@ void ArrangementView::resized()
     auto top = r.removeFromTop (size::rulerHeight);
     ruler->setBounds (top);
 
-    // Controls in the ruler's header part: "TRACKS" | snap | zoom.
+    if (tempoLaneShown)
+        tempoLane->setBounds (r.removeFromTop (tempoLaneHeight));
+
+    // Controls in the ruler's header part: "TRACKS" | snap | automation | tempo lane | zoom.
     snapButton.setBounds (66, top.getY() + 4, 78, top.getHeight() - 9);
     automationButton.setBounds (150, top.getY() + 4, 28, top.getHeight() - 9);
-    zoomIconArea = { 184, top.getY() + 8, 14, 14 };
-    zoomSlider.setBounds (200, top.getY() + 4, headerWidth - 200 - 10, top.getHeight() - 9);
+    tempoLaneButton.setBounds (182, top.getY() + 4, 28, top.getHeight() - 9);
+    zoomIconArea = { 216, top.getY() + 8, 14, 14 };
+    zoomSlider.setBounds (232, top.getY() + 4, headerWidth - 232 - 10, top.getHeight() - 9);
 
     timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
     viewport.setBounds (r);
@@ -422,9 +494,9 @@ void ArrangementView::resized()
     if (! zoomInitialised && getLaneWidth() > 100)
     {
         zoomInitialised = true;
-        geometry.beatsPerBar = engine.beatsPerBar();
+        geometry.tempo = engine.getTempoMap();
         geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
-                                               getLaneWidth() / (16.0 * geometry.beatsPerBar));
+                                               getLaneWidth() / geometry.tempo.barToBeat (16));
         startPixelsPerBeat = geometry.pixelsPerBeat;
     }
 
@@ -581,7 +653,7 @@ void ArrangementView::startRenaming (RegionId id)
     const double visibleEnd = geometry.scrollBeats + getVisibleBeats();
 
     if (region->startBeat < geometry.scrollBeats || region->startBeat > visibleEnd - 1.0)
-        scrollToBeat (region->startBeat - geometry.beatsPerBar);
+        scrollToBeat (region->startBeat - geometry.tempo.beatsPerBarAt (region->startBeat));
 
     scrollRowIntoView (row);
 

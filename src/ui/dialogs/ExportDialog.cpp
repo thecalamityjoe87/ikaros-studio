@@ -46,8 +46,9 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
 
     // What to export.
     const auto transport = engine.getTransportState();
-    const auto barsFrom = juce::roundToInt (transport.loopStartBeats / engine.beatsPerBar()) + 1;
-    const auto barsTo = juce::jmax (barsFrom, juce::roundToInt (transport.loopEndBeats / engine.beatsPerBar()));
+    const auto tempo = engine.getTempoMap();   // bars can differ in length
+    const auto barsFrom = tempo.nearestBar (transport.loopStartBeats) + 1;
+    const auto barsTo = juce::jmax (barsFrom, tempo.nearestBar (transport.loopEndBeats));
     rangeBox.addItem ("The whole song", 1);
     rangeBox.addItem ("Just the cycle range (bars " + juce::String (barsFrom) + " to " + juce::String (barsTo) + ")", 2);
     rangeBox.setItemEnabled (2, exporter.hasCycleRange());

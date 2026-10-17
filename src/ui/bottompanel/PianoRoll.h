@@ -45,7 +45,7 @@ public:
     explicit PianoRoll (AudioEngine&);
     ~PianoRoll() override;
 
-    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, double beatsPerBar);
+    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, const TempoMap&);
     void setPlayheadBeat (double editBeat);
 
     /** Where notes snap to when they're drawn, moved or resized (see RegionInspector). */
@@ -82,7 +82,7 @@ private:
     AudioEngine& engine;
     std::optional<RegionInfo> region;
     juce::Colour colour;
-    double beatsPerBar = 4.0;
+    TempoMap tempo;   // the song's bars (they can differ in length)
     double playheadBeat = -1.0;     // relative to the region start; <0 = hidden
 
     // View. Rows count down from the top note (127): row r shows pitch 127 - r.

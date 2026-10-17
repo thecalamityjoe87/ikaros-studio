@@ -18,11 +18,14 @@ inline constexpr int dropZoneMargin = 12;
 inline constexpr int regionTop = 5;           // a region's gap from the top of its lane...
 inline constexpr int regionGap = 11;          // ...and the total gap above and below it
 
+inline constexpr int tempoLaneHeight = 44;     // the tempo lane under the ruler, when it shows
+
 // Zoomed far out, drawing every bar would be a solid smear. This finds a
-// bar step (1, 2, 4, 8...) that keeps things at least minPixels apart.
+// bar step (1, 2, 4, 8...) that keeps things at least minPixels apart, going
+// by the song's shortest bar.
 inline int barStride (const ArrangementView::Geometry& geo, double minPixels)
 {
-    const double barWidth = geo.pixelsPerBeat * geo.beatsPerBar;
+    const double barWidth = geo.pixelsPerBeat * geo.tempo.shortestBar();
     int stride = 1;
 
     while (barWidth * stride < minPixels && stride < 4096)
@@ -35,11 +38,10 @@ inline int barStride (const ArrangementView::Geometry& geo, double minPixels)
 template <typename Fn>
 void forEachVisibleBar (const ArrangementView::Geometry& geo, int width, int stride, Fn&& fn)
 {
-    const int firstBar = juce::jmax (0, (int) std::floor (geo.scrollBeats / geo.beatsPerBar));
-    const int lastBar = (int) std::ceil (geo.xToBeat ((float) width) / geo.beatsPerBar);
-
-    for (int bar = firstBar - firstBar % stride; bar <= lastBar; bar += stride)
-        fn (bar, juce::roundToInt (geo.beatToX (bar * geo.beatsPerBar)));
+    geo.tempo.forEachBar (geo.scrollBeats, geo.xToBeat ((float) width), stride, [&] (int bar, double beat)
+    {
+        fn (bar, juce::roundToInt (geo.beatToX (beat)));
+    });
 }
 
 } // namespace ikaros::arrangement

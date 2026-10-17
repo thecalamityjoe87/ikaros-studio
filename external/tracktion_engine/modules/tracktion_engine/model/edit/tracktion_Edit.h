@@ -727,6 +727,10 @@ public:
     /** Returns the number of beats of the count in. */
     int getNumCountInBeats() const;
 
+    /** Returns the number of beats of the count in for a recording that starts
+        at the given time: a bar is as long as the time signature there says. */
+    int getNumCountInBeats (TimePosition recordStart) const;
+
     //==============================================================================
     /** Sends a 'sourceMediaChanged' call to all the clips. */
     void sendSourceFileUpdate();

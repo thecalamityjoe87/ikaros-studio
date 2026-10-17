@@ -747,8 +747,9 @@ void BottomPanel::refreshEditor()
     const auto trackColour = track.has_value() ? track->colour : colour::accent;
 
     // Only one of them has the region, so the other forgets its drag and view.
-    pianoRoll.setRegion (audio ? std::nullopt : region, trackColour, engine.beatsPerBar());
-    audioEditor.setRegion (audio ? region : std::nullopt, trackColour, engine.beatsPerBar());
+    const auto tempo = engine.getTempoMap();
+    pianoRoll.setRegion (audio ? std::nullopt : region, trackColour, tempo);
+    audioEditor.setRegion (audio ? region : std::nullopt, trackColour, tempo);
     regionInspector.setRegion (region, trackColour);
     editorRegion = region;
 

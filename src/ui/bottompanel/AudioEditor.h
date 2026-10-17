@@ -42,7 +42,7 @@ public:
     explicit AudioEditor (AudioEngine&);
     ~AudioEditor() override;
 
-    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, double beatsPerBar);
+    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, const TempoMap&);
     void setPlayheadBeat (double editBeat);
 
     /** Where the region's edges snap to when they're dragged (see RegionInspector). */
@@ -76,7 +76,7 @@ private:
     AudioEngine& engine;
     std::optional<RegionInfo> region;
     juce::Colour colour;
-    double beatsPerBar = 4.0;
+    TempoMap tempo;   // the song's bars (they can differ in length)
     double playheadBeat = -1.0;     // on the timeline; <0 = hidden
 
     // View: beats are measured from the region's start (see the class comment).

@@ -2526,11 +2526,16 @@ Edit::CountIn Edit::getCountInMode() const
 
 int Edit::getNumCountInBeats() const
 {
+    return getNumCountInBeats (TimePosition());
+}
+
+int Edit::getNumCountInBeats (TimePosition recordStart) const
+{
     switch (getCountInMode())
     {
         case CountIn::none:       return 0;
-        case CountIn::oneBar:     return tempoSequence.getTimeSig(0)->numerator;
-        case CountIn::twoBar:     return tempoSequence.getTimeSig(0)->numerator * 2;
+        case CountIn::oneBar:     return tempoSequence.getTimeSigAt (recordStart).numerator;
+        case CountIn::twoBar:     return tempoSequence.getTimeSigAt (recordStart).numerator * 2;
         case CountIn::oneBeat:    return 1;
         case CountIn::twoBeat:    return 2;
         default:                  jassertfalse; break;

@@ -43,7 +43,7 @@ AudioEditor::AudioEditor (AudioEngine& e) : engine (e)
     timeScroll.addListener (this);
     addAndMakeVisible (timeScroll);
 
-    setRegion (std::nullopt, colour::accent, 4.0);
+    setRegion (std::nullopt, colour::accent, TempoMap());
 }
 
 AudioEditor::~AudioEditor()
@@ -52,7 +52,7 @@ AudioEditor::~AudioEditor()
 }
 
 //==============================================================================
-void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, double bpb)
+void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, const TempoMap& t)
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
@@ -74,7 +74,7 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, double
 
     region = std::move (r);
     colour = c;
-    beatsPerBar = bpb;
+    tempo = t;
 
     const bool editable = hasRegion();
 
@@ -141,6 +141,7 @@ juce::Range<double> AudioEditor::viewLimits() const
     // repeats forever: show one more loop either side. Otherwise show the
     // whole recording, so the edges can be dragged out to anywhere in it.
     const double length = region->lengthBeats;
+    const double beatsPerBar = tempo.beatsPerBarAt (region->startBeat);
     double before = beatsPerBar, after = length + beatsPerBar;
 
     if (region->isLooped())
@@ -164,8 +165,7 @@ juce::Range<double> AudioEditor::viewLimits() const
 // Grid
 double AudioEditor::snapToGrid (double editBeat) const
 {
-    const double g = gridBeats (grid, beatsPerBar);
-    return g > 0.0 ? std::round (editBeat / g) * g : editBeat;
+    return snapToEditorGrid (grid, tempo, editBeat);
 }
 
 //==============================================================================
@@ -506,24 +506,25 @@ void AudioEditor::paintRuler (juce::Graphics& g)
     }
 
     // Bars: numbered (only every few, when they're close together).
-    const double barPixels = beatsPerBar * pixelsPerBeat;
+    // Bars can differ in length: the tempo map knows where each one starts.
+    const double barPixels = tempo.shortestBar() * pixelsPerBeat;
     const int labelEvery = juce::jmax (1, (int) std::ceil (36.0 / barPixels));
     g.setFont (fonts::mono (11.0f));
 
-    for (double bar = std::floor (first / beatsPerBar); bar * beatsPerBar <= last; bar += 1.0)
+    tempo.forEachBar (first, last, 1, [&] (int bar, double barBeat)
     {
-        const float x = beatToX (bar * beatsPerBar - start);
-        const auto number = (int) bar + 1;
+        const float x = beatToX (barBeat - start);
+        const auto number = bar + 1;
 
         if (number % labelEvery != 0 && labelEvery > 1)
-            continue;
+            return;
 
         g.setColour (colour::textSecondary.withAlpha (0.6f));
         g.fillRect (x, area.getY() + 4.0f, 1.0f, area.getHeight() - 4.0f);
         g.setColour (colour::textSecondary);
         g.drawText (juce::String (number), juce::Rectangle<float> (x + 4.0f, area.getY(), 40.0f, area.getHeight()),
                     juce::Justification::centredLeft);
-    }
+    });
 
     if (playheadBeat >= 0.0)
     {
@@ -558,7 +559,15 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
     };
 
     drawLines (1.0, 0.04f);
-    drawLines (beatsPerBar, 0.1f);
+
+    if (tempo.shortestBar() * pixelsPerBeat >= 6.0)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.1f));
+        tempo.forEachBar (start + scrollBeats, start + scrollBeats + visibleBeats(), 1, [&] (int, double barBeat)
+        {
+            g.fillRect (beatToX (barBeat - start), area.getY(), 1.0f, area.getHeight());
+        });
+    }
 
     g.setColour (colour.withAlpha (0.1f));
     g.fillRect (regionArea);

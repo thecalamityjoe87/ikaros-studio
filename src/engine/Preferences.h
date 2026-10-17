@@ -42,6 +42,7 @@ namespace settings
     inline constexpr BoolSetting snapEnabled         { "snapEnabled", true };
     inline constexpr IntSetting  snapGrid            { "snapGrid", Grid::beat };
     inline constexpr BoolSetting followPlayhead      { "followPlayhead", true };
+    inline constexpr BoolSetting tempoLaneShown      { "tempoLaneShown", false };   // the tempo lane under the ruler
     namespace Wheel { enum { scroll, zoomWithModifier }; }
     inline constexpr IntSetting  wheelMode           { "wheelMode", Wheel::zoomWithModifier };
 

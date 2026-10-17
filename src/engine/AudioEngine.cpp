@@ -843,8 +843,8 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
     // Even an untitled session has a working copy: recordings go there.
     loadEdit (te::createEmptyEdit (impl->engine), Impl::createWorkFolder(), {}, {});
 
+    setTimeSignature (settings.numerator, settings.denominator);   // first: the tempo counts its beats
     setBpm (settings.bpm);
-    setTimeSignature (settings.numerator, settings.denominator);
     setKey (settings.keyRoot, settings.minor);
 
     // A limiter on the master (at -1 dB) keeps the mix and exports from
@@ -1857,7 +1857,7 @@ void AudioEngine::setLooping (bool shouldLoop)
     // If there's no loop range yet, loop the first four bars so the button
     // always does something visible.
     if (shouldLoop && transport.getLoopRange().isEmpty())
-        setLoopRangeBeats (0.0, beatsPerBar() * 4.0);
+        setLoopRangeBeats (0.0, getTempoMap().barToBeat (4));
 
     transport.looping = shouldLoop;
 }
@@ -1902,6 +1902,14 @@ void AudioEngine::setCountInBars (int bars)
 int AudioEngine::getCountInBars() const
 {
     return juce::jlimit (0, 2, preferences->get (settings::countIn));
+}
+
+int AudioEngine::getCountInBeatsAt (double beat) const
+{
+    // The overload taking a time comes from external/patches/tracktion-count-in-time-signature.patch:
+    // Tracktion itself only looked at the song's first time signature.
+    auto& ts = impl->edit->tempoSequence;
+    return impl->edit->getNumCountInBeats (ts.toTime (te::BeatPosition::fromBeats (beat)));
 }
 
 // Tracktion keeps its own count-in setting (in its settings file); ours is
@@ -1951,25 +1959,304 @@ void AudioEngine::preferenceChanged (const juce::String& key)
         plugins->preferencesChanged();
 }
 
-void AudioEngine::setBpm (double bpm)
+//==============================================================================
+// Tempo and time signatures
+namespace
 {
-    // CachedValue / ValueTree writes inside Tracktion record undo automatically.
-    beginUndoStep ("Tempo");
+    // The app's BPM counts the beats the metronome clicks: one per count of
+    // the time signature (a quarter note in 4/4, an eighth in 6/8). That's
+    // also how Tracktion counts beats, but its BPM always counts quarter
+    // notes. They're the same for x/4 signatures; for x/8 ones the app's
+    // number is twice Tracktion's.
+    constexpr double minBpm = 20.0, maxBpm = 300.0;   // also Tracktion's limits
 
-    // Tracktion moves automation points so they stay on the same beat, except
-    // on missing plug-ins; the automation editor looks after those.
+    double toTracktionBpm (double bpm, int denominator)
+    {
+        return juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM,
+                             juce::jlimit (minBpm, maxBpm, bpm) * 4.0 / denominator);
+    }
+
+    // Tracktion's tempo curve: 1 means "jump straight to the next tempo" (a
+    // step), anything else ramps towards it.
+    constexpr float stepCurve = 1.0f;
+
+    // A beat lasts 60 / BPM seconds in the app's terms, so when a time
+    // signature change makes Tracktion's quarter-note BPM differ either side
+    // of it, there has to be a Tracktion tempo change there too, even if the
+    // user never made one. Those are marked with this property, and the
+    // tempo map leaves them out.
+    const juce::Identifier keepsBeatLengthId ("ikarosKeepsBeatLength");
+
+    TempoMap makeTempoMap (te::TempoSequence& ts)
+    {
+        std::vector<TempoChange> tempos;
+        std::vector<TimeSignatureChange> sigs;
+
+        for (auto* t : ts.getTempos())
+        {
+            const auto denominator = ts.getTimeSigAt (t->startBeatNumber.get()).denominator.get();
+
+            if (tempos.empty() || ! t->state.getProperty (keepsBeatLengthId))
+                tempos.push_back ({ t->startBeatNumber.get().inBeats(), t->getBpm() * denominator / 4.0 });
+        }
+
+        for (auto* sig : ts.getTimeSigs())
+            sigs.push_back ({ sig->startBeatNumber.get().inBeats(), 0, sig->numerator.get(), sig->denominator.get() });
+
+        return { std::move (tempos), std::move (sigs) };
+    }
+
+    // Makes the tempo sequence's `type` children (TEMPO or TIMESIG) match
+    // `count` entries: the existing trees are reused in order, extras removed
+    // from the end and missing ones appended, then set (tree, i) fills each
+    // in. Every step is a ValueTree change through the undo manager (and
+    // setting a property to the value it already has records nothing), so
+    // the whole rewrite undoes in one go. Tracktion's TempoSetting and
+    // TimeSigSetting objects follow their trees by themselves: they're
+    // ValueTreeObjectLists, which listen for children being added and removed.
+    template <typename SetFn>
+    void rewriteChildren (juce::ValueTree parent, const juce::Identifier& type, size_t count,
+                          juce::UndoManager* um, SetFn&& set)
+    {
+        std::vector<juce::ValueTree> trees;
+
+        for (auto child : parent)
+            if (child.hasType (type))
+                trees.push_back (child);
+
+        while (trees.size() > juce::jmax ((size_t) 1, count))
+        {
+            parent.removeChild (trees.back(), um);
+            trees.pop_back();
+        }
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (i == trees.size())
+            {
+                trees.emplace_back (type);
+                parent.appendChild (trees.back(), um);
+            }
+
+            set (trees[i], i);
+        }
+    }
+
+    // Writes a whole tempo map into the edit: time signatures by bar number
+    // (working out their beats one after another, so later ones keep their
+    // bar numbers when an earlier one gets longer or shorter bars), then the
+    // tempo changes, plus the hidden ones that keep a beat's length the same
+    // where the time signature's denominator changes.
+    void writeTempoSequence (te::Edit& edit, const std::vector<TempoChange>& tempos, std::vector<TimeSignatureChange> sigs)
+    {
+        // The tempo sequence's own tree, which holds its TEMPO and TIMESIG children.
+        auto sequence = edit.state.getChildWithName (te::IDs::TEMPOSEQUENCE);
+        auto* um = &edit.getUndoManager();
+
+        std::vector<TimeSignatureChange> placed;
+
+        for (size_t i = 0; i < sigs.size(); ++i)
+        {
+            sigs[i].numerator = juce::jlimit (1, 16, sigs[i].numerator);
+            const double beat = i == 0 ? 0.0 : placed.back().beat + (sigs[i].bar - placed.back().bar) * (double) placed.back().numerator;
+            placed.push_back ({ beat, sigs[i].bar, sigs[i].numerator, sigs[i].denominator });
+        }
+
+        rewriteChildren (sequence, te::IDs::TIMESIG, placed.size(), um, [&] (juce::ValueTree& tree, size_t i)
+        {
+            tree.setProperty (te::IDs::startBeat, placed[i].beat, um);
+            tree.setProperty (te::IDs::numerator, placed[i].numerator, um);
+            tree.setProperty (te::IDs::denominator, placed[i].denominator, um);
+        });
+
+        // Lookups in the new layout (TempoMap does the "which one is in
+        // effect here" searches).
+        const TempoMap layout (tempos, placed);
+
+        struct Entry { double beat, bpm; bool hidden; };
+        std::vector<Entry> entries;
+
+        for (auto& t : layout.getTempoChanges())
+            entries.push_back ({ t.beat, t.bpm, false });
+
+        for (size_t i = 1; i < placed.size(); ++i)
+        {
+            const double beat = placed[i].beat;
+            const bool tempoThere = std::abs (layout.tempoAt (beat).beat - beat) < 1.0e-6;
+
+            if (placed[i].denominator != placed[i - 1].denominator && ! tempoThere)
+                entries.push_back ({ beat, layout.tempoAt (beat).bpm, true });
+        }
+
+        std::stable_sort (entries.begin(), entries.end(), [] (const Entry& a, const Entry& b) { return a.beat < b.beat; });
+
+        rewriteChildren (sequence, te::IDs::TEMPO, entries.size(), um, [&] (juce::ValueTree& tree, size_t i)
+        {
+            const auto& e = entries[i];
+            tree.setProperty (te::IDs::startBeat, e.beat, um);
+            tree.setProperty (te::IDs::bpm, toTracktionBpm (e.bpm, layout.signatureAt (e.beat).denominator), um);
+            tree.setProperty (te::IDs::curve, stepCurve, um);
+
+            if (e.hidden)
+                tree.setProperty (keepsBeatLengthId, true, um);
+            else
+                tree.removeProperty (keepsBeatLengthId, um);
+        });
+    }
+}
+
+void AudioEngine::changeTempoMap (const std::vector<TempoChange>& tempos, const std::vector<TimeSignatureChange>& sigs)
+{
+    auto& edit = *impl->edit;
+
+    // A tempo change moves every later beat in time. Tracktion's remapper
+    // notes where (in beats) every region, loop range and automation point
+    // is, then puts them back on those beats after the change. Regions of
+    // loops and auto-tempo audio are stretched to fit, so they follow the
+    // new tempo; recordings just move (they keep their length in seconds).
+    //
+    // Curves on missing plug-ins have no parameters for the remapper to
+    // see; the automation editor keeps those on their beats.
     trackController->automation().keepUnloadedCurvesOnBeats ([&]
     {
-        impl->edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (20.0, 300.0, bpm));
+        te::EditTimecodeRemapperSnapshot snapshot;
+        snapshot.savePreChangeState (edit);
+        writeTempoSequence (edit, tempos, sigs);
+        snapshot.remapEdit (edit);   // brings Tracktion's tempo data up to date first
     });
+}
+
+TempoMap AudioEngine::getTempoMap() const
+{
+    return impl->edit != nullptr ? makeTempoMap (impl->edit->tempoSequence) : TempoMap();
+}
+
+void AudioEngine::setBpm (double bpm)
+{
+    const auto map = getTempoMap();
+    auto tempos = map.getTempoChanges();
+    tempos[(size_t) map.indexOfTempoAt (getTransportState().positionBeats)].bpm = juce::jlimit (minBpm, maxBpm, bpm);
+
+    // ValueTree writes inside Tracktion record undo automatically.
+    beginUndoStep ("Tempo");
+    changeTempoMap (tempos, map.getTimeSignatureChanges());
+}
+
+void AudioEngine::addTempoChange (int bar, double bpm)
+{
+    const auto map = getTempoMap();
+    const double beat = map.barToBeat (juce::jmax (0, bar));
+    auto tempos = map.getTempoChanges();
+    const int existing = map.indexOfTempoAt (beat);
+
+    if (std::abs (tempos[(size_t) existing].beat - beat) < 1.0e-6)
+    {
+        // Already a change on this bar: it gets the new tempo instead.
+        beginUndoStep ("Tempo");
+        tempos[(size_t) existing].bpm = juce::jlimit (minBpm, maxBpm, bpm);
+    }
+    else
+    {
+        beginUndoStep ("Add Tempo Change");
+        tempos.insert (tempos.begin() + existing + 1, { beat, juce::jlimit (minBpm, maxBpm, bpm) });
+    }
+
+    changeTempoMap (tempos, map.getTimeSignatureChanges());
+}
+
+bool AudioEngine::setTempoChange (int index, double beat, double bpm)
+{
+    const auto map = getTempoMap();
+    auto tempos = map.getTempoChanges();
+
+    if (index < 0 || index >= (int) tempos.size())
+        return false;
+
+    if (index == 0)
+    {
+        beat = 0.0;
+    }
+    else
+    {
+        const double prev = tempos[(size_t) index - 1].beat;
+        const double next = index + 1 < (int) tempos.size() ? tempos[(size_t) index + 1].beat : std::numeric_limits<double>::max();
+
+        if (beat <= prev + 1.0e-6 || beat >= next - 1.0e-6)
+            return false;
+    }
+
+    tempos[(size_t) index] = { beat, juce::jlimit (minBpm, maxBpm, bpm) };
+    changeTempoMap (tempos, map.getTimeSignatureChanges());
+    return true;
+}
+
+void AudioEngine::removeTempoChange (int index)
+{
+    const auto map = getTempoMap();
+    auto tempos = map.getTempoChanges();
+
+    if (index <= 0 || index >= (int) tempos.size())
+        return;
+
+    beginUndoStep ("Delete Tempo Change");
+    tempos.erase (tempos.begin() + index);
+    changeTempoMap (tempos, map.getTimeSignatureChanges());
 }
 
 void AudioEngine::setTimeSignature (int numerator, int denominator)
 {
+    setTimeSignatureChange (getTempoMap().indexOfSignatureAt (getTransportState().positionBeats), numerator, denominator);
+}
+
+void AudioEngine::addTimeSignatureChange (int bar, int numerator, int denominator)
+{
+    const auto map = getTempoMap();
+    auto sigs = map.getTimeSignatureChanges();
+    bar = juce::jmax (0, bar);
+
+    auto at = std::find_if (sigs.begin(), sigs.end(), [bar] (const TimeSignatureChange& s) { return s.bar >= bar; });
+
+    if (at != sigs.end() && at->bar == bar)
+    {
+        setTimeSignatureChange ((int) std::distance (sigs.begin(), at), numerator, denominator);
+        return;
+    }
+
+    beginUndoStep ("Add Time Signature Change");
+    sigs.insert (at, { 0.0, bar, numerator, denominator });   // the beat is worked out from the bar
+    changeTempoMap (map.getTempoChanges(), sigs);
+}
+
+void AudioEngine::setTimeSignatureChange (int index, int numerator, int denominator)
+{
+    const auto map = getTempoMap();
+    auto sigs = map.getTimeSignatureChanges();
+
+    if (index < 0 || index >= (int) sigs.size())
+        return;
+
+    auto& sig = sigs[(size_t) index];
+
+    if (sig.numerator == numerator && sig.denominator == denominator)
+        return;
+
     beginUndoStep ("Time Signature");
-    auto* sig = impl->edit->tempoSequence.getTimeSig (0);
-    sig->numerator = juce::jlimit (1, 16, numerator);
-    sig->denominator = denominator;
+    sig.numerator = numerator;
+    sig.denominator = denominator;
+    changeTempoMap (map.getTempoChanges(), sigs);
+}
+
+void AudioEngine::removeTimeSignatureChange (int index)
+{
+    const auto map = getTempoMap();
+    auto sigs = map.getTimeSignatureChanges();
+
+    if (index <= 0 || index >= (int) sigs.size())
+        return;
+
+    beginUndoStep ("Delete Time Signature Change");
+    sigs.erase (sigs.begin() + index);
+    changeTempoMap (map.getTempoChanges(), sigs);
 }
 
 void AudioEngine::setKey (int root, bool minor)
@@ -1983,13 +2270,6 @@ void AudioEngine::setKey (int root, bool minor)
         // Loops already in the arrangement move to the new key, in the same undo step.
         detail::followSessionKey (*impl->edit);
     }
-}
-
-double AudioEngine::beatsPerBar() const
-{
-    // Beats are quarter notes throughout the app. 6/8 = 3 quarter notes per bar.
-    auto* sig = impl->edit->tempoSequence.getTimeSig (0);
-    return sig->numerator.get() * 4.0 / sig->denominator.get();
 }
 
 TransportState AudioEngine::getTransportState() const
@@ -2018,9 +2298,12 @@ TransportState AudioEngine::getTransportState() const
     s.bar = barsBeats.bars + 1;
     s.beat = barsBeats.getWholeBeats() + 1;
 
-    s.bpm = ts.getTempo (0)->getBpm();
-    s.timeSigNumerator = ts.getTimeSig (0)->numerator.get();
-    s.timeSigDenominator = ts.getTimeSig (0)->denominator.get();
+    // What the LCD shows: the tempo and time signature at the playhead
+    // (the tempo in the app's terms, see toTracktionBpm).
+    auto& sig = ts.getTimeSigAt (pos);
+    s.timeSigNumerator = sig.numerator.get();
+    s.timeSigDenominator = sig.denominator.get();
+    s.bpm = ts.getTempoAt (pos).getBpm() * s.timeSigDenominator / 4.0;
 
     if (auto* pitch = edit.pitchSequence.getPitch (0))
     {

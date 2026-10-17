@@ -1,0 +1,52 @@
+diff --git a/modules/tracktion_engine/model/edit/tracktion_Edit.cpp b/modules/tracktion_engine/model/edit/tracktion_Edit.cpp
+index c67b9ef5247..44f7c4d8655 100644
+--- a/modules/tracktion_engine/model/edit/tracktion_Edit.cpp
++++ b/modules/tracktion_engine/model/edit/tracktion_Edit.cpp
+@@ -2525,12 +2525,17 @@ Edit::CountIn Edit::getCountInMode() const
+ }
+ 
+ int Edit::getNumCountInBeats() const
++{
++    return getNumCountInBeats (TimePosition());
++}
++
++int Edit::getNumCountInBeats (TimePosition recordStart) const
+ {
+     switch (getCountInMode())
+     {
+         case CountIn::none:       return 0;
+-        case CountIn::oneBar:     return tempoSequence.getTimeSig(0)->numerator;
+-        case CountIn::twoBar:     return tempoSequence.getTimeSig(0)->numerator * 2;
++        case CountIn::oneBar:     return tempoSequence.getTimeSigAt (recordStart).numerator;
++        case CountIn::twoBar:     return tempoSequence.getTimeSigAt (recordStart).numerator * 2;
+         case CountIn::oneBeat:    return 1;
+         case CountIn::twoBeat:    return 2;
+         default:                  jassertfalse; break;
+diff --git a/modules/tracktion_engine/model/edit/tracktion_Edit.h b/modules/tracktion_engine/model/edit/tracktion_Edit.h
+index e075cbda38d..4e54595a702 100644
+--- a/modules/tracktion_engine/model/edit/tracktion_Edit.h
++++ b/modules/tracktion_engine/model/edit/tracktion_Edit.h
+@@ -727,6 +727,10 @@ public:
+     /** Returns the number of beats of the count in. */
+     int getNumCountInBeats() const;
+ 
++    /** Returns the number of beats of the count in for a recording that starts
++        at the given time: a bar is as long as the time signature there says. */
++    int getNumCountInBeats (TimePosition recordStart) const;
++
+     //==============================================================================
+     /** Sends a 'sourceMediaChanged' call to all the clips. */
+     void sendSourceFileUpdate();
+diff --git a/modules/tracktion_engine/playback/tracktion_TransportControl.cpp b/modules/tracktion_engine/playback/tracktion_TransportControl.cpp
+index 879e3a6cb7c..2f6481d2fe8 100644
+--- a/modules/tracktion_engine/playback/tracktion_TransportControl.cpp
++++ b/modules/tracktion_engine/playback/tracktion_TransportControl.cpp
+@@ -1506,7 +1506,7 @@ std::optional<std::pair<SyncPoint, std::optional<TimeRange>>> TransportControl::
+                 }
+ 
+                 auto prerollStart = transportState->startTime.get();
+-                double numCountInBeats = edit.getNumCountInBeats();
++                double numCountInBeats = edit.getNumCountInBeats (transportState->startTime.get());
+                 const auto& ts = edit.tempoSequence;
+ 
+                 if (numCountInBeats > 0)

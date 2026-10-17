@@ -45,7 +45,7 @@ PianoRoll::PianoRoll (AudioEngine& e) : engine (e)
         addAndMakeVisible (bar);
     }
 
-    setRegion (std::nullopt, colour::accent, 4.0);
+    setRegion (std::nullopt, colour::accent, TempoMap());
 }
 
 PianoRoll::~PianoRoll()
@@ -56,7 +56,7 @@ PianoRoll::~PianoRoll()
 }
 
 //==============================================================================
-void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, double bpb)
+void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, const TempoMap& t)
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
@@ -86,7 +86,7 @@ void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, double b
 
     region = std::move (r);
     colour = c;
-    beatsPerBar = bpb;
+    tempo = t;
 
     const bool editable = region.has_value() && region->isMidi;
 
@@ -166,7 +166,9 @@ juce::Rectangle<float> PianoRoll::noteBounds (const NoteInfo& n) const
 double PianoRoll::gridBeats() const
 {
     // ikaros:: picks EditorGrid.h's gridBeats rather than this member function.
-    return ikaros::gridBeats (grid, beatsPerBar);
+    // As a step (a new note's length, say), a bar is as long as the one the
+    // region starts in.
+    return ikaros::gridBeats (grid, tempo.beatsPerBarAt (region.has_value() ? contentStartBeat() : 0.0));
 }
 
 void PianoRoll::setGrid (EditorGrid newGrid)
@@ -182,16 +184,13 @@ void PianoRoll::setGrid (EditorGrid newGrid)
 
 double PianoRoll::snapToGrid (double beat, bool roundDown) const
 {
-    const double g = gridBeats();
-
-    if (g <= 0.0 || ! region.has_value())
+    if (gridBeats() <= 0.0 || ! region.has_value())
         return beat;
 
     // Snap on the song's timeline, so notes line up with the arrangement's
     // bars even when the region doesn't start on a bar.
     const double absolute = contentStartBeat() + beat;
-    const double snapped = (roundDown ? std::floor (absolute / g + 1.0e-9) : std::round (absolute / g)) * g;
-    return snapped - contentStartBeat();
+    return snapToEditorGrid (grid, tempo, absolute, roundDown) - contentStartBeat();
 }
 
 //==============================================================================

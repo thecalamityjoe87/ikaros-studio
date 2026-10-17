@@ -214,9 +214,12 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
     if (track == nullptr || isAudioTrack (*track))
         return 0;   // MIDI regions only go on instrument tracks
 
-    const double bpb = owner.beatsPerBar();
-    const double start = std::floor (juce::jmax (0.0, startBeat) / bpb) * bpb;
-    double length = bpb * 4.0;
+    // Four bars from the start of the bar the beat is in. Bars can differ in
+    // length (time-signature changes), so the tempo map works them out.
+    const auto tempoMap = owner.getTempoMap();
+    const int firstBar = tempoMap.barAt (juce::jmax (0.0, startBeat));
+    const double start = tempoMap.barToBeat (firstBar);
+    double length = tempoMap.barToBeat (firstBar + 4) - start;
 
     // Don't stack regions on top of each other: shorten the new one to end at
     // the next region, and give up if there's less than a bar of space.
@@ -232,7 +235,7 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
             length = juce::jmin (length, cs - start);
     }
 
-    if (length < bpb)
+    if (length < tempoMap.barToBeat (firstBar + 1) - start - 1.0e-6)
         return 0;
 
     owner.beginUndoStep ("Add Region");
@@ -258,12 +261,11 @@ RegionId RegionEditor::createChordRegion (TrackId id, double startBeat)
 
     auto& seq = clip->getSequence();
     auto* um = &edit->getUndoManager();
-    const int numBars = (int) std::round (length / bpb);
-
-    for (int bar = 0; bar < numBars; ++bar)
+    for (int bar = 0; tempoMap.barToBeat (firstBar + bar + 1) - start <= length + 1.0e-6; ++bar)
     {
         auto& chord = progression[(size_t) bar % progression.size()];
-        const double barStart = bar * bpb;
+        const double barStart = tempoMap.barToBeat (firstBar + bar) - start;   // in the region
+        const double bpb = tempoMap.barToBeat (firstBar + bar + 1) - start - barStart;
         const double half = bpb / 2.0;
 
         seq.addNote (chord.bass, te::BeatPosition::fromBeats (barStart),

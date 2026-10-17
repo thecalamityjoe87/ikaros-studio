@@ -74,6 +74,25 @@ foreach(patch IN LISTS IKAROS_JUCE_PATCHES)
     endif()
 endforeach()
 
+# The same for Tracktion Engine's own fixes.
+file(GLOB IKAROS_TRACKTION_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/tracktion-*.patch")
+
+foreach(patch IN LISTS IKAROS_TRACKTION_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${TE_DIR}"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${TE_DIR}"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to Tracktion Engine")
+        endif()
+    endif()
+endforeach()
+
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
@@ -279,6 +298,7 @@ set(IKAROS_UI_SOURCES
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
+    src/ui/arrangement/ArrangementTempoLane.h   src/ui/arrangement/ArrangementTempoLane.cpp
     src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
     src/ui/arrangement/ArrangementAutomation.h src/ui/arrangement/ArrangementAutomation.cpp
     src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
@@ -489,7 +509,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -515,6 +535,8 @@ if(IKAROS_BUILD_TESTS)
     # the pretend audio interface.
     add_test(NAME EngineSmokeTest.Effects COMMAND IkarosEngineSmokeTest --only=effects)
     set_tests_properties(EngineSmokeTest.Effects PROPERTIES LABELS "effects")
+    add_test(NAME EngineSmokeTest.Tempo COMMAND IkarosEngineSmokeTest --only=tempo)
+    set_tests_properties(EngineSmokeTest.Tempo PROPERTIES LABELS "tempo")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
