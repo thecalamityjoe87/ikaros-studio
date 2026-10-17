@@ -13,6 +13,8 @@
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
+#include "engine/FlexHelpers.h"                   // ...and their warp markers
+#include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
 #include "platform/AppFolders.h"
 #include "engine/SongExporter.h"
 #include "ui/state/Selection.h"                    // plain logic, no components
@@ -2659,6 +2661,378 @@ static void runStretchSection (const juce::File& dir)
               << soundTouchRender << " s with SoundTouch; playing them takes " << rubberBandPlay << "% / "
               << soundTouchPlay << "% of a core, Debug build)\n";
     check (rubberBandRender < 30.0, "a dozen loops are stretched in good time");
+}
+
+//==============================================================================
+// Flex Time (see engine/FlexEditor.h): dragging the hits in a recording.
+// A click track stands in for a drum recording: its hits are easy to find
+// in an export, so the test can check exactly where they play.
+static void runFlexSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    std::cout << "Flex Time\n";
+
+    AudioEngine engine { testSettings, false };   // the pretend device (export needs no real one)
+    TestAudioDevice device { engine, {} };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& flex = tracks.flex();
+    auto& exporter = engine.getExporter();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);   // a beat every half second
+
+    auto clipOf = [&] (RegionId id) { return dynamic_cast<te::WaveAudioClip*> (detail::findClip (TestAudioDevice::getEditOf (engine), id)); };
+
+    // A click every half second from 0.5 s to 3 s, in a 4 s file. Placed at
+    // beat 4 (2 s), they play on beats 5 to 10.
+    const auto clicksFile = dir.getChildFile ("Clicks.wav");
+    const std::vector<double> clickSeconds { 0.5, 1.0, 1.5, 2.0, 2.5, 3.0 };
+    writeClickWav (clicksFile, 44100.0, 4.0, clickSeconds, 0.5f);
+
+    const auto drums = tracks.addAudioTrack();
+    const auto other = tracks.addAudioTrack();
+    const auto region = regions.importAudioFiles (drums, { clicksFile.getFullPathName() }, 4.0).front();
+    pumpMessages();
+
+    check (! flex.isFlexOn (drums) && ! flex.getFlex (region).on, "Flex is off for a new audio track");
+    check (! clipOf (region)->state.getChildWithName (te::IDs::WARPTIME).isValid(), "a region that's never been flexed has no warp markers");
+
+    checkUndoRoundTrip (engine, "Flex On", [&] { flex.setFlexOn (drums, true); });
+    check (flex.isFlexOn (drums) && flex.getFlex (region).on, "Flex On flexes the track's regions");
+    check (! clipOf (region)->getWarpTime(), "...which play their recording as it is until a hit is moved");
+
+    // The hits are found in the background.
+    auto waitForHits = [&] (RegionId id)
+    {
+        for (int i = 0; i < 400 && flex.getFlex (id).analysing; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+
+        return flex.getFlex (id);
+    };
+
+    auto info = waitForHits (region);
+    bool hitsFound = info.transients.size() == clickSeconds.size();
+
+    for (size_t i = 0; hitsFound && i < clickSeconds.size(); ++i)
+        hitsFound = std::abs (info.transients[i].sourceSeconds - clickSeconds[i]) < 0.003
+                     && std::abs (info.transients[i].beat - (5.0 + (double) i)) < 0.01;
+
+    check (hitsFound, "the hits in the recording are found, where they play");
+
+    if (! hitsFound)
+        for (auto& t : info.transients)
+            std::cout << "         hit at " << t.sourceSeconds << " s, beat " << t.beat << "\n";
+
+    // Exports the song, and checks each hit is where it should be (seconds
+    // on the timeline), within a few ms. Each one is looked for within 80 ms
+    // of its place: where the sound first gets over half as loud as it gets there.
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    int exportNumber = 0;
+
+    auto exportSong = [&]
+    {
+        ExportSettings settings;
+        settings.destination = dir.getChildFile ("Flex Export").getChildFile ("Song " + juce::String (++exportNumber) + ".wav");
+        bool done = false;
+
+        if (exporter.start (settings, [&] (const ExportResult&) { done = true; }).failed())
+            return juce::File();
+
+        for (int i = 0; i < 1200 && ! done; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        return settings.destination;
+    };
+
+    auto worstMs = [&] (const juce::File& f, const std::vector<double>& expected)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+        if (reader == nullptr || expected.empty())
+            return 1.0e6;
+
+        const auto rate = reader->sampleRate;
+        const int window = (int) (0.08 * rate);
+        juce::AudioBuffer<float> audio (1, 2 * window);
+        double worst = 0.0;
+
+        for (auto e : expected)
+        {
+            const auto from = (juce::int64) (e * rate) - window;
+            reader->read (&audio, 0, audio.getNumSamples(), from, true, false);
+            const auto threshold = audio.getMagnitude (0, audio.getNumSamples()) / 2.0f;
+            int onset = 0;
+
+            if (threshold < 0.01f)
+                return 1.0e6;   // silence where a hit should be
+
+            while (onset < audio.getNumSamples() && std::abs (audio.getSample (0, onset)) <= threshold)
+                ++onset;
+
+            worst = std::max (worst, std::abs ((double) (from + onset) / rate - e) * 1000.0);
+        }
+
+        return worst;
+    };
+
+    constexpr double toleranceMs = 5.0;
+    auto hitsAt = [&] (const char* what, const std::vector<double>& beats, double secondsPerBeat)
+    {
+        std::vector<double> expected;
+
+        for (auto b : beats)
+            expected.push_back (b * secondsPerBeat);
+
+        const auto worst = worstMs (exportSong(), expected);
+        std::cout << "  (" << what << ": hits within " << worst << " ms)\n";
+        return worst < toleranceMs;
+    };
+
+    check (hitsAt ("flexed, nothing moved", { 5, 6, 7, 8, 9, 10 }, 0.5), "an untouched Flex region plays its hits where they were");
+
+    // Drag the second hit (1 s into the file, beat 6) a quarter of a beat
+    // later. Its neighbours get markers, so nothing else moves.
+    checkUndoRoundTrip (engine, "Move Flex Marker", [&] { flex.moveMarker (region, info.transients[1].sourceSeconds, 6.25); });
+    info = flex.getFlex (region);
+    // (The hits are found a fraction of a millisecond before they start.)
+    check (info.markers.size() == 5 && std::abs (info.markers[2].beat - 6.25) < 1.0e-6
+             && std::abs (info.markers[1].beat - 5.0) < 0.005 && std::abs (info.markers[3].beat - 7.0) < 0.005,
+           "dragging a hit pins it, and its neighbours stay where they are");
+    check (info.hasEdits && clipOf (region)->getWarpTime(), "the region now plays warped");
+
+    // Straight away: the export waits for the stretched audio.
+    check (hitsAt ("one hit moved", { 5, 6.25, 7, 8, 9, 10 }, 0.5), "the export plays the moved hit where it was dragged, and the others in place");
+
+    flex.moveMarker (region, info.markers[2].sourceSeconds, 100.0);
+    pumpMessages();
+    info = flex.getFlex (region);
+    check (info.markers[2].beat < 7.0 && info.markers[2].beat > 6.25, "a marker can't be dragged past its neighbour");
+    engine.undo();
+    pumpMessages();
+
+    // Removing a marker; Reset Flex.
+    checkUndoRoundTrip (engine, "Remove Flex Marker", [&] { flex.removeMarker (region, info.markers[1].sourceSeconds); });
+    engine.undo();
+    pumpMessages();
+    checkUndoRoundTrip (engine, "Reset Flex", [&] { flex.resetFlex (region); });
+    check (! flex.getFlex (region).hasEdits && ! clipOf (region)->getWarpTime(), "Reset Flex takes every marker away");
+    engine.undo();
+    pumpMessages();
+
+    // Flex Off: the region plays its recording; the markers are kept for
+    // when Flex comes back on.
+    checkUndoRoundTrip (engine, "Flex Off", [&] { flex.setFlexOn (drums, false); });
+    check (! clipOf (region)->getWarpTime() && ! clipOf (region)->state.getParent().getParent().hasProperty (detail::flexProp),
+           "Flex Off plays the recording as it was (and leaves nothing on the track)");
+    engine.undo();
+    pumpMessages();
+    check (clipOf (region)->getWarpTime(), "Flex back on plays the moved hit again");
+
+    //==============================================================================
+    std::cout << "Flex: tempo and time signature\n";
+
+    // The flexed region follows the tempo: every hit stays on its beat.
+    checkUndoRoundTrip (engine, "Tempo", [&] { engine.setBpm (100.0); });
+    info = flex.getFlex (region);
+    check (std::abs (info.markers[2].beat - 6.25) < 1.0e-6 && std::abs (regions.getRegion (region)->lengthBeats - 8.0) < 1.0e-6,
+           "a new tempo keeps the markers (and the region's length) on their beats");
+    check (hitsAt ("at 100 BPM", { 5, 6.25, 7, 8, 9, 10 }, 0.6), "at a new tempo, the flexed hits play on their beats");
+
+    // A plain recording keeps its timing in seconds, as before Flex.
+    const auto plain = regions.importAudioFiles (other, { clicksFile.getFullPathName() }, 20.0).front();
+    pumpMessages();
+    const double plainLength = regions.getRegion (plain)->lengthBeats;
+    engine.setBpm (120.0);
+    pumpMessages();
+    check (std::abs (regions.getRegion (plain)->lengthBeats - plainLength * 1.2) < 1.0e-3, "a region on a track without Flex doesn't follow the tempo");
+    regions.deleteRegion (plain);
+    pumpMessages();
+
+    engine.setTimeSignature (6, 8);
+    pumpMessages();
+    check (hitsAt ("in 6/8", { 5, 6.25, 7, 8, 9, 10 }, 0.5), "a new time signature doesn't move them");
+    engine.setTimeSignature (4, 4);
+    pumpMessages();
+
+    // A tempo change in the middle of the region (bar 3 = beat 8).
+    engine.addTempoChange (2, 60.0);
+    pumpMessages();
+    info = flex.getFlex (region);
+    check (std::abs (info.markers[2].beat - 6.25) < 1.0e-6 && std::abs (info.markers[3].beat - 7.0) < 0.005,
+           "a tempo change inside the region keeps its markers on their beats");
+    engine.undo();
+    pumpMessages();
+
+    checkSaveAndReopen (engine, dir.getChildFile ("Flex"));
+    check (flex.isFlexOn (drums) && std::abs (flex.getFlex (region).markers[2].beat - 6.25) < 1.0e-6,
+           "Flex and its markers are saved with the session");
+    check (hitsAt ("reopened", { 5, 6.25, 7, 8, 9, 10 }, 0.5), "the reopened session plays the flexed hits the same");
+
+    //==============================================================================
+    std::cout << "Flex: editing regions\n";
+
+    // Moving the region takes its hits with it, on their beats, even into
+    // a part of the song at another tempo.
+    auto markerOffsets = [&] (RegionId id)
+    {
+        std::vector<double> offsets;
+        const auto r = regions.getRegion (id);
+
+        for (auto& m : flex.getFlex (id).markers)
+            offsets.push_back (m.beat - r->startBeat);
+
+        return offsets;
+    };
+
+    auto sameOffsets = [] (const std::vector<double>& a, const std::vector<double>& b)
+    {
+        bool same = a.size() == b.size();
+
+        for (size_t i = 0; same && i < a.size(); ++i)
+            same = std::abs (a[i] - b[i]) < 1.0e-6;
+
+        return same;
+    };
+
+    const auto offsets = markerOffsets (region);
+    engine.addTempoChange (8, 90.0);   // from beat 32
+    pumpMessages();
+    checkUndoRoundTrip (engine, "Move Region", [&] { regions.moveRegions ({ { region, drums, 36.0 } }); });
+    check (sameOffsets (markerOffsets (region), offsets) && std::abs (regions.getRegion (region)->lengthBeats - 8.0) < 1.0e-6,
+           "a flexed region moved to another tempo keeps its hits on their beats");
+    {
+        // 120 BPM up to beat 32 (16 s), 90 after.
+        std::vector<double> expected;
+
+        for (double b : { 37.0, 38.25, 39.0, 40.0, 41.0, 42.0 })
+            expected.push_back (16.0 + (b - 32.0) * 60.0 / 90.0);
+
+        const auto worst = worstMs (exportSong(), expected);
+        std::cout << "  (moved to 90 BPM: hits within " << worst << " ms)\n";
+        check (worst < toleranceMs, "...and plays them there");
+    }
+    engine.undo();
+    engine.undo();
+    pumpMessages();
+    engine.undo();   // the tempo change
+    pumpMessages();
+    check (sameOffsets (markerOffsets (region), offsets) && regions.getRegion (region)->startBeat == 4.0, "undo puts it back");
+
+    // Split: both halves keep the markers, and the hits play as before.
+    std::vector<RegionId> right;
+    checkUndoRoundTrip (engine, "Split Region", [&] { right = regions.splitRegions ({ region }, 7.5); });
+    check (right.size() == 1 && flex.getFlex (right.front()).on && flex.getFlex (right.front()).markers.size() == 5,
+           "both halves of a split flexed region keep its markers");
+    check (hitsAt ("split", { 5, 6.25, 7, 8, 9, 10 }, 0.5), "a split flexed region plays its hits where they were");
+    engine.undo();
+    pumpMessages();
+
+    // Trim: the markers stay where they are on the timeline.
+    checkUndoRoundTrip (engine, "Trim Region", [&] { regions.trimRegion (region, 4.5, 11.0); });
+    check (std::abs (flex.getFlex (region).markers[2].beat - 6.25) < 1.0e-6, "trimming a flexed region leaves its hits in place");
+    engine.undo();
+    pumpMessages();
+
+    // Duplicate and copy: the copies are flexed like the original, unless
+    // pasted on a track without Flex.
+    std::vector<RegionId> copies;
+    checkUndoRoundTrip (engine, "Duplicate Region", [&] { copies = regions.duplicateRegions ({ region }); });
+    check (copies.size() == 1 && sameOffsets (markerOffsets (copies.front()), offsets), "a duplicate of a flexed region is flexed the same");
+    engine.undo();
+    pumpMessages();
+
+    regions.copyRegions ({ region });
+    checkUndoRoundTrip (engine, "Paste", [&] { copies = regions.pasteRegions (other, 40.0); });
+    check (copies.size() == 1 && ! flex.getFlex (copies.front()).on && ! clipOf (copies.front())->getWarpTime(),
+           "pasted on a track without Flex, a copy plays its recording as it is");
+    engine.undo();
+    pumpMessages();
+    copies = regions.pasteRegions (drums, 40.0);
+    pumpMessages();
+    check (copies.size() == 1 && clipOf (copies.front())->getWarpTime() && sameOffsets (markerOffsets (copies.front()), offsets),
+           "pasted on a Flex track, it plays flexed");
+    engine.undo();
+    pumpMessages();
+
+    // Looping: the loop repeats the flexed audio.
+    checkUndoRoundTrip (engine, "Loop Region", [&] { regions.loopRegion (region, 20.0); });
+    check (hitsAt ("looped", { 5, 6.25, 7, 8, 9, 10, 13, 14.25, 15 }, 0.5), "a looped flexed region repeats its flexed hits");
+    engine.undo();
+    pumpMessages();
+
+    // Played backwards, a region can't use Flex: its markers wait.
+    regions.setRegionReversed (region, true);
+    pumpMessages();
+    check (! flex.getFlex (region).available && flex.getFlex (region).unavailableReason.isNotEmpty() && ! clipOf (region)->getWarpTime(),
+           "a reversed region can't use Flex (and says why)");
+    engine.undo();
+    pumpMessages();
+    check (clipOf (region)->getWarpTime(), "played forwards again, it's flexed again");
+
+    // Loops that follow the tempo can't use Flex.
+    std::optional<LibraryFile> loop;
+
+    for (auto& l : engine.getSounds().getLoops())
+        if (l.bpm > 0.0)
+            loop = l;
+
+    if (loop)
+    {
+        const auto loopRegion = regions.importAudioFiles (drums, { loop->file.getFullPathName() }, 60.0).front();
+        pumpMessages();
+        check (! flex.getFlex (loopRegion).available && ! clipOf (loopRegion)->getWarpTime(),
+               "a loop that follows the tempo can't use Flex, even on a Flex track");
+        engine.undo();
+        pumpMessages();
+    }
+
+    // Arrangement markers: moving a section moves its flexed regions, hits and all.
+    {
+        auto& sections = tracks.sections();
+        const auto verse = sections.addSection (0);    // bars 1-8 (beats 0-32) hold the region
+        const auto chorus = sections.addSection (8);
+        pumpMessages();
+        checkUndoRoundTrip (engine, "Move Section", [&] { sections.moveSection (verse, 64.0, false); });
+        check (sameOffsets (markerOffsets (region), offsets), "a section move keeps a flexed region's hits on their beats");
+        engine.undo();
+        engine.undo();
+        engine.undo();
+        pumpMessages();
+        juce::ignoreUnused (chorus);
+    }
+
+    //==============================================================================
+    std::cout << "Flex: takes\n";
+
+    // Each take keeps its own Flex edits. (Takes made as crash recovery
+    // makes them: one per 2 s pass of the 4 s file.)
+    const auto taken = regions.importAudioFiles (other, { clicksFile.getFullPathName() }, 80.0).front();
+    detail::splitIntoPassTakes (*clipOf (taken), te::TimeDuration::fromSeconds (2.0));
+    flex.setFlexOn (other, true);
+    pumpMessages();
+    const auto takeInfo = waitForHits (taken);
+
+    check (takeInfo.transients.size() >= 2, "(the take's hits are found)");
+
+    if (takeInfo.transients.size() >= 2)
+    {
+        flex.moveMarker (taken, takeInfo.transients[1].sourceSeconds, takeInfo.transients[1].beat + 0.25);
+        pumpMessages();
+        const auto edited = flex.getFlex (taken).markers;
+        const int current = regions.getRegion (taken)->currentTake;
+        checkUndoRoundTrip (engine, "Choose Take", [&] { tracks.takes().setCurrentTake (taken, current == 0 ? 1 : 0); });
+        check (! flex.getFlex (taken).hasEdits, "another take plays without the first one's Flex edits");
+        tracks.takes().setCurrentTake (taken, current);
+        pumpMessages();
+        check (flex.getFlex (taken).markers == edited, "choosing the first take again brings its Flex edits back");
+    }
+
+    flex.setFlexOn (drums, false);
+    flex.setFlexOn (other, false);
+    pumpMessages();
 }
 
 int main (int argc, char* argv[])
@@ -5510,6 +5884,9 @@ int main (int argc, char* argv[])
 
     if (runs ("stretch"))
         runStretchSection (dir);
+
+    if (runs ("flex"))
+        runFlexSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

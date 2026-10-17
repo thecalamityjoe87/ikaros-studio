@@ -15,7 +15,8 @@ namespace ikaros
     track's level meter in it) and a pan knob, and next to Mute a button that shows the track's automation.
     While it shows, a picker under the volume row says which setting's
     automation is drawn over the track's lane. The Monitor button only shows on audio tracks: instrument tracks
-    always play what you play.
+    always play what you play. Audio tracks also have a Flex button, at the
+    end of the sound row: Flex Time, for dragging the hits in their recordings.
 
     Right-click shows the track menu (via onShowMenu); double-click the name
     to rename the track; click the icon tile to pick a different icon.
@@ -61,6 +62,8 @@ private:
     IconButton monitorButton { "Monitor input", Icon::waveform };
     IconButton armButton  { "Arm for recording", Icon::record };
     IconButton automationButton { "Show automation", Icon::automation };
+    IconButton flexButton { "Flex", std::nullopt, "Flex" };   // audio tracks only
+    bool flexOn = false;
     MeterSlider volume;   // the track's level and volume in one, like the master's
     ClipLight clipLight;  // armed audio tracks: the input has clipped
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };

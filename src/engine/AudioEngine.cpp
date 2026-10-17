@@ -15,6 +15,7 @@
 #include "engine/SongExporter.h"
 #include "engine/TakeHelpers.h"
 #include "engine/TimeStretch.h"
+#include "engine/FlexHelpers.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
@@ -1085,6 +1086,9 @@ static void prepareRegions (te::Edit& edit, const SoundLibrary& sounds)
                 const bool percussive = loop != nullptr ? loop->unpitched
                                                         : audio->getAutoTempo() && ! detail::followsSessionKey (*audio);
                 detail::upgradeLegacyStretcher (*audio, percussive);
+
+                // A take just recorded on a Flex track is flexed too.
+                detail::applyTrackFlex (*audio);
             }
         }
     }
@@ -2137,13 +2141,18 @@ void AudioEngine::changeTempoMap (const std::vector<TempoChange>& tempos, const 
     // new tempo; recordings just move (they keep their length in seconds).
     //
     // Curves on missing plug-ins have no parameters for the remapper to
-    // see; the automation editor keeps those on their beats.
+    // see; the automation editor keeps those on their beats. Flexed
+    // recordings follow the tempo too (their markers stay on their beats),
+    // which the remapper doesn't know about: see FlexHelpers.h.
     trackController->automation().keepUnloadedCurvesOnBeats ([&]
     {
         te::EditTimecodeRemapperSnapshot snapshot;
+        detail::FlexBeatKeeper flexed;
         snapshot.savePreChangeState (edit);
+        flexed.capture (edit);
         writeTempoSequence (edit, tempos, sigs);
         snapshot.remapEdit (edit);   // brings Tracktion's tempo data up to date first
+        flexed.restore();
     });
 }
 

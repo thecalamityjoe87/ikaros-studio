@@ -17,6 +17,7 @@ namespace
     constexpr int scrollBarSize = 10;
     constexpr int edgeReach = 6;              // how close to a region edge the mouse has to be to trim it
     constexpr int fadeReach = 7;              // ...and to a fade handle to grab it
+    constexpr int flexReach = 5;              // ...and to a hit or flex marker
     constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
     constexpr double minPixelsPerBeat = 2.0, maxPixelsPerBeat = 600.0;
 }
@@ -75,6 +76,7 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, const 
     region = std::move (r);
     colour = c;
     tempo = t;
+    refreshFlex();
 
     const bool editable = hasRegion();
 
@@ -124,6 +126,93 @@ void AudioEditor::update()
         waveformDirty = true;
         repaint (waveArea);
     }
+
+    // Flex is finding the hits or stretching the audio, in the background:
+    // nothing in the session changes then, so ask how it's getting on.
+    if (hasRegion() && flex.on && (flex.analysing || flex.stretchProgress >= 0.0f) && isShowing())
+    {
+        refreshFlex();
+        repaint();
+    }
+}
+
+//==============================================================================
+// Flex
+void AudioEditor::refreshFlex()
+{
+    flex = hasRegion() ? engine.getTracks().flex().getFlex (region->id) : FlexInfo();
+}
+
+juce::String AudioEditor::flexStatus() const
+{
+    auto percent = [] (float p) { return p >= 0.0f ? " " + juce::String (juce::roundToInt (p * 100.0f)) + "%" : juce::String(); };
+
+    if (flex.analysing)
+        return juce::String::fromUTF8 ("Finding the hits\xe2\x80\xa6") + percent (flex.analysisProgress);
+
+    if (flex.stretchProgress >= 0.0f)
+        return juce::String::fromUTF8 ("Stretching the audio\xe2\x80\xa6") + percent (flex.stretchProgress);
+
+    return {};
+}
+
+// Calls fn (beat, repeat) for every place a moment of the region's content
+// shows on screen: once, or in every repeat of a looped region. `firstBeat`
+// is where it plays the first time round (FlexInfo's beats).
+template <typename Fn>
+void AudioEditor::forEachRepeat (double firstBeat, Fn&& fn) const
+{
+    if (! region->isLooped())
+    {
+        fn (firstBeat, 0.0);
+        return;
+    }
+
+    // Only what's inside the loop repeats; the rest of the content never plays.
+    const double loop = region->loopLengthBeats;
+    const double passStart = region->startBeat - region->loopOffsetBeats;
+
+    if (firstBeat < passStart - 1.0e-9 || firstBeat >= passStart + loop)
+        return;
+
+    const double from = region->startBeat + scrollBeats, to = from + visibleBeats();
+
+    for (double k = std::floor ((from - firstBeat) / loop); firstBeat + k * loop <= to; k += 1.0)
+        fn (firstBeat + k * loop, k * loop);
+}
+
+std::optional<AudioEditor::FlexTarget> AudioEditor::flexTargetAt (juce::Point<int> p, bool markersOnly) const
+{
+    if (! hasRegion() || ! flex.on || ! waveArea.contains (p))
+        return std::nullopt;
+
+    std::optional<FlexTarget> best;
+    float bestDistance = (float) flexReach + 0.5f;
+
+    auto consider = [&] (double source, double beat, bool isMarker)
+    {
+        forEachRepeat (beat, [&] (double shown, double repeat)
+        {
+            const float distance = std::abs ((float) p.x - beatToX (shown - region->startBeat));
+
+            // A marker wins over a hit the same distance away.
+            if (distance < bestDistance || (isMarker && distance <= bestDistance && best && ! best->isMarker))
+            {
+                bestDistance = distance;
+                best = FlexTarget { source, beat, repeat, isMarker };
+            }
+        });
+    };
+
+    // The markers in between the ends (the ends of the recording stay put).
+    for (size_t i = 1; i + 1 < flex.markers.size(); ++i)
+        consider (flex.markers[i].sourceSeconds, flex.markers[i].beat, true);
+
+    if (! markersOnly)
+        for (auto& t : flex.transients)
+            consider (t.sourceSeconds, t.beat, false);
+
+    return best;
 }
 
 //==============================================================================
@@ -228,7 +317,9 @@ void AudioEditor::refreshWaveform()
 
     // One column per pixel, across what's on screen.
     const double from = region->startBeat + scrollBeats;
-    waveformPending = ! engine.getTracks().regions().getWaveform (region->id, from, from + visibleBeats(), width, columns);
+    const bool previewing = drag.mode == Drag::Mode::flex && ! drag.preview.empty();
+    waveformPending = ! engine.getTracks().regions().getWaveform (region->id, from, from + visibleBeats(), width, columns,
+                                                                  previewing ? &drag.preview : nullptr);
 }
 
 //==============================================================================
@@ -280,6 +371,9 @@ AudioEditor::Drag::Mode AudioEditor::modeAt (juce::Point<int> p) const
     if (juce::jmin (toStart, toEnd) <= (float) edgeReach)
         return toStart < toEnd ? Drag::Mode::trimStart : Drag::Mode::trimEnd;
 
+    if (flexTargetAt (p, false).has_value())
+        return Drag::Mode::flex;
+
     return Drag::Mode::playhead;
 }
 
@@ -292,7 +386,8 @@ void AudioEditor::mouseMove (const juce::MouseEvent& e)
         case Drag::Mode::trimStart:
         case Drag::Mode::trimEnd:
         case Drag::Mode::fadeIn:
-        case Drag::Mode::fadeOut:   setMouseCursor (juce::MouseCursor::LeftRightResizeCursor); break;
+        case Drag::Mode::fadeOut:
+        case Drag::Mode::flex:      setMouseCursor (juce::MouseCursor::LeftRightResizeCursor); break;
         case Drag::Mode::playhead:
         case Drag::Mode::none:      setMouseCursor (juce::MouseCursor::NormalCursor); break;
     }
@@ -317,6 +412,14 @@ void AudioEditor::mouseDown (const juce::MouseEvent& e)
     drag.end = region->getEndBeat();
     drag.fadeIn = region->fadeInBeats;
     drag.fadeOut = region->fadeOutBeats;
+
+    if (mode == Drag::Mode::flex)
+    {
+        const auto target = flexTargetAt (p, false);
+        drag.flexSource = target->source;
+        drag.flexBeat = target->beat;
+        drag.repeat = target->repeat;
+    }
 
     // A click moves the playhead straight away; the edges and fades wait
     // for the mouse to move, so a click doesn't snap them to the grid.
@@ -376,6 +479,15 @@ void AudioEditor::updateDrag (const juce::MouseEvent& e)
             drag.fadeOut = juce::jlimit (0.0, juce::jmax (0.0, length - region->fadeInBeats), region->fadeOutBeats - delta);
             break;
 
+        // A hit goes where the mouse takes it, without snapping (Quantize
+        // lines hits up with the grid). The engine works out the markers it
+        // needs and keeps it between its neighbours; previewMove shows that.
+        case Drag::Mode::flex:
+            drag.flexBeat = xToBeat ((float) e.x) + region->startBeat - drag.repeat;
+            drag.preview = FlexEditor::previewMove (flex, drag.flexSource, drag.flexBeat);
+            waveformDirty = true;
+            break;
+
         case Drag::Mode::none:
             return;
     }
@@ -398,6 +510,7 @@ void AudioEditor::finishDrag()
         case Drag::Mode::trimEnd:   regions.trimRegion (id, finished.start, finished.end); break;
         case Drag::Mode::fadeIn:    regions.setFade (id, true, finished.fadeIn); break;
         case Drag::Mode::fadeOut:   regions.setFade (id, false, finished.fadeOut); break;
+        case Drag::Mode::flex:      engine.getTracks().flex().moveMarker (id, finished.flexSource, finished.flexBeat); break;
         case Drag::Mode::playhead:
         case Drag::Mode::none:      break;
     }
@@ -412,8 +525,22 @@ void AudioEditor::finishDrag()
         region = std::move (fresh);
     }
 
+    refreshFlex();
     clampView();
     repaint();
+}
+
+void AudioEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    // Double-clicking a flex marker takes it away ("Remove Flex Marker").
+    if (auto target = flexTargetAt (e.getPosition(), true))
+    {
+        drag = {};
+        engine.getTracks().flex().removeMarker (region->id, target->source);
+        refreshFlex();
+        waveformDirty = true;
+        repaint();
+    }
 }
 
 void AudioEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -440,6 +567,7 @@ bool AudioEditor::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress::escapeKey && drag.mode != Drag::Mode::none)
     {
         drag = {};
+        waveformDirty = true;   // a flex drag's preview
         repaint();
         return true;
     }
@@ -476,8 +604,17 @@ void AudioEditor::paintToolbar (juce::Graphics& g)
 
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (12.0f));
-    g.drawFittedText (juce::String::fromUTF8 ("Drag the edges to trim \xc2\xb7 Drag the dots to fade \xc2\xb7 Click to move the playhead"),
-                      hintArea, juce::Justification::centredLeft, 1, 1.0f);
+    // With Flex on: how it's getting on, or how to use it.
+    auto hint = juce::String::fromUTF8 ("Drag the edges to trim \xc2\xb7 Drag the dots to fade \xc2\xb7 Click to move the playhead");
+
+    if (flex.on)
+    {
+        const auto status = flexStatus();
+        hint = status.isNotEmpty() ? status
+                                   : juce::String::fromUTF8 ("Drag a hit to move it \xc2\xb7 Double-click a marker to remove it \xc2\xb7 Drag the edges to trim");
+    }
+
+    g.drawFittedText (hint, hintArea, juce::Justification::centredLeft, 1, 1.0f);
 
     icons::draw (g, Icon::search, timeZoomIcon.toFloat(), colour::textSecondary, 13.0f, 1.6f);
 }
@@ -586,6 +723,9 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
         g.fillRect (area.getX() + (float) i, top, 1.0f, juce::jmax (1.0f, bottom - top));
     }
 
+    if (flex.on)
+        paintFlex (g, area);
+
     // Outside the region (the rest of the recording, or the loop going
     // round again): dimmed.
     g.setColour (colour::windowBg.withAlpha (0.7f));
@@ -658,6 +798,47 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
         g.setColour (colour::textSecondary);
         g.setFont (fonts::ui (13.0f));
         g.drawText (juce::String::fromUTF8 ("Reading the recording\xe2\x80\xa6"), waveArea, juce::Justification::centred);
+    }
+}
+
+void AudioEditor::paintFlex (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const double start = region->startBeat;
+    const auto& markers = drag.mode == Drag::Mode::flex && ! drag.preview.empty() ? drag.preview : flex.markers;
+
+    // The markers as a map from the recording to the timeline (in beats),
+    // so the hits move with a drag's preview.
+    std::vector<WarpPoint> map;
+
+    for (auto& m : markers)
+        map.push_back ({ m.sourceSeconds, m.beat });
+
+    // The hits: faint lines (unless a marker's on them).
+    g.setColour (juce::Colours::white.withAlpha (0.18f));
+
+    for (auto& t : flex.transients)
+    {
+        if (flexmap::indexOf (map, t.sourceSeconds) >= 0)
+            continue;
+
+        forEachRepeat (flexmap::toWarp (map, t.sourceSeconds), [&] (double beat, double)
+        {
+            g.fillRect (beatToX (beat - start), area.getY(), 1.0f, area.getHeight());
+        });
+    }
+
+    // The markers between the ends: brighter, with a handle at the bottom.
+    // (In the text colour, not the track's or the accent: the waveform is
+    // drawn in the track's colour, and some tracks are amber.)
+    for (size_t i = 1; i + 1 < markers.size(); ++i)
+    {
+        forEachRepeat (markers[i].beat, [&] (double beat, double)
+        {
+            const float x = beatToX (beat - start);
+            g.setColour (colour::text.withAlpha (0.85f));
+            g.fillRect (x - 0.75f, area.getY(), 1.5f, area.getHeight());
+            g.fillRoundedRectangle (juce::Rectangle<float> (8.0f, 12.0f).withCentre ({ x, area.getBottom() - 8.0f }), 2.0f);
+        });
     }
 }
 

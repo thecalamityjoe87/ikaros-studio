@@ -54,6 +54,17 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.onClick = [this] { setMonitoringWithWarning (engine, info.id, ! info.monitoring, this); };
     addChildComponent (monitorButton);
 
+    // Flex (audio tracks): amber while it's on, like the automation button.
+    flexButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
+    flexButton.setCornerRadius (size::radiusSmall);
+    flexButton.setFont (fonts::uiSemiBold (11.0f));
+    flexButton.onClick = [this]
+    {
+        selection.selectTrack (info.id);
+        engine.getTracks().flex().setFlexOn (info.id, ! flexOn);
+    };
+    addChildComponent (flexButton);
+
     clipLight.onClear = [this] { engine.getTracks().inputs().clearClipIndicator (info.id); };
     addChildComponent (clipLight);
 
@@ -120,6 +131,9 @@ void TrackHeader::updateAccessibleNames()
     monitorButton.setTitle ((info.monitoring ? "Stop monitoring " : "Monitor ") + info.name);
     monitorButton.setTooltip (info.monitoring ? "Monitoring: you hear the input live"
                                               : "Monitor: hear the input live (use headphones to avoid feedback)");
+    flexButton.setTitle ((flexOn ? "Turn off Flex for " : "Turn on Flex for ") + info.name);
+    flexButton.setTooltip (flexOn ? "Flex is on: drag the hits in this track's recordings in the Editor"
+                                  : "Flex: move the hits in this track's recordings, stretching the audio in between");
     pan.setTitle (info.name + " pan");
     volume.setTitle (info.name + " volume");
     setTitle (info.name + " track");
@@ -172,6 +186,9 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     const bool wasAudio = monitorButton.isVisible();
     const bool hadClipLight = clipLight.isVisible();
     monitorButton.setVisible (t.kind == TrackKind::audio);
+    flexButton.setVisible (t.kind == TrackKind::audio);
+    flexOn = engine.getTracks().flex().isFlexOn (t.id);   // not in TrackInfo: asked for here
+    flexButton.setToggleState (flexOn, juce::dontSendNotification);
     monitorButton.setToggleState (t.monitoring, juce::dontSendNotification);
     clipLight.setVisible (t.kind == TrackKind::audio && t.armed);
 
@@ -430,6 +447,12 @@ void TrackHeader::resized()
 
     r.removeFromTop (4);
     soundArea = r.removeFromTop (18).withTrimmedRight (panSize);
+
+    if (flexButton.isVisible())
+    {
+        flexButton.setBounds (soundArea.removeFromRight (40));
+        soundArea.removeFromRight (6);
+    }
     r.removeFromTop (6);
 
     // Pan knob at the end of the volume slider's row, centred on it. Its

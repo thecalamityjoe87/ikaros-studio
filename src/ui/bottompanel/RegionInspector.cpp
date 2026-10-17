@@ -27,7 +27,7 @@ namespace
 }
 
 //==============================================================================
-// The "Audio" section: an audio region's gain, pitch and direction.
+// The "Audio" section: an audio region's gain, pitch, direction and Flex.
 class RegionInspector::AudioControls  : public juce::Component
 {
 public:
@@ -86,6 +86,30 @@ public:
                 owner.engine.getTracks().regions().setRegionReversed (owner.region->id, ! owner.region->reversed);
         };
         addAndMakeVisible (reverse);
+
+        // Flex belongs to the track (as in GarageBand), so this switches it
+        // for every region on the region's track. Amber while it's on, like
+        // the track header's Flex button.
+        flex.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
+        flex.setFont (fonts::uiSemiBold (12.0f));
+        flex.setCornerRadius (6.0f);
+        flex.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().flex().setFlexOn (owner.region->trackId, ! flexInfo.trackFlex);
+        };
+        addAndMakeVisible (flex);
+
+        resetFlex.setColours (raisedWithBorder());
+        resetFlex.setFont (fonts::ui (12.0f));
+        resetFlex.setCornerRadius (size::radiusSmall);
+        resetFlex.setTooltip ("Put every hit back where it was recorded");
+        resetFlex.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().flex().resetFlex (owner.region->id);
+        };
+        addAndMakeVisible (resetFlex);
     }
 
     /** Shows the region's settings (it's an audio region). */
@@ -101,12 +125,23 @@ public:
         pitchUp.setEnabled (r.transposeSemitones < RegionEditor::maxTransposeSemitones);
         reverse.setToggleState (r.reversed, juce::dontSendNotification);
         reverse.setText (r.reversed ? "Playing backwards" : "Play backwards");
+
+        // A region that can't be flexed (a loop that follows the tempo, a
+        // reversed region) says why rather than half working.
+        flexInfo = owner.engine.getTracks().flex().getFlex (r.id);
+        flex.setEnabled (flexInfo.available);
+        flex.setToggleState (flexInfo.on, juce::dontSendNotification);
+        flex.setText (flexInfo.trackFlex ? "Flex on" : "Flex off");
+        flex.setTooltip (! flexInfo.available ? flexInfo.unavailableReason
+                         : flexInfo.trackFlex ? juce::String ("Flex is on for this track: drag the hits in the Editor")
+                                              : juce::String ("Turn on Flex for this track, to move the hits in its recordings"));
+        resetFlex.setEnabled (flexInfo.on && flexInfo.hasEdits);
         repaint();
     }
 
     int getIdealHeight() const
     {
-        return padding / 2 + 3 * (rowHeight + rowGap) + (showsKeyNote() ? 22 : 0) + padding / 2;
+        return padding / 2 + 4 * (rowHeight + rowGap) + (showsKeyNote() ? 22 : 0) + padding / 2;
     }
 
     void paint (juce::Graphics& g) override
@@ -119,6 +154,7 @@ public:
         g.drawText ("Gain", gainRow, juce::Justification::centredLeft);
         g.drawText ("Pitch", pitchRow, juce::Justification::centredLeft);
         g.drawText ("Direction", reverseRow, juce::Justification::centredLeft);
+        g.drawText ("Flex", flexRow, juce::Justification::centredLeft);
 
         // The gain as it is now (it follows the slider during a drag).
         const auto db = gain.getValue();
@@ -177,6 +213,12 @@ public:
         reverseRow = row();
         reverse.setBounds (reverseRow.withTrimmedLeft (labelWidth).removeFromLeft (150).withSizeKeepingCentre (150, 26));
 
+        flexRow = row();
+        auto flexArea = flexRow.withTrimmedLeft (labelWidth);
+        flex.setBounds (flexArea.removeFromLeft (80).withSizeKeepingCentre (80, 26));
+        flexArea.removeFromLeft (6);
+        resetFlex.setBounds (flexArea.removeFromLeft (64).withSizeKeepingCentre (64, 26));
+
         keyNote = r.removeFromTop (22);
     }
 
@@ -188,8 +230,11 @@ private:
     IconButton pitchDown { "Pitch down", std::nullopt, "-" };
     IconButton pitchUp   { "Pitch up", std::nullopt, "+" };
     IconButton reverse   { "Reverse", std::nullopt, "Play backwards" };
+    IconButton flex      { "Flex", std::nullopt, "Flex off" };
+    IconButton resetFlex { "Reset Flex", std::nullopt, "Reset" };
+    FlexInfo flexInfo;   // the region's, as last shown
 
-    juce::Rectangle<int> gainRow, gainValue, pitchRow, pitchValue, pitchUnits, reverseRow, keyNote;
+    juce::Rectangle<int> gainRow, gainValue, pitchRow, pitchValue, pitchUnits, reverseRow, flexRow, keyNote;
 
     bool showsKeyNote() const   { return owner.region.has_value() && owner.region->followsKey; }
 

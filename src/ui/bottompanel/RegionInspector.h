@@ -18,7 +18,7 @@ class AudioEngine;
     GarageBand's region inspector. Grouped in collapsible sections, as in the
     track inspector:
 
-      Audio region   Gain, Pitch, Reverse (and whether it follows the key)
+      Audio region   Gain, Pitch, Reverse (and whether it follows the key), Flex
       Editing        Grid (and Quantize, for a MIDI region)
 
     The audio settings go straight to the session (RegionEditor), each as an

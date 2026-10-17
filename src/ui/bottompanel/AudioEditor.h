@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/FlexEditor.h"
 #include "engine/WaveformCache.h"
 #include "ui/bottompanel/EditorGrid.h"
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -24,6 +25,11 @@ class AudioEngine;
     repeating) dimmed on either side. Drag the region's edges to trim it,
     the dots at the top to fade it in or out, and click to move the
     playhead. Ctrl/Cmd + wheel zooms, the wheel scrolls.
+
+    With Flex on (see FlexEditor), the hits found in the recording show as
+    faint lines: drag one to move it, stretching the audio between its
+    neighbours. A moved hit gets a marker (a brighter line with a handle at
+    the bottom); double-click a marker to take it away again.
 
     The region's settings (gain, pitch, reverse, the grid) are in the
     Region inspector on the panel's left (see RegionInspector).
@@ -57,6 +63,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     bool keyPressed (const juce::KeyPress&) override;
 
@@ -65,12 +72,27 @@ private:
     // `start`/`end`/the fades as they'll end up.
     struct Drag
     {
-        enum class Mode { none, trimStart, trimEnd, fadeIn, fadeOut, playhead };
+        enum class Mode { none, trimStart, trimEnd, fadeIn, fadeOut, playhead, flex };
 
         Mode mode = Mode::none;
         int startX = 0;
         double start = 0.0, end = 0.0;           // the region's edges, in beats on the timeline
         double fadeIn = 0.0, fadeOut = 0.0;      // in beats
+
+        // Flex: the hit (or marker) being dragged, as a moment of the
+        // recording, and where it's going, in beats on the timeline (of the
+        // loop's first time round, for a looped region: `repeat` is how far
+        // after that the grabbed repeat is).
+        double flexSource = 0.0, flexBeat = 0.0, repeat = 0.0;
+        std::vector<FlexMarker> preview;         // the markers as they'll end up
+    };
+
+    // What's under the mouse in Flex: a hit or a marker (as a moment of the
+    // recording), and which repeat of a looped region it's in.
+    struct FlexTarget
+    {
+        double source = 0.0, beat = 0.0, repeat = 0.0;
+        bool isMarker = false;
     };
 
     AudioEngine& engine;
@@ -86,6 +108,7 @@ private:
 
     EditorGrid grid = EditorGrid::sixteenth;
     Drag drag;
+    FlexInfo flex;   // the region's Flex state (re-read while it's busy, see update())
 
     // The waveform for the current view, one column per pixel. Re-read when
     // the view or the region changes (waveformDirty), and while the engine
@@ -124,6 +147,12 @@ private:
     juce::Point<float> fadeHandle (bool fadeIn) const;
     Drag::Mode modeAt (juce::Point<int>) const;
 
+    // Flex
+    void refreshFlex();
+    std::optional<FlexTarget> flexTargetAt (juce::Point<int>, bool markersOnly) const;
+    template <typename Fn> void forEachRepeat (double firstBeat, Fn&&) const;
+    juce::String flexStatus() const;
+
     // Editing
     void updateDrag (const juce::MouseEvent&);
     void finishDrag();
@@ -132,6 +161,7 @@ private:
     void paintToolbar (juce::Graphics&);
     void paintRuler (juce::Graphics&);
     void paintWaveform (juce::Graphics&);
+    void paintFlex (juce::Graphics&, juce::Rectangle<float> area);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEditor)
 };

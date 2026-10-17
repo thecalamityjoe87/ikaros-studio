@@ -1,4 +1,5 @@
 #include "engine/WaveformCache.h"
+#include "engine/FlexHelpers.h"
 
 #include <tracktion_engine/tracktion_engine.h>
 
@@ -35,21 +36,27 @@ std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int num
     // A reversed region plays a reversed copy of its file, which Tracktion
     // makes in the background. Rather than wait for it, read the original
     // and turn the result round: the reversed copy's first second is the
-    // original's last.
+    // original's last. A flexed region likewise plays a stretched copy:
+    // read the original through its warp markers instead.
     const bool reversed = clip.getIsReversed();
-    auto file = reversed ? clip.getOriginalFile() : clip.getAudioFile().getFile();
+    const auto warp = detail::usesFlex (clip) ? detail::getWarpPoints (clip) : std::vector<WarpPoint>();
+    auto file = reversed || ! warp.empty() ? clip.getOriginalFile() : clip.getAudioFile().getFile();
     auto pos = clip.getPosition();
 
-    // The part of the file the region shows: from its offset for its length,
-    // or one loop's worth if it's looped (the UI draws the repeats).
-    double sourceStart = clip.isLooping() ? clip.getLoopStart().inSeconds() : pos.offset.inSeconds();
-    const double sourceLength = clip.isLooping() ? clip.getLoopLength().inSeconds() : pos.getLength().inSeconds();
+    // The part of the content the region shows: from its offset for its
+    // length, or one loop's worth if it's looped (the UI draws the repeats).
+    double contentStart = clip.isLooping() ? clip.getLoopStart().inSeconds() : pos.offset.inSeconds();
+    const double contentLength = clip.isLooping() ? clip.getLoopLength().inSeconds() : pos.getLength().inSeconds();
+    double sourceStart = contentStart;
 
     if (reversed)
-        sourceStart = te::AudioFile (clip.edit.engine, file).getLength() - sourceStart - sourceLength;
+        sourceStart = te::AudioFile (clip.edit.engine, file).getLength() - contentStart - contentLength;
 
     auto key = file.getFullPathName() + ":" + juce::String (file.getSize())
-             + ":" + juce::String (sourceStart) + ":" + juce::String (sourceLength) + (reversed ? ":r" : "");
+             + ":" + juce::String (sourceStart) + ":" + juce::String (contentLength) + (reversed ? ":r" : "");
+
+    for (auto& m : warp)
+        key << ":" << m.source << "/" << m.warp;
 
     if (auto it = peakCache.find (key); it != peakCache.end())
         return it->second;
@@ -60,14 +67,22 @@ std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int num
     // unique_ptr: the reader is deleted automatically when we're done.
     if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor (file) })
     {
-        const auto start = (juce::int64) (sourceStart * reader->sampleRate);
-        const auto length = (juce::int64) (sourceLength * reader->sampleRate);
-        const auto step = juce::jmax ((juce::int64) 1, length / numColumns);
+        const auto rate = reader->sampleRate;
         std::vector<juce::Range<float>> levels ((size_t) reader->numChannels);
+
+        // Where a moment of the content is in the file, in samples.
+        auto sampleAt = [&] (double contentSeconds)
+        {
+            const double seconds = warp.empty() ? sourceStart + (contentSeconds - contentStart)
+                                                : flexmap::toSource (warp, contentSeconds);
+            return (juce::int64) (seconds * rate);
+        };
 
         for (int i = 0; i < numColumns; ++i)
         {
-            reader->readMaxLevels (start + i * step, step, levels.data(), (int) reader->numChannels);
+            const auto from = sampleAt (contentStart + contentLength * i / numColumns);
+            const auto to = sampleAt (contentStart + contentLength * (i + 1) / numColumns);
+            reader->readMaxLevels (from, juce::jmax ((juce::int64) 1, to - from), levels.data(), (int) reader->numChannels);
             float peak = 0.0f;
 
             for (auto& r : levels)

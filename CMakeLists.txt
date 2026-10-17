@@ -240,6 +240,9 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RegionEditor.h       src/engine/RegionEditor.cpp
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
+    src/engine/FlexEditor.h         src/engine/FlexEditor.cpp
+    src/engine/FlexHelpers.h
+    src/engine/FlexMap.h
     src/engine/LoopKey.h
     src/engine/TimeStretch.h
     src/engine/TakeHelpers.h
@@ -543,7 +546,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -575,6 +578,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Sections PROPERTIES LABELS "sections")
     add_test(NAME EngineSmokeTest.Stretch COMMAND IkarosEngineSmokeTest --only=stretch)
     set_tests_properties(EngineSmokeTest.Stretch PROPERTIES LABELS "stretch")
+    add_test(NAME EngineSmokeTest.Flex COMMAND IkarosEngineSmokeTest --only=flex)
+    set_tests_properties(EngineSmokeTest.Flex PROPERTIES LABELS "flex")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
