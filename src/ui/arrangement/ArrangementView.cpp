@@ -5,6 +5,7 @@
 #include "ui/arrangement/ArrangementRegionDrag.h"
 #include "ui/arrangement/ArrangementRuler.h"
 #include "ui/arrangement/ArrangementTempoLane.h"
+#include "ui/arrangement/ArrangementSections.h"
 #include "app/CommandIDs.h"
 #include "engine/AudioPreview.h"
 #include "engine/PluginLibrary.h"
@@ -47,6 +48,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
 {
     ruler = std::make_unique<Ruler> (*this);
     tempoLane = std::make_unique<TempoLane> (*this);
+    sectionStrip = std::make_unique<SectionStrip> (*this);
     content = std::make_unique<Content> (*this);
     overlay = std::make_unique<Overlay>();
     playhead = std::make_unique<Playhead> (*this);
@@ -54,6 +56,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
 
     addAndMakeVisible (*ruler);
     addChildComponent (*tempoLane);   // hidden until setTempoLaneShown
+    addAndMakeVisible (*sectionStrip);
 
     viewport.setViewedComponent (content.get(), false);
     viewport.setScrollBarsShown (true, false);
@@ -129,6 +132,7 @@ void ArrangementView::refresh()
         regions[t.id] = tc.regions().getRegions (t.id);
 
     geometry.tempo = engine.getTempoMap();
+    sectionStrip->sync();
     updateAutomationButton();
     content->sync (tracks, regions);
     contentEndBeat = content->getEndBeat();
@@ -266,6 +270,7 @@ void ArrangementView::timelineChanged()
     content->timelineChanged();
     ruler->repaint();
     tempoLane->repaint();
+    sectionStrip->repaint();
     updateScrollBar();
     zoomSlider.setValue (zoomToSlider (geometry.pixelsPerBeat), juce::dontSendNotification);
     playhead->setX (geometry.beatToX (engine.getTransportState().positionBeats));
@@ -479,6 +484,8 @@ void ArrangementView::resized()
 
     if (tempoLaneShown)
         tempoLane->setBounds (r.removeFromTop (tempoLaneHeight));
+
+    sectionStrip->setBounds (r.removeFromTop (sectionStripHeight));
 
     // Controls in the ruler's header part: "TRACKS" | snap | automation | tempo lane | zoom.
     snapButton.setBounds (66, top.getY() + 4, 78, top.getHeight() - 9);

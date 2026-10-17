@@ -19,6 +19,7 @@ inline constexpr int regionTop = 5;           // a region's gap from the top of 
 inline constexpr int regionGap = 11;          // ...and the total gap above and below it
 
 inline constexpr int tempoLaneHeight = 44;     // the tempo lane under the ruler, when it shows
+inline constexpr int sectionStripHeight = 24;  // the marker strip with the song's sections, above the tracks
 
 // Zoomed far out, drawing every bar would be a solid smear. This finds a
 // bar step (1, 2, 4, 8...) that keeps things at least minPixels apart, going

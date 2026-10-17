@@ -20,6 +20,7 @@ namespace ikaros
         ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
         │ TRACKS [Snap: Beat] ⟋ ◷ ⌕─○│ ruler  1   2   3   4 ...      │  30px
         │ TEMPO                     │ tempo lane (when shown) ▔▔╲▁▁ │  44px
+        │ SECTIONS              [+] │ [Intro   ][Verse      ][Cho.. │  24px
         ├───────────────────────────┼───────────────────────────────┤
         │ TrackHeader               │ lane  [region] [region]       │ 100px
         │ TrackHeader               │ lane                          │ (118 w/ automation)
@@ -48,6 +49,9 @@ namespace ikaros
     song's tempo and time-signature changes, which happen at bar lines: see
     TempoLane. Bars can differ in length, so everything that needs a bar
     asks geometry.tempo (a TempoMap) for the one at a beat.
+
+    The marker strip above the tracks shows the song's sections (Intro,
+    Verse...). Dragging one moves its music on every track: see SectionStrip.
 */
 class ArrangementView  : public juce::Component,
                          public juce::FileDragAndDropTarget,
@@ -154,6 +158,7 @@ public:
 private:
     class Ruler;
     class TempoLane;
+    class SectionStrip;
     class Lane;
     class DropZone;
     class Playhead;
@@ -171,6 +176,7 @@ private:
     std::unique_ptr<Ruler> ruler;
     std::unique_ptr<TempoLane> tempoLane;
     bool tempoLaneShown = false;
+    std::unique_ptr<SectionStrip> sectionStrip;
     std::unique_ptr<Content> content;
     std::unique_ptr<Overlay> overlay;
     std::unique_ptr<Playhead> playhead;

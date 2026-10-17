@@ -213,6 +213,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/TakeHelpers.h
     src/engine/EffectsController.h  src/engine/EffectsController.cpp
     src/engine/AutomationEditor.h   src/engine/AutomationEditor.cpp
+    src/engine/SectionEditor.h      src/engine/SectionEditor.cpp
     src/engine/SoundControls.h
     src/engine/SendBuses.h          src/engine/SendBuses.cpp
     src/engine/EqController.h       src/engine/EqController.cpp
@@ -299,6 +300,7 @@ set(IKAROS_UI_SOURCES
     src/ui/arrangement/ArrangementLayout.h
     src/ui/arrangement/ArrangementRuler.h   src/ui/arrangement/ArrangementRuler.cpp
     src/ui/arrangement/ArrangementTempoLane.h   src/ui/arrangement/ArrangementTempoLane.cpp
+    src/ui/arrangement/ArrangementSections.h    src/ui/arrangement/ArrangementSections.cpp
     src/ui/arrangement/ArrangementLane.h    src/ui/arrangement/ArrangementLane.cpp
     src/ui/arrangement/ArrangementAutomation.h src/ui/arrangement/ArrangementAutomation.cpp
     src/ui/arrangement/ArrangementContent.h src/ui/arrangement/ArrangementContent.cpp
@@ -509,7 +511,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -537,6 +539,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Effects PROPERTIES LABELS "effects")
     add_test(NAME EngineSmokeTest.Tempo COMMAND IkarosEngineSmokeTest --only=tempo)
     set_tests_properties(EngineSmokeTest.Tempo PROPERTIES LABELS "tempo")
+    add_test(NAME EngineSmokeTest.Sections COMMAND IkarosEngineSmokeTest --only=sections)
+    set_tests_properties(EngineSmokeTest.Sections PROPERTIES LABELS "sections")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

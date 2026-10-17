@@ -597,6 +597,7 @@ private:
 
             EDIT
               TEMPOSEQUENCE, PITCHSEQUENCE   tempo, time signature, key
+              IKAROSSECTIONS                 the song's sections (see SectionEditor)
               TRANSPORT                      playhead, loop range
               MASTERVOLUME, MASTERPLUGINS    the master channel
               INPUTDEVICES                   which inputs record onto which track
@@ -623,7 +624,10 @@ private:
             if (t.hasType (te::IDs::TRANSPORT))
                 return c;
 
-            if (t.hasType (te::IDs::TEMPOSEQUENCE) || t.hasType (te::IDs::PITCHSEQUENCE))
+            // Sections (the marker strip) sit on the beat grid like the tempo:
+            // the arrangement re-reads its timeline for both.
+            if (t.hasType (te::IDs::TEMPOSEQUENCE) || t.hasType (te::IDs::PITCHSEQUENCE)
+                 || SectionEditor::isSectionState (t))
             {
                 c.transport = true;
                 return c;
@@ -662,6 +666,8 @@ private:
             {
                 if (te::TrackList::isTrack (child))
                     c.tracks = c.regions = true;   // a track added or removed (with its regions)
+                else if (SectionEditor::isSectionState (child))
+                    c.transport = true;            // the first section added (or the last undone)
                 else if (child.isValid())
                     c.session = true;              // something we don't know: play safe
 

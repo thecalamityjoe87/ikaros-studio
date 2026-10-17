@@ -396,6 +396,7 @@ private:
     friend class EqController;
     friend class SendBuses;
     friend class AutomationEditor;
+    friend class SectionEditor;
     friend class PluginLibrary;
     friend class SongExporter;
     friend class RecordingGuard;

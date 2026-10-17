@@ -6,6 +6,7 @@
 #include "engine/InputRouter.h"
 #include "engine/NoteEditor.h"
 #include "engine/RegionEditor.h"
+#include "engine/SectionEditor.h"
 #include "engine/SendBuses.h"
 #include "engine/TakeEditor.h"
 #include <memory>
@@ -30,6 +31,7 @@ class AudioEngine;
         sends()    - each track's sends to the shared Reverb and Delay buses
         eq()       - the EQ tab's 4-band EQ, on a track or the master
         automation() - automation curves and the lanes that show them
+        sections() - the arrangement markers (song sections) above the tracks
 
     Every method runs on the message thread. Mutating methods record into the
     session's UndoManager.
@@ -55,6 +57,8 @@ public:
     const EqController& eq() const noexcept                 { return *eqController; }
     AutomationEditor& automation() noexcept                 { return *automationEditor; }
     const AutomationEditor& automation() const noexcept     { return *automationEditor; }
+    SectionEditor& sections() noexcept                      { return *sectionEditor; }
+    const SectionEditor& sections() const noexcept          { return *sectionEditor; }
 
     //==============================================================================
     // Tracks
@@ -133,6 +137,7 @@ private:
     std::unique_ptr<SendBuses> sendBuses;
     std::unique_ptr<EqController> eqController;
     std::unique_ptr<AutomationEditor> automationEditor;   // after sendBuses: it uses them
+    std::unique_ptr<SectionEditor> sectionEditor;
 
     TrackId createAudioTrack (const juce::String& name);
 };

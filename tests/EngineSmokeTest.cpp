@@ -2149,6 +2149,206 @@ static void runTempoSection (const juce::File& dir)
     }
 }
 
+//==============================================================================
+// Arrangement markers: sections of the song, and moving, copying and
+// deleting what's inside them on every track.
+static void runSectionsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& sections = tracks.sections();
+    auto& automation = tracks.automation();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);   // 4/4, so a bar is 4 beats
+
+    const auto midi = tracks.getTracks().front().id;
+    const auto audio = tracks.addAudioTrack();
+    check (sections.getSections().empty(), "a new session has no sections");
+
+    auto sectionAt = [&] (double startBeat) -> std::optional<SectionInfo>
+    {
+        for (auto& s : sections.getSections())
+            if (std::abs (s.startBeat - startBeat) < 1.0e-6)
+                return s;
+
+        return std::nullopt;
+    };
+
+    auto regionStarts = [&] (TrackId track)
+    {
+        std::vector<std::pair<double, double>> result;   // start and end, in song order
+
+        for (auto& r : regions.getRegions (track))
+            result.push_back ({ std::round (r.startBeat * 1000.0) / 1000.0, std::round ((r.startBeat + r.lengthBeats) * 1000.0) / 1000.0 });
+
+        std::sort (result.begin(), result.end());
+        return result;
+    };
+
+    auto samePan = [&] (std::vector<AutomationPoint> expected)
+    {
+        const auto points = automation.getPoints (midi, automationTargets::pan);
+        bool same = points.size() == expected.size();
+
+        for (size_t i = 0; same && i < points.size(); ++i)
+            same = std::abs (points[i].beat - expected[i].beat) < 1.0e-4 && std::abs (points[i].value - expected[i].value) < 1.0e-4f;
+
+        if (! same)
+            for (auto& p : points)
+                std::cout << "         (" << p.beat << ", " << p.value << ")\n";
+
+        return same;
+    };
+
+    // The pan curve's value at a beat, as it plays (straight lines between
+    // points), and the shape it's given below.
+    auto panAt = [&] (double beat)
+    {
+        const auto points = automation.getPoints (midi, automationTargets::pan);
+
+        for (size_t i = 1; i < points.size(); ++i)
+            if (beat < points[i].beat)
+                return (float) juce::jmap (beat, points[i - 1].beat, points[i].beat, (double) points[i - 1].value, (double) points[i].value);
+
+        return points.back().value;
+    };
+
+    auto originalPan = [] (double beat)
+    {
+        return (float) (beat < 20.0 ? 0.2 + 0.03 * beat : beat < 40.0 ? 0.8 - 0.02 * (beat - 20.0) : 0.4);
+    };
+
+    auto panFollows = [&] (std::function<double (double)> originalBeatOf)
+    {
+        for (double beat = 0.5; beat < 80.0; beat += 1.0)
+            if (std::abs (panAt (beat) - originalPan (originalBeatOf (beat))) > 1.0e-4f)
+                return false;
+
+        return true;
+    };
+
+    std::cout << "Adding sections\n";
+    SectionId a = 0, b = 0, c = 0;
+    checkUndoRoundTrip (engine, "Add Section", [&] { c = sections.addSection (8); });
+    c = sectionAt (32.0).value_or (SectionInfo {}).id;
+    check (c != 0 && sectionAt (32.0)->endBeat == 64.0, "a section starts on its bar and is 8 bars long");
+    b = sections.addSection (4);
+    a = sections.addSection (0);
+    check (sectionAt (16.0) && sectionAt (16.0)->endBeat == 32.0 && sectionAt (0.0) && sectionAt (0.0)->endBeat == 16.0,
+           "...unless the next section starts sooner");
+    check (sections.addSection (5) == 0 && sections.getSections().size() == 3, "no section starts inside another");
+    check (sectionAt (0.0)->name != sectionAt (16.0)->name && sectionAt (0.0)->colour != sectionAt (16.0)->colour,
+           "new sections get names and colors of their own");
+
+    checkUndoRoundTrip (engine, "Rename Section", [&] { sections.renameSection (b, "Chorus 1"); });
+    check (sections.getSection (b)->name == "Chorus 1", "a section can be renamed");
+    checkUndoRoundTrip (engine, "Section Color", [&] { sections.setSectionColour (b, SectionEditor::getSectionColours()[3]); });
+    check (sections.getSection (b)->colour == SectionEditor::getSectionColours()[3], "a section can be recolored");
+
+    checkUndoRoundTrip (engine, "Resize Section", [&]
+    {
+        engine.beginUndoStep ("Resize Section");
+        sections.setSectionRange (c, 32.0, 56.0);
+        sections.setSectionRange (c, 32.0, 64.0 + 8.0);   // a drag: only where it ends up counts
+    });
+    check (sections.getSection (c)->endBeat == 72.0, "a section can be resized");
+    check (! sections.setSectionRange (c, 28.0, 72.0) && sections.getSection (c)->startBeat == 32.0, "sections can't overlap");
+    engine.beginUndoStep ("Resize Section");
+    sections.setSectionRange (c, 32.0, 64.0);
+
+    // The music: 4 bars of chords in A [0, 16) and B [16, 32), a 2-second
+    // (4-beat) file from beat 30 (across the B/C boundary at 32), and pan
+    // automation running through all three.
+    regions.createChordRegion (midi, 0.0);
+    const auto chordsB = regions.createChordRegion (midi, 16.0);
+    const auto plainFile = dir.getChildFile ("Section Clip.wav");
+    writeClickWav (plainFile, 44100.0, 2.0, { 0.0 }, 0.5f);
+    regions.importAudioFiles (audio, { plainFile.getFullPathName() }, 30.0);
+    automation.setPoints (midi, automationTargets::pan, { { 0.0, 0.2f }, { 20.0, 0.8f }, { 40.0, 0.4f } });
+    pumpMessages();
+    check (regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 34.0 } }, "(the file is 4 beats long)");
+
+    std::cout << "Moving a section\n";
+    check (! sections.canMoveSectionTo (b, 40.0, false) && ! sections.canMoveSectionTo (b, 16.0, false)
+            && sections.canMoveSectionTo (b, 16.0, true) && sections.canMoveSectionTo (b, 64.0, false),
+           "a section goes between sections (not inside one, or where it is)");
+    check (! sections.moveSection (b, 40.0, false), "...and nowhere else");
+
+    checkUndoRoundTrip (engine, "Move Section", [&] { sections.moveSection (b, 64.0, false); });
+    check (sections.getSection (b)->startBeat == 48.0 && sections.getSection (b)->endBeat == 64.0
+            && sections.getSection (c)->startBeat == 16.0 && sections.getSection (c)->endBeat == 48.0
+            && sections.getSection (a)->startBeat == 0.0,
+           "moved right, it ends where it's dropped and the section after it slides left");
+    check (regions.getRegion (chordsB) && regions.getRegion (chordsB)->startBeat == 48.0
+            && regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 48.0, 64.0 } },
+           "its regions go with it");
+    check (regionStarts (audio) == std::vector<std::pair<double, double>> { { 16.0, 18.0 }, { 62.0, 64.0 } },
+           "a region across its edge is split there, and each part goes with its section");
+
+    // Pan was 0.2 at 0 rising to 0.8 at 20, then falling to 0.4 at 40: 0.68
+    // at 16 and 0.56 at 32. Each section's part keeps its shape, and the
+    // curve jumps where parts that didn't belong together now meet.
+    check (samePan ({ { 0.0, 0.2f }, { 16.0, 0.68f }, { 16.0, 0.56f }, { 24.0, 0.4f }, { 48.0, 0.4f },
+                      { 48.0, 0.68f }, { 52.0, 0.8f }, { 64.0, 0.56f }, { 64.0, 0.4f } }),
+           "automation goes with its section");
+
+    // Back the other way: B to the start of C, so the song is as it was
+    // (the split file stays split).
+    checkUndoRoundTrip (engine, "Move Section", [&] { sections.moveSection (b, 16.0, false); });
+    check (sections.getSection (b)->startBeat == 16.0 && sections.getSection (c)->startBeat == 32.0,
+           "moved left, it starts where it's dropped");
+    check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 } }
+            && regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 32.0 }, { 32.0, 34.0 } },
+           "regions go back to where they were");
+    check (panFollows ([] (double beat) { return beat; }), "so does the automation");
+
+    std::cout << "Copying a section\n";
+    checkUndoRoundTrip (engine, "Copy Section", [&] { sections.moveSection (a, 16.0, true); });
+    {
+        const auto copy = sectionAt (16.0);
+        check (sections.getSections().size() == 4 && copy && copy->id != a && copy->name == sections.getSection (a)->name
+                && copy->endBeat == 32.0 && sections.getSection (a)->startBeat == 0.0,
+               "a copy goes in where it's dropped, and the original stays");
+        check (sections.getSection (b)->startBeat == 32.0 && sections.getSection (c)->startBeat == 48.0,
+               "everything after it moves later");
+        check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 }, { 32.0, 48.0 } }
+                && regionStarts (audio) == std::vector<std::pair<double, double>> { { 46.0, 48.0 }, { 48.0, 50.0 } },
+               "its regions are copied, and later ones move");
+        check (panFollows ([] (double beat) { return beat < 16.0 ? beat : beat - 16.0; }), "automation too");
+    }
+
+    std::cout << "Deleting a section\n";
+    checkUndoRoundTrip (engine, "Delete Section", [&] { sections.deleteSection (sectionAt (16.0)->id); });
+    check (sections.getSections().size() == 3 && sections.getSection (b)->startBeat == 16.0 && sections.getSection (c)->startBeat == 32.0,
+           "deleting a section closes the gap");
+    check (regionStarts (midi) == std::vector<std::pair<double, double>> { { 0.0, 16.0 }, { 16.0, 32.0 } }
+            && regionStarts (audio) == std::vector<std::pair<double, double>> { { 30.0, 32.0 }, { 32.0, 34.0 } },
+           "...and takes its regions with it");
+    check (panFollows ([] (double beat) { return beat; }), "...and its automation");
+
+    checkUndoRoundTrip (engine, "Remove Section Marker", [&] { sections.removeSectionMarker (a); });
+    check (sections.getSections().size() == 2 && regionStarts (midi).size() == 2, "a marker can go without its music");
+    engine.undo();
+    pumpMessages();
+
+    std::cout << "Saving sections\n";
+    {
+        const auto before = sections.getSections();
+        checkSaveAndReopen (engine, dir.getChildFile ("Sections"));
+        const auto after = engine.getTracks().sections().getSections();
+        bool same = before.size() == after.size();
+
+        for (size_t i = 0; same && i < before.size(); ++i)
+            same = before[i].id == after[i].id && before[i].name == after[i].name && before[i].colour == after[i].colour
+                    && before[i].startBeat == after[i].startBeat && before[i].endBeat == after[i].endBeat;
+
+        check (same, "sections are saved with the session");
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -4992,6 +5192,9 @@ int main (int argc, char* argv[])
 
     if (runs ("tempo"))
         runTempoSection (dir);
+
+    if (runs ("sections"))
+        runSectionsSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");
