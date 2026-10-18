@@ -312,6 +312,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
     src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
     src/ui/dialogs/DeviceChangePrompt.h     src/ui/dialogs/DeviceChangePrompt.cpp
+    src/ui/dialogs/AlertDialog.h            src/ui/dialogs/AlertDialog.cpp
 
     # the Preferences window and its pages
     src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp

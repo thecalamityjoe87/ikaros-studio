@@ -2,6 +2,7 @@
 #include "engine/AudioPreview.h"
 #include "engine/FreesoundStore.h"
 #include "engine/SoundLibrary.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/library/PreviewButton.h"
 #include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
@@ -789,7 +790,6 @@ void LoopBrowser::runAction (const Item& item)
 void LoopBrowser::confirmRemove (const Item& item)
 {
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                        .withTitle ("Remove \"" + item.name + "\"?")
                        .withMessage ("The loop is deleted from this computer. You can add it from Freesound again.")
                        .withButton ("Remove")
@@ -797,7 +797,7 @@ void LoopBrowser::confirmRemove (const Item& item)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<LoopBrowser> (this), item] (int result)
+    AlertDialog::show (options, [safeThis = SafePointer<LoopBrowser> (this), item] (int result)
     {
         if (safeThis == nullptr || result != 1)
             return;
@@ -808,13 +808,11 @@ void LoopBrowser::confirmRemove (const Item& item)
             engine.getPreview().stop();
 
         if (! engine.getFreesound().removeFromLibrary (item.id))
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                              .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                              .withTitle ("Couldn't remove the loop")
-                                              .withMessage ("Check that its file isn't open elsewhere, then try again.")
-                                              .withButton ("OK")
-                                              .withAssociatedComponent (safeThis.getComponent()),
-                                          nullptr);
+            AlertDialog::show (juce::MessageBoxOptions()
+                               .withTitle ("Couldn't remove the loop")
+                               .withMessage ("Check that its file isn't open elsewhere, then try again.")
+                               .withButton ("OK")
+                               .withAssociatedComponent (safeThis.getComponent()));
     });
 }
 

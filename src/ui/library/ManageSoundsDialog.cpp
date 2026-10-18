@@ -1,5 +1,6 @@
 #include "ui/library/ManageSoundsDialog.h"
 #include "engine/PackStore.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -714,7 +715,6 @@ void ManageSoundsDialog::refresh()
 void ManageSoundsDialog::confirmRemove (const juce::String& packId, const juce::String& name)
 {
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                        .withTitle ("Remove \"" + name + "\"?")
                        .withMessage ("Its sounds and loops are deleted from this computer. Tracks that use them stay in "
                                      "your sessions and play again once you download the pack again.")
@@ -723,19 +723,17 @@ void ManageSoundsDialog::confirmRemove (const juce::String& packId, const juce::
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<ManageSoundsDialog> (this), packId] (int result)
+    AlertDialog::show (options, [safeThis = SafePointer<ManageSoundsDialog> (this), packId] (int result)
     {
         if (safeThis == nullptr || result != 1)
             return;
 
         if (! safeThis->engine.getPackStore().remove (packId))
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                              .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                              .withTitle ("Couldn't remove the pack")
-                                              .withMessage ("Wait for downloads to finish, or check that its folder isn't open elsewhere.")
-                                              .withButton ("OK")
-                                              .withAssociatedComponent (safeThis.getComponent()),
-                                          nullptr);
+            AlertDialog::show (juce::MessageBoxOptions()
+                               .withTitle ("Couldn't remove the pack")
+                               .withMessage ("Wait for downloads to finish, or check that its folder isn't open elsewhere.")
+                               .withButton ("OK")
+                               .withAssociatedComponent (safeThis.getComponent()));
     });
 }
 

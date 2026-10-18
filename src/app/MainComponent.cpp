@@ -1,6 +1,7 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/dialogs/DeviceChangePrompt.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
@@ -946,7 +947,6 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
     }
 
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                        .withTitle ("Save changes?")
                        .withMessage ("Do you want to save the changes to \"" + engine.getSessionName() + "\"?")
                        .withButton ("Save")
@@ -954,10 +954,10 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
                        .withButton ("Cancel")
                        .withAssociatedComponent (this);
 
-    // showAsync's callback gets 1 for the first button, 2 for the second, and
+    // The callback gets 1 for the first button, 2 for the second, and
     // 0 for the last one (Cancel). SafePointer guards against this component
     // being deleted while the dialog is open.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<MainComponent> (this), thenDo] (int result)
+    AlertDialog::show (options, [safeThis = SafePointer<MainComponent> (this), thenDo] (int result)
     {
         if (safeThis == nullptr)
             return;
@@ -1129,7 +1129,6 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
         }
 
         auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::WarningIcon)
                            .withTitle ("Replace session?")
                            .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
                                            + "\" already exists in " + target.getParentDirectory().getFullPathName()
@@ -1138,7 +1137,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
                            .withButton ("Cancel")
                            .withAssociatedComponent (this);
 
-        juce::AlertWindow::showAsync (options, [save, afterSave] (int result)
+        AlertDialog::show (options, [save, afterSave] (int result)
         {
             if (result == 1)
                 save();
@@ -1317,13 +1316,11 @@ void MainComponent::showRecordingReport (const RecordingReport& report)
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)
 {
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                      .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                      .withTitle (title)
-                                      .withMessage (message)
-                                      .withButton ("OK")
-                                      .withAssociatedComponent (this),
-                                  nullptr);
+    AlertDialog::show (juce::MessageBoxOptions()
+                       .withTitle (title)
+                       .withMessage (message)
+                       .withButton ("OK")
+                       .withAssociatedComponent (this));
 }
 
 } // namespace ikaros

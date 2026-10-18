@@ -1,5 +1,6 @@
 #include "ui/preferences/PreferencesPages.h"
 #include "engine/SongExporter.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -341,7 +342,6 @@ AdvancedPage::AdvancedPage (AudioEngine& e, juce::ApplicationCommandManager& com
     resetButton.onClick = [this]
     {
         auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::WarningIcon)
                            .withTitle ("Reset all preferences?")
                            .withMessage ("Every preference goes back to how it was when you first started the app. "
                                          "Your sessions, sound packs and plug-ins aren't touched.")
@@ -351,7 +351,7 @@ AdvancedPage::AdvancedPage (AudioEngine& e, juce::ApplicationCommandManager& com
 
         // The callback gets 1 for the first button. The page may be gone by
         // then (the window closed), and is replaced by onReset, so it copies what it needs first.
-        juce::AlertWindow::showAsync (options, [safeThis = SafePointer<AdvancedPage> (this)] (int result)
+        AlertDialog::show (options, [safeThis = SafePointer<AdvancedPage> (this)] (int result)
         {
             if (result != 1 || safeThis == nullptr)
                 return;
