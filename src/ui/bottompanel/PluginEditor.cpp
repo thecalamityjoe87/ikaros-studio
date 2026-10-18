@@ -20,7 +20,7 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour 
     auto doneColours = IconButton::raisedColours();
     doneColours.border = colour::border;
     doneButton.setColours (doneColours);
-    doneButton.setFont (fonts::uiSemiBold (13.0f));
+    doneButton.setFont (fonts::uiSemiBold (textSize::md));
     doneButton.setTooltip ("Close the effect settings");
     doneButton.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible (doneButton);
@@ -106,13 +106,13 @@ void PluginEditor::paint (juce::Graphics& g)
     auto header = getLocalBounds().removeFromTop (headerHeight).withTrimmedLeft (padding + 32);
 
     g.setColour (slot.enabled ? colour::text : colour::textSecondary);
-    g.setFont (fonts::uiBold (15.0f));
+    g.setFont (fonts::uiBold (textSize::xl));
     g.drawText (slot.name + (slot.enabled ? "" : " (off)"), header, juce::Justification::centredLeft, true);
 
     if (knobs.isEmpty())
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("This effect has no settings.", getLocalBounds().withTrimmedTop (headerHeight).reduced (padding),
                     juce::Justification::topLeft);
     }

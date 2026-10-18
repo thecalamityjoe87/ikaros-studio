@@ -21,7 +21,7 @@ void PianoRoll::paint (juce::Graphics& g)
     if (! region.has_value() || ! region->isMidi)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText ("Select a MIDI region to edit it here. Double-click an empty lane to create one.",
                     getLocalBounds(), juce::Justification::centred);
         return;
@@ -42,7 +42,7 @@ void PianoRoll::paintToolbar (juce::Graphics& g)
     g.fillRect (toolbarArea.removeFromBottom (1));
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText (juce::String::fromUTF8 ("Click to add a note \xc2\xb7 Drag to move \xc2\xb7 Drag the end to resize \xc2\xb7 Shift-drag to select"),
                       hintArea, juce::Justification::centredLeft, 1, 1.0f);
 
@@ -66,7 +66,7 @@ void PianoRoll::paintKeys (juce::Graphics& g)
         auto row = juce::Rectangle<float> ((float) keysArea.getX(), pitchToY (note), (float) keysArea.getWidth(), rowHeight);
         const bool down = note == previewNote;
 
-        g.setColour (down ? colour::accent : isBlackKey (note) ? colour::wellBg : juce::Colour (0xffc9d0da));
+        g.setColour (down ? colour::accent : isBlackKey (note) ? colour::wellBg : colour::textMenu);
         g.fillRect (row.reduced (0.0f, 0.5f));
 
         if (note % 12 == 0 && rowHeight >= 8.0f)
@@ -94,11 +94,11 @@ void PianoRoll::paintGrid (juce::Graphics& g)
 
         if (isBlackKey (note))
         {
-            g.setColour (juce::Colours::black.withAlpha (0.18f));
+            g.setColour (colour::tintDark.withAlpha (0.18f));
             g.fillRect (area.getX(), y, area.getWidth(), rowHeight);
         }
 
-        g.setColour (juce::Colours::white.withAlpha (note % 12 == 0 ? 0.07f : 0.035f));
+        g.setColour (colour::tintLight.withAlpha (note % 12 == 0 ? 0.07f : 0.035f));
         g.fillRect (area.getX(), y + rowHeight - 1.0f, area.getWidth(), 1.0f);
     }
 
@@ -114,7 +114,7 @@ void PianoRoll::paintGrid (juce::Graphics& g)
 
         for (double beat = first; beat - regionStart <= scrollBeats + visibleBeats(); beat += step)
         {
-            g.setColour (juce::Colours::white.withAlpha (alpha));
+            g.setColour (colour::tintLight.withAlpha (alpha));
             g.fillRect (beatToX (beat - regionStart), area.getY(), 1.0f, area.getHeight());
         }
     };
@@ -127,7 +127,7 @@ void PianoRoll::paintGrid (juce::Graphics& g)
     // Bars can differ in length: the tempo map knows where each one starts.
     if (tempo.shortestBar() * pixelsPerBeat >= 6.0)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.1f));
+        g.setColour (colour::tintLight.withAlpha (0.1f));
         tempo.forEachBar (regionStart + scrollBeats, regionStart + scrollBeats + visibleBeats(), 1, [&] (int, double barBeat)
         {
             g.fillRect (beatToX (barBeat - regionStart), area.getY(), 1.0f, area.getHeight());
@@ -139,7 +139,7 @@ void PianoRoll::paintGrid (juce::Graphics& g)
 
     if (endX < area.getRight())
     {
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.setColour (colour::tintDark.withAlpha (0.35f));
         g.fillRect (area.withLeft (endX));
     }
 
@@ -173,12 +173,12 @@ void PianoRoll::paintNotes (juce::Graphics& g)
 
         if (sel)
         {
-            g.setColour (juce::Colours::white);
+            g.setColour (colour::tintLight);
             g.drawRoundedRectangle (bounds.reduced (0.5f), corner, 1.5f);
         }
         else
         {
-            g.setColour (juce::Colours::black.withAlpha (0.35f));
+            g.setColour (colour::tintDark.withAlpha (0.35f));
             g.drawRoundedRectangle (bounds, corner, 1.0f);
         }
     }
@@ -189,7 +189,7 @@ void PianoRoll::paintNotes (juce::Graphics& g)
         auto bounds = noteBounds (gesture.newNote);
         g.setColour (colour.withAlpha (0.6f));
         g.fillRoundedRectangle (bounds, corner);
-        g.setColour (juce::Colours::white);
+        g.setColour (colour::tintLight);
         g.drawRoundedRectangle (bounds.reduced (0.5f), corner, 1.5f);
     }
 
@@ -210,7 +210,7 @@ void PianoRoll::paintVelocities (juce::Graphics& g)
     g.fillRect (velocityLabelArea.getUnion (velocityArea).removeFromTop (1));
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (10.0f));
+    g.setFont (fonts::ui (textSize::tiny));
     g.drawText ("Vel.", velocityLabelArea.reduced (4, 0), juce::Justification::centred);
 
     juce::Graphics::ScopedSaveState save (g);

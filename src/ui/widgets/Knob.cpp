@@ -61,7 +61,7 @@ void Knob::setArcColour (juce::Colour c)
 void Knob::paint (juce::Graphics& g)
 {
     g.setColour (colour::cardBg);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 12.0f);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusCard);
 
     auto r = textArea;
 
@@ -70,21 +70,21 @@ void Knob::paint (juce::Graphics& g)
         // Name and value beside the dial, centred vertically.
         r = r.withSizeKeepingCentre (r.getWidth(), 40);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (15.0f));
+        g.setFont (fonts::uiBold (textSize::xl));
         g.drawText (label, r.removeFromTop (22), juce::Justification::centredLeft, true);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::mono (14.0f));
+        g.setFont (fonts::mono (textSize::lg));
         g.drawText (valueText, r, juce::Justification::centredLeft, true);
         return;
     }
 
     g.setColour (colour::text);
-    g.setFont (fonts::uiBold (12.0f));
+    g.setFont (fonts::uiBold (textSize::sm));
     g.drawText (label, r.removeFromTop (16), juce::Justification::centred, true);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::mono (11.0f));
+    g.setFont (fonts::mono (textSize::xs));
     g.drawText (valueText, r.removeFromTop (16), juce::Justification::centred, true);
 }
 

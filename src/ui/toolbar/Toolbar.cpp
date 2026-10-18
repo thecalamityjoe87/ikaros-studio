@@ -100,10 +100,10 @@ void Toolbar::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (11.0f));
+    g.setFont (fonts::ui (textSize::xs));
     g.drawText ("Master", masterArea.withHeight (13), juce::Justification::centredLeft);
 
-    g.setFont (fonts::mono (11.0f));
+    g.setFont (fonts::mono (textSize::xs));
     auto s = statsArea;
     g.drawText (statsLine1, s.removeFromTop (s.getHeight() / 2), juce::Justification::bottomRight);
     g.drawText (statsLine2, s, juce::Justification::topRight);
@@ -113,9 +113,9 @@ void Toolbar::paint (juce::Graphics& g)
     {
         const auto badge = getRealtimeBadgeArea().toFloat();
         g.setColour (colour::meterGreen.withAlpha (0.18f));
-        g.fillRoundedRectangle (badge, 3.0f);
+        g.fillRoundedRectangle (badge, size::radiusTiny);
         g.setColour (colour::meterGreen);
-        g.setFont (fonts::mono (9.5f));
+        g.setFont (fonts::mono (textSize::badge));
         g.drawText ("RT", badge, juce::Justification::centred);
     }
 }

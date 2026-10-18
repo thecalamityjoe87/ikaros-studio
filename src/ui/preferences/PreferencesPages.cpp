@@ -310,7 +310,7 @@ public:
             {
                 auto r = juce::Rectangle<int> (0, y, getWidth(), headingHeight).withTrimmedTop (10);
                 g.setColour (colour::textSecondary);
-                g.setFont (fonts::uiSemiBold (12.5f));
+                g.setFont (fonts::uiSemiBold (textSize::smPlus));
                 g.drawText (line.name.toUpperCase(), r, juce::Justification::centredLeft);
                 y += headingHeight;
                 continue;
@@ -318,10 +318,10 @@ public:
 
             auto r = juce::Rectangle<int> (0, y, getWidth(), lineHeight);
             g.setColour (colour::text);
-            g.setFont (fonts::ui (13.5f));
+            g.setFont (fonts::ui (textSize::mdPlus));
             g.drawText (line.name, r, juce::Justification::centredLeft);
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::mono (12.5f));
+            g.setFont (fonts::mono (textSize::smPlus));
             g.drawText (line.keys, r, juce::Justification::centredRight);
             y += lineHeight;
         }

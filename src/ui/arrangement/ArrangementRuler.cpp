@@ -42,7 +42,7 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     g.setColour (colour::divider);
     g.fillRect (label.removeFromRight (1));
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
+    g.setFont (fonts::ui (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText ("TRACKS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
@@ -64,7 +64,7 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     // 2nd/4th/... bar gets a number so they don't overlap.
     const int labelStride = barStride (geo, 36.0);
     const int bottom = getHeight() - 1;
-    g.setFont (fonts::mono (11.0f));
+    g.setFont (fonts::mono (textSize::xs));
 
     forEachVisibleBar (geo, r.getWidth(), barStride (geo, 6.0), [&] (int bar, int x)
     {

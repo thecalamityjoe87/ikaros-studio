@@ -14,21 +14,21 @@ using namespace tokens;
 
 namespace
 {
-    struct Category { const char* name; juce::uint32 colour; };
+    struct Category { const char* name; juce::Colour colour; };
 
     // The tiles, in grid order. The last one spans both columns.
     const Category categories[] {
-        { "Keyboards",   0xff5aa9ff },
-        { "Drums",       0xffff8f5a },
-        { "Bass",        0xff4fd18b },
-        { "Synths",      0xffc78bff },
-        { "Guitar",      0xffffd25a },
-        { "Strings",     0xffff7aa8 },
-        { "Woodwinds",   0xff8fd9a8 },
-        { "Brass",       0xffe6b85c },
-        { "Loops",       0xffffb547 },
-        { "Audio Files", 0xffa3abb8 },
-        { "Plug-ins",    0xff6fd6d0 },
+        { "Keyboards",   colour::categoryKeys },
+        { "Drums",       colour::categoryDrums },
+        { "Bass",        colour::categoryBass },
+        { "Synths",      colour::categorySynths },
+        { "Guitar",      colour::categoryGuitar },
+        { "Strings",     colour::categoryStrings },
+        { "Woodwinds",   colour::categoryWoodwinds },
+        { "Brass",       colour::categoryBrass },
+        { "Loops",       colour::categoryLoops },
+        { "Audio Files", colour::categoryAudio },
+        { "Plug-ins",    colour::categoryPlugins },
     };
 
     constexpr int rowHeight = 34, labelHeight = 26, rowGap = 2;
@@ -61,7 +61,7 @@ public:
         auto r = getLocalBounds().toFloat().reduced (0.5f);
         const bool on = getToggleState();
 
-        g.setColour (on ? colour::selectedRow : juce::Colour (0xff1c1f25).brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
+        g.setColour (on ? colour::selectedRow : colour::tileBg.brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
         g.fillRoundedRectangle (r, size::radiusLarge);
         g.setColour (on ? iconColour : colour::borderSoft);
         g.drawRoundedRectangle (r, size::radiusLarge, 1.0f);
@@ -71,7 +71,7 @@ public:
         content.removeFromTop (5);
 
         g.setColour (colour::text);
-        g.setFont (fonts::uiSemiBold (13.0f));
+        g.setFont (fonts::uiSemiBold (textSize::md));
         g.drawText (name, content, juce::Justification::topLeft, true);
 
         if (hasKeyboardFocus (false))
@@ -124,7 +124,7 @@ public:
         if (item.kind == Item::Kind::label)
         {
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::uiBold (10.0f).withExtraKerningFactor (0.1f));
+            g.setFont (fonts::uiBold (textSize::tiny).withExtraKerningFactor (0.1f));
             g.drawText (item.name.toUpperCase(), getLocalBounds().withTrimmedLeft (2).withTrimmedTop (8),
                         juce::Justification::centredLeft);
             return;
@@ -162,13 +162,13 @@ public:
         }
 
         auto detail = active ? juce::String ("On track") : item.detail;
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         auto detailWidth = juce::jmin (content.getWidth() / 2,
                                        (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), detail)) + 4);
         g.setColour (active ? colour::accentLight : colour::textSecondary);
         g.drawText (detail, content.removeFromRight (detailWidth), juce::Justification::centredRight, true);
 
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.setColour (colour::text);
         g.drawText (item.name, content.withTrimmedRight (6), juce::Justification::centredLeft, true);
 
@@ -224,17 +224,16 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
     searchField.setTextToShowWhenEmpty ("Search sounds and loops", colour::textSecondary);
-    searchField.setFont (fonts::ui (14.0f));
+    searchField.setFont (fonts::ui (textSize::lg));
     searchField.setTitle ("Search sounds");
     searchField.setIndents (36, 9);   // room for the magnifier (see paintOverChildren)
-    searchField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     searchField.onTextChange = [this] { rebuildList(); };
     searchField.onEscapeKey = [this] { searchField.clear(); rebuildList(); };
     addAndMakeVisible (searchField);
 
     for (auto& c : categories)
     {
-        auto* tile = tiles.add (new CategoryTile (c.name, juce::Colour (c.colour)));
+        auto* tile = tiles.add (new CategoryTile (c.name, c.colour));
         tile->onClick = [this, n = juce::String (c.name)]
         {
             if (n == "Loops")
@@ -256,7 +255,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
         colours.border = colour::border;
         b->setColours (colours);
         b->setCornerRadius (6.0f);
-        b->setFont (fonts::ui (12.0f));
+        b->setFont (fonts::ui (textSize::sm));
         b->setIconSize (16.0f);
         addChildComponent (b);
     }
@@ -280,7 +279,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     auto moreColours = IconButton::raisedColours();
     moreColours.border = colour::border;
     moreSoundsButton.setColours (moreColours);
-    moreSoundsButton.setFont (fonts::uiSemiBold (13.0f));
+    moreSoundsButton.setFont (fonts::uiSemiBold (textSize::md));
     moreSoundsButton.setIconSize (16.0f);
     moreSoundsButton.setTooltip ("Download more instruments and loops");
     moreSoundsButton.onClick = [this]
@@ -694,18 +693,18 @@ void LibrarySidebar::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromRight (1));
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::uiBold (11.0f).withExtraKerningFactor (0.1f));
+    g.setFont (fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText (heading, headingArea, juce::Justification::centredLeft, true);
 
     if (selectedCategory == "Plug-ins" && searchField.isEmpty())
     {
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         g.drawText (scanText, toolsArea.withRight (scanButton.getX() - 6), juce::Justification::centredLeft, true);
     }
 
     if (rows.isEmpty())
     {
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (emptyText, listViewport.getBounds().removeFromTop (50).withTrimmedLeft (2),
                           juce::Justification::topLeft, 3, 1.0f);
     }

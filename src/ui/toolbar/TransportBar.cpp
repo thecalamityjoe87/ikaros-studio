@@ -30,7 +30,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     addAndMakeVisible (playButton);
 
     // Red dot normally; lit red with a white dot while recording.
-    recordButton.setColours ({ colour::raised, colour::record, colour::record, juce::Colours::white });
+    recordButton.setColours ({ colour::raised, colour::record, colour::record, colour::textOnColour });
     recordButton.setIconSize (16.0f);
     recordButton.setTooltip ("Record (R)");
 
@@ -43,7 +43,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
     // "1234", like a count-in: clicks before recording starts. It turns on
     // the length last chosen in the Mix menu (1 bar to begin with).
-    countInButton.setFont (fonts::monoBold (11.0f));
+    countInButton.setFont (fonts::monoBold (textSize::xs));
     countInButton.setTooltip ("Count-in: clicks before recording starts (1 or 2 bars: Mix > Count-in)");
 
     toStartButton.onClick   = [this] { engine.goToStart(); };

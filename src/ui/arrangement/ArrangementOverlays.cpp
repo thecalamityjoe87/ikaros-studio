@@ -21,7 +21,7 @@ void ArrangementView::DropZone::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat().reduced (1.0f);
 
     juce::Path outline, dashed;
-    outline.addRoundedRectangle (r, 12.0f);
+    outline.addRoundedRectangle (r, size::radiusCard);
     const float dashes[] = { 5.0f, 4.0f };
     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
 
@@ -29,7 +29,7 @@ void ArrangementView::DropZone::paint (juce::Graphics& g)
     g.fillPath (dashed);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (14.0f));
+    g.setFont (fonts::ui (textSize::lg));
     g.drawText ("Drop a sound, loop or audio file here", r, juce::Justification::centred);
 }
 
@@ -96,7 +96,7 @@ void ArrangementView::Playhead::paint (juce::Graphics& g)
     if (highlighted)
         g.fillRoundedRectangle (x - 8.0f, 0.0f, 16.0f, 14.0f, 4.5f);
     else
-        g.fillRoundedRectangle (x - 7.0f, 0.0f, 14.0f, 12.0f, 4.0f);
+        g.fillRoundedRectangle (x - 7.0f, 0.0f, 14.0f, 12.0f, size::radiusXs);
 }
 
 void ArrangementView::Playhead::timerCallback()
@@ -155,11 +155,11 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
     for (auto& ghost : ghosts)
     {
         g.setColour (ghost.colour.withAlpha (0.3f));
-        g.fillRoundedRectangle (ghost.area, 8.0f);
+        g.fillRoundedRectangle (ghost.area, size::radius);
         g.setColour (ghost.colour);
-        g.drawRoundedRectangle (ghost.area.reduced (0.75f), 8.0f, 1.5f);
+        g.drawRoundedRectangle (ghost.area.reduced (0.75f), size::radius, 1.5f);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (11.0f));
+        g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (ghost.name, ghost.area.reduced (8.0f, 3.0f).removeFromTop (14.0f),
                     juce::Justification::centredLeft, true);
     }
@@ -167,16 +167,16 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
     if (! dropArea.isEmpty())
     {
         g.setColour (colour::accent.withAlpha (0.12f));
-        g.fillRoundedRectangle (dropArea, 10.0f);
+        g.fillRoundedRectangle (dropArea, size::radiusLarge);
         g.setColour (colour::accent);
-        g.drawRoundedRectangle (dropArea.reduced (1.0f), 10.0f, 1.5f);
+        g.drawRoundedRectangle (dropArea.reduced (1.0f), size::radiusLarge, 1.5f);
         // Where a file will start. (Sounds have no position: markerX < 0.)
         const bool hasMarker = dropMarkerX >= 0.0f;
 
         if (hasMarker)
             g.fillRect (dropMarkerX - 1.0f, dropArea.getY(), 2.0f, dropArea.getHeight());
 
-        g.setFont (fonts::uiBold (13.0f));
+        g.setFont (fonts::uiBold (textSize::md));
         g.drawText (dropText, dropArea.withLeft (hasMarker ? dropMarkerX + 8.0f : dropArea.getX() + 14.0f).reduced (0.0f, 6.0f),
                     juce::Justification::topLeft, true);
     }

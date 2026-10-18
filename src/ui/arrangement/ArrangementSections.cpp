@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
+#include "ui/theme/IkarosLookAndFeel.h"
 
 namespace ikaros
 {
@@ -37,11 +38,9 @@ ArrangementView::SectionStrip::SectionStrip (ArrangementView& o) : owner (o)
     addButton.onClick = [this] { addSectionAfterLast(); };
     addAndMakeVisible (addButton);
 
-    nameField.setFont (fonts::ui (12.0f));
+    nameField.setFont (fonts::ui (textSize::sm));
     nameField.setTitle ("Section name");
-    nameField.setColour (juce::TextEditor::backgroundColourId, colour::raised);
-    nameField.setColour (juce::TextEditor::outlineColourId, colour::accent);
-    nameField.setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
+    IkarosLookAndFeel::styleInlineEditor (nameField);
     nameField.onReturnKey = [this] { commitNameField(); };
     nameField.onEscapeKey = [this] { hideNameField(); };
     nameField.onFocusLost = [this] { commitNameField(); };
@@ -137,7 +136,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
     g.setColour (colour::divider);
     g.fillRect (label.removeFromRight (1));
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
+    g.setFont (fonts::ui (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText ("SECTIONS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
@@ -154,15 +153,15 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
     auto drawBlock = [&] (const SectionInfo& s, juce::Rectangle<float> box, float alpha, bool lit)
     {
         g.setColour (s.colour.withMultipliedAlpha (alpha * (lit ? 0.55f : 0.35f)));
-        g.fillRoundedRectangle (box.reduced (0.5f, 0.0f), 4.0f);
+        g.fillRoundedRectangle (box.reduced (0.5f, 0.0f), size::radiusXs);
         g.setColour (s.colour.withMultipliedAlpha (alpha));
-        g.drawRoundedRectangle (box.reduced (1.0f, 0.5f), 4.0f, lit ? 1.5f : 1.0f);
+        g.drawRoundedRectangle (box.reduced (1.0f, 0.5f), size::radiusXs, lit ? 1.5f : 1.0f);
 
         // A stripe down the left edge, like a flag at the bar where it starts.
         g.fillRect (box.getX() + 1.0f, box.getY() + 1.0f, 3.0f, box.getHeight() - 2.0f);
 
         g.setColour (colour::text.withMultipliedAlpha (alpha));
-        g.setFont (lit ? fonts::uiSemiBold (12.0f) : fonts::ui (12.0f));
+        g.setFont (lit ? fonts::uiSemiBold (textSize::sm) : fonts::ui (textSize::sm));
         g.drawFittedText (s.name, box.withTrimmedLeft (9.0f).withTrimmedRight (4.0f).toNearestInt(),
                           juce::Justification::centredLeft, 1, 1.0f);
     };
@@ -194,7 +193,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
         ghost.endBeat = drag->ghostStart + ghost.lengthBeats();
         ghost.startBeat = drag->ghostStart;
         g.setColour (colour::windowBg);   // so the blocks under it don't show through
-        g.fillRoundedRectangle (blockBounds (ghost), 4.0f);
+        g.fillRoundedRectangle (blockBounds (ghost), size::radiusXs);
         drawBlock (ghost, blockBounds (ghost), 0.85f, true);
 
         if (drag->target.has_value())
@@ -209,7 +208,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
 
             if (drag->copy)
             {
-                g.setFont (fonts::uiSemiBold (11.0f));
+                g.setFont (fonts::uiSemiBold (textSize::xs));
                 g.drawText ("+ Copy", juce::Rectangle<float> (x + 5.0f, 0.0f, 60.0f, (float) getHeight() - 1.0f),
                             juce::Justification::centredLeft);
             }
@@ -516,7 +515,7 @@ juce::PopupMenu ArrangementView::SectionStrip::createColourMenu (SectionId id)
         // A small rounded swatch beside each name.
         auto swatch = std::make_unique<juce::DrawablePath>();
         juce::Path shape;
-        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, 3.0f);
+        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, size::radiusTiny);
         swatch->setPath (shape);
         swatch->setFill (c);
 

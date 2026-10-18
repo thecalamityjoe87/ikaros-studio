@@ -27,14 +27,14 @@ EqView::EqView (AudioEngine& e) : engine (e)
     auto colours = IconButton::raisedColours();
     colours.border = colour::border;
     powerButton.setColours (colours);
-    powerButton.setFont (fonts::uiSemiBold (13.0f));
+    powerButton.setFont (fonts::uiSemiBold (textSize::md));
     powerButton.setIconSize (14.0f);
     powerButton.setTooltip ("Turn the EQ on or off, to hear the difference");
     powerButton.onClick = [this] { engine.getTracks().eq().setEnabled (target, ! settings.enabled); };
     addAndMakeVisible (powerButton);
 
     resetButton.setColours (colours);
-    resetButton.setFont (fonts::uiSemiBold (13.0f));
+    resetButton.setFont (fonts::uiSemiBold (textSize::md));
     resetButton.setTooltip ("Put every band back to 0 dB");
     resetButton.onClick = [this] { engine.getTracks().eq().reset (target); };
     addAndMakeVisible (resetButton);
@@ -214,13 +214,13 @@ void EqView::paint (juce::Graphics& g)
     g.setColour (colour::wellBg);
     g.fillRoundedRectangle (graphArea.toFloat(), size::radius);
 
-    g.setFont (fonts::mono (10.0f));
+    g.setFont (fonts::mono (textSize::tiny));
 
     for (float hz : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
     {
         const auto x = frequencyToX (hz);
         const bool labelled = hz == 100.0f || hz == 1000.0f || hz == 10000.0f;
-        g.setColour (juce::Colours::white.withAlpha (labelled ? 0.08f : 0.04f));
+        g.setColour (colour::tintLight.withAlpha (labelled ? 0.08f : 0.04f));
         g.fillRect (x, (float) graphArea.getY(), 1.0f, (float) graphArea.getHeight());
 
         if (labelled)
@@ -234,7 +234,7 @@ void EqView::paint (juce::Graphics& g)
     for (float db : { -12.0f, 0.0f, 12.0f })
     {
         const auto y = gainToY (db);
-        g.setColour (juce::Colours::white.withAlpha (db == 0.0f ? 0.12f : 0.05f));
+        g.setColour (colour::tintLight.withAlpha (db == 0.0f ? 0.12f : 0.05f));
         g.fillRect ((float) graphArea.getX(), y, (float) graphArea.getWidth(), 1.0f);
         g.setColour (colour::textSecondary);
         g.drawText ((db > 0.0f ? "+" : "") + juce::String ((int) db) + " dB",
@@ -245,7 +245,7 @@ void EqView::paint (juce::Graphics& g)
     if (target == 0)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText ("Select a track to EQ it", graphArea, juce::Justification::centred);
         return;
     }
@@ -295,7 +295,7 @@ void EqView::paint (juce::Graphics& g)
         }
 
         g.setColour (colour::textOnAccent);
-        g.setFont (fonts::uiBold (10.0f));
+        g.setFont (fonts::uiBold (textSize::tiny));
         g.drawText (juce::String (b + 1), circle, juce::Justification::centred);
     }
 
@@ -312,11 +312,11 @@ void EqView::paint (juce::Graphics& g)
         r.removeFromLeft (6);
 
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (band.name, r.removeFromTop (readoutHeight / 2), juce::Justification::bottomLeft, true);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         const auto gain = (band.gainDb > 0.05f ? "+" : "") + juce::String (band.gainDb, 1) + " dB";
         g.drawText (describeFrequency (band.frequencyHz) + "  " + gain + "  Q " + juce::String (band.q, 1),
                     r, juce::Justification::topLeft, true);

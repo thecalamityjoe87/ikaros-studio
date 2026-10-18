@@ -12,13 +12,10 @@ LcdDisplay::LcdDisplay()
 {
     setTitle ("Playhead position and session settings");
 
-    bpmLabel.setFont (fonts::monoBold (15.0f));
+    bpmLabel.setFont (fonts::monoBold (textSize::xl));
     bpmLabel.setJustificationType (juce::Justification::centredLeft);
     bpmLabel.setBorderSize ({ 0, 0, 0, 0 });
     bpmLabel.setColour (juce::Label::textColourId, colour::text);
-    bpmLabel.setColour (juce::Label::textWhenEditingColourId, colour::text);
-    bpmLabel.setColour (juce::Label::backgroundWhenEditingColourId, colour::raised);
-    bpmLabel.setColour (juce::Label::outlineWhenEditingColourId, colour::accent);
     bpmLabel.setEditable (true, true, false);   // single click edits, losing focus commits
     bpmLabel.setTitle ("Tempo in BPM");
     bpmLabel.setTooltip ("Tempo at the playhead (click to type, or scroll). Tempo changes are in the tempo lane.");
@@ -36,7 +33,7 @@ LcdDisplay::LcdDisplay()
 
     timeSigButton.setColours ({ juce::Colours::transparentBlack, colour::text,
                                 juce::Colours::transparentBlack, colour::text });
-    timeSigButton.setFont (fonts::monoBold (15.0f));
+    timeSigButton.setFont (fonts::monoBold (textSize::xl));
     timeSigButton.setText ("4/4");
     timeSigButton.setCornerRadius (4.0f);
     timeSigButton.setTooltip ("Time signature at the playhead (click to change)");
@@ -45,7 +42,7 @@ LcdDisplay::LcdDisplay()
 
     keyButton.setColours ({ juce::Colours::transparentBlack, colour::text,
                             juce::Colours::transparentBlack, colour::text });
-    keyButton.setFont (fonts::monoBold (15.0f));
+    keyButton.setFont (fonts::monoBold (textSize::xl));
     keyButton.setText (keyText);
     keyButton.setCornerRadius (4.0f);
     keyButton.setTooltip ("Key (click to change)");
@@ -94,7 +91,7 @@ void LcdDisplay::setState (const TransportState& s, const juce::String& key)
 void LcdDisplay::paintCaption (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& text)
 {
     g.setColour (colour::lcdLabel);
-    g.setFont (fonts::mono (9.0f).withExtraKerningFactor (0.1f));
+    g.setFont (fonts::mono (textSize::caption).withExtraKerningFactor (0.1f));
     g.drawText (text, area.removeFromBottom (12), juce::Justification::topLeft);
 }
 
@@ -104,7 +101,7 @@ void LcdDisplay::paint (juce::Graphics& g)
     g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusLarge);
 
     g.setColour (colour::accent);
-    g.setFont (fonts::monoBold (22.0f));
+    g.setFont (fonts::monoBold (textSize::lcd));
     g.drawText (positionText, positionArea.withTrimmedBottom (12), juce::Justification::bottomLeft);
     paintCaption (g, positionArea, juce::String::fromUTF8 ("BAR \xc2\xb7 BEAT"));
 

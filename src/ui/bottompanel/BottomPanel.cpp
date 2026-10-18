@@ -51,7 +51,7 @@ public:
         auto colours = IconButton::raisedColours();
         colours.border = colour::border;
         openWindowButton.setColours (colours);
-        openWindowButton.setFont (fonts::uiSemiBold (13.0f));
+        openWindowButton.setFont (fonts::uiSemiBold (textSize::md));
         openWindowButton.setIconSize (16.0f);
         openWindowButton.onClick = [this]
         {
@@ -61,7 +61,7 @@ public:
         addChildComponent (openWindowButton);
 
         downloadButton.setColours (IconButton::accentColours());
-        downloadButton.setFont (fonts::uiSemiBold (13.0f));
+        downloadButton.setFont (fonts::uiSemiBold (textSize::md));
         downloadButton.onClick = [this]
         {
             if (instrument.has_value() && onDownloadPack)
@@ -162,15 +162,15 @@ public:
 
         auto area = keyboard.getBounds().toFloat();
         g.setColour (colour::toolbarBg.withAlpha (0.82f));
-        g.fillRoundedRectangle (area, 8.0f);
+        g.fillRoundedRectangle (area, size::radius);
 
         const auto dots = juce::String ("...").substring (0, 1 + (loadingTicks / 10) % 3);
         g.setColour (colour::text);
-        g.setFont (fonts::uiSemiBold (15.0f));
+        g.setFont (fonts::uiSemiBold (textSize::xl));
         g.drawText ("Loading " + (soundName.isNotEmpty() ? soundName : juce::String ("sound")) + dots,
                     area.removeFromTop (area.getHeight() * 0.55f), juce::Justification::centredBottom);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("Big sounds can take a little while. You can play as soon as this goes away.",
                     area, juce::Justification::centredTop);
     }
@@ -181,17 +181,17 @@ public:
         {
             auto r = cardArea;
             g.setColour (colour::cardBg);
-            g.fillRoundedRectangle (r.toFloat(), 12.0f);
+            g.fillRoundedRectangle (r.toFloat(), size::radiusCard);
 
             auto text = r.reduced (20, 16);
             const auto name = ! instrument.has_value() ? juce::String ("No instrument")
                             : instrument->isThirdParty ? instrument->name
                                                        : soundName;   // e.g. "Soft Piano" rather than "Sampler"
             g.setColour (colour::text);
-            g.setFont (fonts::uiBold (15.0f));
+            g.setFont (fonts::uiBold (textSize::xl));
             g.drawText (name, text.removeFromTop (24), juce::Justification::centredLeft, true);
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (13.0f));
+            g.setFont (fonts::ui (textSize::md));
 
             juce::String message;
 
@@ -220,14 +220,14 @@ public:
         if (isAudioTrack)
         {
             g.setColour (colour::cardBg);
-            g.fillRoundedRectangle (cardArea.toFloat(), 12.0f);
+            g.fillRoundedRectangle (cardArea.toFloat(), size::radiusCard);
 
             auto text = cardArea.reduced (20, 16);
             g.setColour (colour::text);
-            g.setFont (fonts::uiBold (15.0f));
+            g.setFont (fonts::uiBold (textSize::xl));
             g.drawText ("Audio track", text.removeFromTop (24), juce::Justification::centredLeft);
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (13.0f));
+            g.setFont (fonts::ui (textSize::md));
             g.drawFittedText ("Choose the input and monitoring under Recording on the left, and shape the sound "
                               "with Plug-ins. Press R or the Record button to record.",
                               text, juce::Justification::topLeft, 3, 1.0f);
@@ -241,11 +241,11 @@ public:
             r.reduce (12, 10);
 
             g.setColour (colour::text);
-            g.setFont (fonts::uiBold (13.0f));
+            g.setFont (fonts::uiBold (textSize::md));
             g.drawText ("Details", r.removeFromTop (20), juce::Justification::centredLeft);
 
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (13.0f));
+            g.setFont (fonts::ui (textSize::md));
             auto midi = details.midiInputs.isEmpty() ? juce::String ("No MIDI keyboard connected")
                                                      : details.midiInputs.joinIntoString (", ");
             g.drawText ("Plugin: " + details.pluginName, r.removeFromTop (20), juce::Justification::centredLeft, true);
@@ -353,19 +353,19 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.setColour (colour::cardBg);
-        g.fillRoundedRectangle (cardArea.toFloat(), 12.0f);
+        g.fillRoundedRectangle (cardArea.toFloat(), size::radiusCard);
 
         auto text = cardArea.reduced (20, 16);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (15.0f));
+        g.setFont (fonts::uiBold (textSize::xl));
         g.drawText ("Master", text.removeFromTop (24), juce::Justification::centredLeft);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Everything you hear, mixed together. Effects under Plug-ins on the left work on the "
                           "whole mix, and the EQ tab shapes its tone.",
                           text.withTrimmedBottom (32), juce::Justification::topLeft, 3, 1.0f);
 
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         g.drawText ("Level", meterLabelArea, juce::Justification::centredLeft);
     }
 
@@ -427,7 +427,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     {
         b->setColours (tabColours);
         b->setCornerRadius (segmentRadius);
-        b->setFont (fonts::uiBold (13.0f));
+        b->setFont (fonts::uiBold (textSize::md));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
         b->onClick = [this, index] { setTab ((Tab) index); if (onViewStateChanged) onViewStateChanged(); };
         addAndMakeVisible (b);
@@ -439,7 +439,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     {
         b->setColours (tabColours);
         b->setCornerRadius (segmentRadius);
-        b->setFont (fonts::uiBold (13.0f));
+        b->setFont (fonts::uiBold (textSize::md));
         b->setRadioGroupId (2);
         addAndMakeVisible (b);
     }
@@ -485,7 +485,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     auto mixerColours = IconButton::raisedColours();
     mixerColours.border = colour::border;
     mixerButton.setColours (mixerColours);
-    mixerButton.setFont (fonts::ui (13.0f));
+    mixerButton.setFont (fonts::ui (textSize::md));
     mixerButton.setTooltip ("Every track's fader at once");
     mixerButton.onClick = [this] { setMixerShown (! mixerShown); if (onViewStateChanged) onViewStateChanged(); };
     addAndMakeVisible (mixerButton);
@@ -495,7 +495,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     detailsColours.backgroundOn = colour::raised;
     detailsColours.foregroundOn = colour::text;
     detailsButton.setColours (detailsColours);
-    detailsButton.setFont (fonts::ui (13.0f));
+    detailsButton.setFont (fonts::ui (textSize::md));
     detailsButton.onClick = [this]
     {
         setDetailsVisible (! detailsVisible);
@@ -835,12 +835,12 @@ void BottomPanel::paint (juce::Graphics& g)
     auto drawTitle = [&] (const juce::String& title, const juce::String& note)
     {
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (14.0f));
+        g.setFont (fonts::uiBold (textSize::lg));
         auto titleWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), title));
         g.drawText (title, r.removeFromLeft (titleWidth + 2), juce::Justification::centredLeft);
         r.removeFromLeft (8);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText (note, r, juce::Justification::centredLeft, true);
     };
 
@@ -856,7 +856,7 @@ void BottomPanel::paint (juce::Graphics& g)
             if (track.has_value())
             {
                 g.setColour (track->colour);
-                g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), 3.0f);
+                g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), size::radiusTiny);
                 r.removeFromLeft (8);
             }
 
@@ -865,7 +865,7 @@ void BottomPanel::paint (juce::Graphics& g)
         else
         {
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (14.0f));
+            g.setFont (fonts::ui (textSize::lg));
             g.drawText ("No region selected", r, juce::Justification::centredLeft);
         }
     }
@@ -876,23 +876,23 @@ void BottomPanel::paint (juce::Graphics& g)
     else if (track.has_value())
     {
         g.setColour (track->colour);
-        g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), 3.0f);
+        g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), size::radiusTiny);
         r.removeFromLeft (8);
 
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (14.0f));
+        g.setFont (fonts::uiBold (textSize::lg));
         auto nameWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), track->name));
         g.drawText (track->name, r.removeFromLeft (nameWidth + 2), juce::Justification::centredLeft);
         r.removeFromLeft (8);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText (track->soundName, r, juce::Justification::centredLeft, true);
     }
     else
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText ("No track selected", r, juce::Justification::centredLeft);
     }
 

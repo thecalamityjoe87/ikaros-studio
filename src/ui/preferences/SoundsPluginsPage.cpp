@@ -68,8 +68,6 @@ public:
 
         listBox.setModel (this);
         listBox.setRowHeight (28);
-        listBox.setColour (juce::ListBox::backgroundColourId, colour::wellBg);
-        listBox.setColour (juce::ListBox::outlineColourId, colour::borderSoft);
         listBox.setOutlineThickness (1);
         listBox.setTitle ("Extra plug-in folders");
         addAndMakeVisible (listBox);
@@ -92,7 +90,7 @@ public:
         if (folders.isEmpty())
         {
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (13.0f));
+            g.setFont (fonts::ui (textSize::md));
             g.drawText ("None added", listBox.getBounds().reduced (10, 0).withHeight (28), juce::Justification::centredLeft);
         }
     }
@@ -130,7 +128,7 @@ private:
         }
 
         g.setColour (colour::text);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (folders[row], 10, 0, width - 20, height, juce::Justification::centredLeft, true);
     }
 

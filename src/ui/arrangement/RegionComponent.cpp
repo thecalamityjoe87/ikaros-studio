@@ -28,7 +28,7 @@ RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
 
     // The rename field: hidden until startRenaming(). Return keeps the new
     // name, Escape cancels, clicking elsewhere keeps it.
-    nameEditor.setFont (fonts::uiBold (12.0f));
+    nameEditor.setFont (fonts::uiBold (textSize::sm));
     nameEditor.setIndents (6, 2);
     nameEditor.setJustification (juce::Justification::centredLeft);
     nameEditor.setTitle ("Region name");
@@ -109,7 +109,7 @@ juce::Rectangle<int> RegionComponent::getTakeBadgeBounds() const
         return {};
 
     const bool full = getWidth() >= fullTakeBadgeMinWidth;
-    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (10.0f), takeBadgeText (info, full));
+    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (textSize::tiny), takeBadgeText (info, full));
     const int width = textWidth + (full ? 22 : 12);   // room for the arrow on the full one
     return { 6, 3, width, stripHeight - 6 };
 }
@@ -224,7 +224,7 @@ void RegionComponent::paint (juce::Graphics& g)
             nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
 
         g.setColour (colour::regionStripText (colour));
-        g.setFont (fonts::uiBold (11.0f));
+        g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
         if (! badge.isEmpty())
@@ -235,7 +235,7 @@ void RegionComponent::paint (juce::Graphics& g)
 
             auto text = badge.reduced (6.0f, 0.0f);
             g.setColour (colour::regionStripText (colour));
-            g.setFont (fonts::uiBold (10.0f));
+            g.setFont (fonts::uiBold (textSize::tiny));
 
             if (full)
             {
@@ -284,7 +284,7 @@ void RegionComponent::paint (juce::Graphics& g)
         {
             const bool active = hoveringTrimHandle || (trimPreview.has_value() && ! loopPreview);
 
-            g.setColour (juce::Colours::black.withAlpha (active ? 0.3f : 0.15f));
+            g.setColour (colour::tintDark.withAlpha (active ? 0.3f : 0.15f));
             g.fillRect (trimHandle);
 
             // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.

@@ -168,23 +168,23 @@ public:
     {
         auto r = getLocalBounds().toFloat();
         g.setColour (selected ? colour::selectedRow : colour::cardBg);
-        g.fillRoundedRectangle (r, 12.0f);
+        g.fillRoundedRectangle (r, size::radiusCard);
 
         // Coloured top edge, as in the design (inset 3px shadow).
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (r, 12.0f);
+        shape.addRoundedRectangle (r, size::radiusCard);
         g.reduceClipRegion (shape);
         g.setColour (colour);
         g.fillRect (r.removeFromTop (3.0f));
 
         auto area = getLocalBounds().reduced (10);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (13.0f));
+        g.setFont (fonts::uiBold (textSize::md));
         g.drawText (name, area.removeFromTop (18), juce::Justification::centred, true);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::mono (12.0f));
+        g.setFont (fonts::mono (textSize::sm));
         g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
 
         // Each knob's caption: its name, and its setting underneath.
@@ -197,10 +197,10 @@ public:
         {
             auto caption = captionAreas[(size_t) i];
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (11.0f));
+            g.setFont (fonts::ui (textSize::xs));
             g.drawText (names[i], caption.removeFromTop (14), justification);
             g.setColour (colour::text);
-            g.setFont (fonts::mono (12.0f));
+            g.setFont (fonts::mono (textSize::sm));
             g.drawText (values[i], caption, justification);
         }
 
@@ -316,23 +316,23 @@ public:
     {
         auto r = getLocalBounds().toFloat();
         g.setColour (colour::cardBg);
-        g.fillRoundedRectangle (r, 12.0f);
+        g.fillRoundedRectangle (r, size::radiusCard);
 
         // An accent top edge, like the track strips' coloured one.
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (r, 12.0f);
+        shape.addRoundedRectangle (r, size::radiusCard);
         g.reduceClipRegion (shape);
         g.setColour (colour::accent);
         g.fillRect (r.removeFromTop (3.0f));
 
         auto area = getLocalBounds().reduced (10);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (13.0f));
+        g.setFont (fonts::uiBold (textSize::md));
         g.drawText ("Master", area.removeFromTop (18), juce::Justification::centred, true);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::mono (12.0f));
+        g.setFont (fonts::mono (textSize::sm));
         g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
     }
 

@@ -30,6 +30,9 @@ IkarosLookAndFeel::IkarosLookAndFeel()
     setColour (juce::TextButton::textColourOnId, colour::textOnAccent);
 
     setColour (juce::Label::textColourId, colour::text);
+    setColour (juce::Label::textWhenEditingColourId, colour::text);
+    setColour (juce::Label::backgroundWhenEditingColourId, colour::raised);
+    setColour (juce::Label::outlineWhenEditingColourId, colour::accent);
 
     setColour (juce::Slider::trackColourId, colour::accent);
     setColour (juce::Slider::backgroundColourId, colour::controlFill);
@@ -59,6 +62,7 @@ IkarosLookAndFeel::IkarosLookAndFeel()
     setColour (juce::ComboBox::textColourId, colour::text);
     setColour (juce::ComboBox::arrowColourId, colour::textSecondary);
     setColour (juce::ListBox::backgroundColourId, colour::wellBg);
+    setColour (juce::ListBox::outlineColourId, colour::borderSoft);
     setColour (juce::ToggleButton::textColourId, colour::text);
     setColour (juce::ToggleButton::tickColourId, colour::accent);
     setColour (juce::AlertWindow::backgroundColourId, colour::toolbarBg);
@@ -82,7 +86,7 @@ juce::Typeface::Ptr IkarosLookAndFeel::getTypefaceForFont (const juce::Font& f)
 
 juce::Font IkarosLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonHeight)
 {
-    return fonts::uiSemiBold (juce::jmin (14.0f, (float) buttonHeight * 0.45f));
+    return fonts::uiSemiBold (juce::jmin (textSize::lg, (float) buttonHeight * 0.45f));
 }
 
 juce::Font IkarosLookAndFeel::getLabelFont (juce::Label& l)
@@ -92,7 +96,7 @@ juce::Font IkarosLookAndFeel::getLabelFont (juce::Label& l)
 
 juce::Font IkarosLookAndFeel::getPopupMenuFont()
 {
-    return fonts::ui (14.0f);
+    return fonts::ui (textSize::lg);
 }
 
 void IkarosLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardHeight,
@@ -106,10 +110,19 @@ void IkarosLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, boo
 
 juce::Font IkarosLookAndFeel::getMenuBarFont (juce::MenuBarComponent&, int, const juce::String&)
 {
-    return fonts::ui (13.0f);
+    return fonts::ui (textSize::md);
 }
 
 //==============================================================================
+void IkarosLookAndFeel::styleInlineEditor (juce::TextEditor& editor)
+{
+    // Colours set on the component itself win over the LookAndFeel's defaults
+    // (findColour checks the component first, then its parents, then the L&F).
+    editor.setColour (juce::TextEditor::backgroundColourId, colour::raised);
+    editor.setColour (juce::TextEditor::outlineColourId, colour::accent);
+    editor.setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
+}
+
 void IkarosLookAndFeel::drawFocusRing (juce::Graphics& g, juce::Rectangle<float> bounds, float cornerRadius)
 {
     g.setColour (colour::accent);
@@ -153,11 +166,11 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         // Mixer fader: dark slot with a light rectangular cap.
         auto slot = bounds.withSizeKeepingCentre (6.0f, bounds.getHeight());
         g.setColour (colour::wellBg);
-        g.fillRoundedRectangle (slot, 3.0f);
+        g.fillRoundedRectangle (slot, size::radiusTiny);
 
         auto cap = juce::Rectangle<float> (26.0f, 14.0f).withCentre ({ slot.getCentreX(), sliderPos });
-        g.setColour (automated ? colour::accent : juce::Colour (0xffc9d0da));
-        g.fillRoundedRectangle (cap, 4.0f);
+        g.setColour (automated ? colour::accent : colour::textMenu);
+        g.fillRoundedRectangle (cap, size::radiusXs);
         g.setColour (colour::lcdLabel);
         g.fillRect (cap.removeFromBottom (2.0f).reduced (3.0f, 0.0f));
     }
@@ -166,10 +179,10 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         // Track header volume: thin track, accent fill, round thumb.
         auto track = bounds.withSizeKeepingCentre (bounds.getWidth(), 4.0f);
         g.setColour (colour::controlFill);
-        g.fillRoundedRectangle (track, 2.0f);
+        g.fillRoundedRectangle (track, size::radiusHair);
 
         g.setColour (trackColour);
-        g.fillRoundedRectangle (track.withRight (sliderPos), 2.0f);
+        g.fillRoundedRectangle (track.withRight (sliderPos), size::radiusHair);
 
         auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ sliderPos, track.getCentreY() });
         g.setColour (automated ? colour::accent : colour::text);
@@ -177,7 +190,7 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
     }
 
     if (s.hasKeyboardFocus (false))
-        drawFocusRing (g, bounds.expanded (2.0f), 4.0f);
+        drawFocusRing (g, bounds.expanded (2.0f), size::radiusXs);
 }
 
 void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
@@ -261,7 +274,7 @@ void IkarosLookAndFeel::drawMenuBarItem (juce::Graphics& g, int w, int h, int, c
     }
 
     g.setColour (isMenuOpen ? colour::text : colour::textMenu);
-    g.setFont (fonts::ui (13.0f));
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (text, r.toNearestInt(), juce::Justification::centred, 1);
 }
 
@@ -288,13 +301,18 @@ void IkarosLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Graph
                                                   const juce::Path& path, juce::Image&)
 {
     // A soft shadow, then the popover body in the toolbar colour with a border.
-    juce::DropShadow (juce::Colours::black.withAlpha (0.5f), 14, { 0, 4 }).drawForPath (g, path);
+    shadow::popover.drawForPath (g, path);
 
     g.setColour (colour::toolbarBg);
     g.fillPath (path);
 
     g.setColour (colour::border);
     g.strokePath (path, juce::PathStrokeType (1.0f));
+}
+
+float IkarosLookAndFeel::getCallOutBoxCornerSize (const juce::CallOutBox&)
+{
+    return size::radiusLarge;
 }
 
 //==============================================================================
@@ -315,6 +333,11 @@ void IkarosLookAndFeel::drawTextEditorOutline (juce::Graphics& g, int w, int h, 
 }
 
 //==============================================================================
+int IkarosLookAndFeel::getDefaultScrollbarWidth()
+{
+    return size::scrollbarWidth;
+}
+
 void IkarosLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int w, int h,
                                        bool vertical, int thumbStart, int thumbSize, bool over, bool down)
 {
@@ -322,7 +345,7 @@ void IkarosLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int 
                           : juce::Rectangle<int> (thumbStart, y, thumbSize, h);
 
     g.setColour (colour::borderStrong.brighter (down ? 0.3f : (over ? 0.15f : 0.0f)));
-    g.fillRoundedRectangle (thumb.toFloat().reduced (2.5f), 3.0f);
+    g.fillRoundedRectangle (thumb.toFloat().reduced (2.5f), size::radiusTiny);
 }
 
 } // namespace ikaros

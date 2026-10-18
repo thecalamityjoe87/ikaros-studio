@@ -55,7 +55,7 @@ public:
 
     // Popovers (CallOutBox), e.g. the effect settings
     void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics&, const juce::Path&, juce::Image&) override;
-    float getCallOutBoxCornerSize (const juce::CallOutBox&) override   { return 10.0f; }
+    float getCallOutBoxCornerSize (const juce::CallOutBox&) override;
 
     // Text fields
     void fillTextEditorBackground (juce::Graphics&, int width, int height, juce::TextEditor&) override;
@@ -65,7 +65,11 @@ public:
     void drawScrollbar (juce::Graphics&, juce::ScrollBar&, int x, int y, int width, int height,
                         bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
                         bool isMouseOver, bool isMouseDown) override;
-    int getDefaultScrollbarWidth() override    { return 10; }
+    int getDefaultScrollbarWidth() override;
+
+    /** Styles a text field that edits something in place (a section name,
+        a tempo value): raised fill with an accent outline. */
+    static void styleInlineEditor (juce::TextEditor&);
 
     /** Shared keyboard-focus ring, used by our custom components too. */
     static void drawFocusRing (juce::Graphics&, juce::Rectangle<float> bounds, float cornerRadius);

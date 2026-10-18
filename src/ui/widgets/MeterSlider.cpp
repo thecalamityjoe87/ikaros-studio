@@ -53,7 +53,7 @@ void MeterSlider::paint (juce::Graphics& g)
     g.fillEllipse (thumb);
 
     if (hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().expanded (2.0f), 4.0f);
+        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().expanded (2.0f), size::radiusXs);
 }
 
 } // namespace ikaros

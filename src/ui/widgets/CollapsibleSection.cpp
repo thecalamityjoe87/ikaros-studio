@@ -38,11 +38,11 @@ public:
                      content.removeFromRight (16.0f), colour::textSecondary, 16.0f, 2.0f);
 
         g.setColour (colour::text);
-        g.setFont (fonts::uiSemiBold (13.0f));
+        g.setFont (fonts::uiSemiBold (textSize::md));
         g.drawText (getName(), content, juce::Justification::centredLeft, true);
 
         if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 4.0f);
+            IkarosLookAndFeel::drawFocusRing (g, r, size::radiusXs);
     }
 };
 

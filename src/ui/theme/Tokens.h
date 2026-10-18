@@ -1,15 +1,68 @@
 #pragma once
 
-// Design tokens: every colour and size the UI uses comes from here, so the look
-// can be tuned in one place. `inline constexpr` (C++17) lets us define constants
-// in a header without multiple-definition link errors.
+// Design tokens: every colour, font size, corner radius and shared dimension
+// the UI uses comes from here, so the look can be tuned (or a whole alternate
+// theme tried) in one place without touching layout code.
+//
+// `inline` variables (C++17) let us define constants in a header without
+// multiple-definition link errors: every .cpp that includes this file sees the
+// same single object. juce::Colour isn't a literal type, so colours are
+// `inline const`; plain numbers can be `inline constexpr`.
 
 #include <juce_graphics/juce_graphics.h>
 
 namespace ikaros::tokens
 {
 
+// ------------------------------------------------------------------ palette
+// The Milestone 7 makeover palette. These are the target values; the role
+// colours in `colour` below are moved onto them phase by phase, and once every
+// role points here the old hex values go away.
+namespace palette
+{
+    inline const juce::Colour background      { 0xff15181d };
+    inline const juce::Colour panel           { 0xff1b1e24 };
+    inline const juce::Colour card            { 0xff232831 };
+    inline const juce::Colour button          { 0xff262b34 };
+    inline const juce::Colour buttonBorder    { 0xff323844 };
+    inline const juce::Colour line            { 0xff2a2f38 };
+    inline const juce::Colour lineSoft        { 0xff252a31 };
+
+    inline const juce::Colour text            { 0xffe8eaee };
+    inline const juce::Colour textMuted       { 0xffa2a9b4 };
+    inline const juce::Colour dim             { 0xff3a404b };
+    inline const juce::Colour disabled        { 0xff6b7280 };
+
+    inline const juce::Colour accent          { 0xffffaa2b };   // only ever means "on" (see Phase 2)
+    inline const juce::Colour onAccent        { 0xff1d1405 };
+    inline const juce::Colour record          { 0xfff05a4f };
+    inline const juce::Colour meter           { 0xff3fcf73 };
+
+    inline const juce::Colour selectedBg      { 0xff2c323d };
+    inline const juce::Colour selectedOutline { 0xffe8eaee };
+    inline const juce::Colour selectedInset   { 0xff4a5260 };   // 1px inset outline on the selected track header
+    inline const juce::Colour neutralActive   { 0xff323844 };   // "pressed" fill for non-accent toggles, tabs, segments
+    inline const juce::Colour field           { 0xff1c2027 };   // clickable fields in the transport readout
+}
+
+// Instrument family colours: tracks, regions, library categories and the
+// Smart Controls arcs are coloured by the family of the track's sound.
+namespace family
+{
+    inline const juce::Colour drums     { 0xffe8c547 };
+    inline const juce::Colour audio     { 0xff4b93e6 };
+    inline const juce::Colour strings   { 0xff33b56b };
+    inline const juce::Colour bass      { 0xff9b7bea };
+    inline const juce::Colour keys      { 0xff5bc0d9 };
+    inline const juce::Colour synths    { 0xffe070b0 };
+    inline const juce::Colour guitar    { 0xffe08a4f };
+    inline const juce::Colour woodwinds { 0xff7cc4a0 };
+    inline const juce::Colour brass     { 0xffd6a35a };
+    inline const juce::Colour loops     { 0xffa2a9b4 };
+}
+
 // ------------------------------------------------------------------ colours
+// Colours by role. Code should use these, not the palette directly.
 namespace colour
 {
     inline const juce::Colour windowBg       { 0xff121418 };
@@ -21,6 +74,8 @@ namespace colour
     inline const juce::Colour raised         { 0xff22262e };   // raised buttons
     inline const juce::Colour controlFill    { 0xff2a2f38 };   // slider tracks, inactive pills
     inline const juce::Colour selectedRow    { 0xff242831 };
+    inline const juce::Colour tileBg         { 0xff1c1f25 };   // library category tiles
+    inline const juce::Colour trackHeaderBg  { 0xff1f232a };   // an unselected track header
     inline const juce::Colour border         { 0xff2f343e };
     inline const juce::Colour borderSoft     { 0xff262a32 };
     inline const juce::Colour borderStrong   { 0xff3a404b };
@@ -30,8 +85,9 @@ namespace colour
 
     inline const juce::Colour text           { 0xffeef1f5 };
     inline const juce::Colour textSecondary  { 0xffa3abb8 };
-    inline const juce::Colour textMenu       { 0xffc9d0da };
+    inline const juce::Colour textMenu       { 0xffc9d0da };   // menu bar items, icon buttons, slider thumbs
     inline const juce::Colour textOnAccent   { 0xff121418 };
+    inline const juce::Colour textOnColour   { 0xffffffff };   // icons/text on saturated fills (record, track colours)
 
     inline const juce::Colour accent         { 0xffffb547 };
     inline const juce::Colour accentLight    { 0xffffc46b };
@@ -49,12 +105,36 @@ namespace colour
     inline const juce::Colour pianoBlack     { 0xff1a1d23 };
     inline const juce::Colour pianoLabel     { 0xff5b6270 };
 
+    // Translucent overlays. Grid lines, hover highlights and shading are
+    // drawn as tintLight/tintDark with a small alpha at the call site, so a
+    // light theme can swap these two and keep the same contrast.
+    inline const juce::Colour tintLight      { 0xffffffff };
+    inline const juce::Colour tintDark       { 0xff000000 };
+
+    // Dims everything behind a modal dialog.
+    inline const juce::Colour scrim          = juce::Colours::black.withAlpha (0.55f);
+    inline const juce::Colour scrimStrong    = juce::Colours::black.withAlpha (0.6f);    // session chooser
+    inline const juce::Colour scrimLight     = juce::Colours::black.withAlpha (0.45f);   // "Saving…" overlay
+
     // Track colours (also stored per-track in the session; see TrackController)
     inline const juce::Colour trackBlue      { 0xff5aa9ff };
     inline const juce::Colour trackOrange    { 0xffff8f5a };
     inline const juce::Colour trackGreen     { 0xff4fd18b };
     inline const juce::Colour trackPurple    { 0xffc78bff };
     inline const juce::Colour trackYellow    { 0xffffd25a };
+
+    // Library category colours (see LibrarySidebar)
+    inline const juce::Colour categoryKeys      { 0xff5aa9ff };
+    inline const juce::Colour categoryDrums     { 0xffff8f5a };
+    inline const juce::Colour categoryBass      { 0xff4fd18b };
+    inline const juce::Colour categorySynths    { 0xffc78bff };
+    inline const juce::Colour categoryGuitar    { 0xffffd25a };
+    inline const juce::Colour categoryStrings   { 0xffff7aa8 };
+    inline const juce::Colour categoryWoodwinds { 0xff8fd9a8 };
+    inline const juce::Colour categoryBrass     { 0xffe6b85c };
+    inline const juce::Colour categoryLoops     { 0xffffb547 };
+    inline const juce::Colour categoryAudio     { 0xffa3abb8 };
+    inline const juce::Colour categoryPlugins   { 0xff6fd6d0 };
 
     // Automation curves, by what they move (see getAutomationColour). A
     // shade lighter than the track colours, to stand out over regions.
@@ -76,8 +156,41 @@ namespace colour
 
     inline juce::Colour regionStripText (juce::Colour track)
     {
-        return track == trackYellow ? textOnAccent : juce::Colours::white;
+        return track == trackYellow ? textOnAccent : textOnColour;
     }
+}
+
+// ------------------------------------------------------------------ shadows
+namespace shadow
+{
+    // A juce::DropShadow is just colour + blur radius + offset; drawForRectangle
+    // or drawForPath paints it under a shape.
+    inline const juce::DropShadow dialog  { juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 } };
+    inline const juce::DropShadow popover { juce::Colours::black.withAlpha (0.5f), 14, { 0, 4 } };
+}
+
+// ------------------------------------------------------------------ text sizes (px)
+// Pass these to the ikaros::fonts functions, e.g. fonts::ui (textSize::md).
+// 11px is the smallest size for UI text; only the transport readout's caption
+// labels (BAR · BEAT, BPM, TIME, KEY) may go below it.
+namespace textSize
+{
+    inline constexpr float caption = 9.0f;    // transport readout captions
+    inline constexpr float badge   = 9.5f;    // TODO(milestone-7): below the 11px minimum
+    inline constexpr float tiny    = 10.0f;   // TODO(milestone-7): below the 11px minimum
+    inline constexpr float xs      = 11.0f;
+    inline constexpr float sm      = 12.0f;
+    inline constexpr float smPlus  = 12.5f;
+    inline constexpr float md      = 13.0f;
+    inline constexpr float mdPlus  = 13.5f;
+    inline constexpr float lg      = 14.0f;
+    inline constexpr float lgPlus  = 14.5f;
+    inline constexpr float xl      = 15.0f;
+    inline constexpr float xxl     = 16.0f;
+    inline constexpr float title   = 18.0f;   // dialog titles
+    inline constexpr float display = 20.0f;
+    inline constexpr float lcd     = 22.0f;   // the transport position readout
+    inline constexpr float hero    = 26.0f;
 }
 
 // ------------------------------------------------------------------ sizes (px)
@@ -91,10 +204,16 @@ namespace size
     inline constexpr int trackRowHeight    = 100;   // grows while the track's automation picker shows (see ArrangementLayout.h)
     inline constexpr int bottomPanelHeight = 290;
     inline constexpr int minHitTarget      = 44;
+    inline constexpr int panelPadding      = 14;    // standard inset from a panel's edges
+    inline constexpr int scrollbarWidth    = 10;
 
+    inline constexpr float radiusHair      = 2.0f;
+    inline constexpr float radiusTiny      = 3.0f;
+    inline constexpr float radiusXs        = 4.0f;
     inline constexpr float radiusSmall     = 5.0f;
     inline constexpr float radius          = 8.0f;
     inline constexpr float radiusLarge     = 10.0f;
+    inline constexpr float radiusCard      = 12.0f;
     inline constexpr float radiusPill      = 14.0f;
 }
 

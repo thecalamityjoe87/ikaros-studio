@@ -26,7 +26,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     {
         b.setColours ({ colour::controlFill, colour::text, onColour, colour::textOnAccent });
         b.setCornerRadius (size::radiusSmall);
-        b.setFont (fonts::uiBold (11.0f));
+        b.setFont (fonts::uiBold (textSize::xs));
         addAndMakeVisible (b);
     };
 
@@ -36,7 +36,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     soloButton.setIconSize (14.0f);
 
     // Record-arm: grey dot when off, white dot on red when armed.
-    armButton.setColours ({ colour::controlFill, colour::textSecondary, colour::record, juce::Colours::white });
+    armButton.setColours ({ colour::controlFill, colour::textSecondary, colour::record, colour::textOnColour });
     armButton.setCornerRadius (size::radiusSmall);
     armButton.setIconSize (12.0f);
     armButton.onClick = [this]
@@ -57,7 +57,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     // Flex (audio tracks): amber while it's on, like the automation button.
     flexButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
     flexButton.setCornerRadius (size::radiusSmall);
-    flexButton.setFont (fonts::uiSemiBold (11.0f));
+    flexButton.setFont (fonts::uiSemiBold (textSize::xs));
     flexButton.onClick = [this]
     {
         selection.selectTrack (info.id);
@@ -106,7 +106,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
 
     // The rename field: hidden until startRenaming(). Return keeps the new
     // name, Escape cancels, clicking elsewhere keeps it.
-    nameEditor.setFont (fonts::uiBold (14.0f));
+    nameEditor.setFont (fonts::uiBold (textSize::lg));
     nameEditor.setIndents (4, 2);
     nameEditor.setJustification (juce::Justification::centredLeft);
     nameEditor.setTitle ("Track name");
@@ -388,18 +388,18 @@ void TrackHeader::paint (juce::Graphics& g)
     g.fillRect (r.removeFromLeft (3));
 
     // Icon tile
-    g.setColour (selected ? colour::controlFill : juce::Colour (0xff1f232a));
+    g.setColour (selected ? colour::controlFill : colour::trackHeaderBg);
     g.fillRoundedRectangle (iconArea.toFloat(), size::radiusLarge);
     // The icon the user picked, or else the one the sound suggests, or else the category's.
     icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
                  iconArea.toFloat(), info.colour, 22.0f);
 
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
-    g.setFont (fonts::uiBold (14.0f));
+    g.setFont (fonts::uiBold (textSize::lg));
     g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.drawText (info.soundName, soundArea, juce::Justification::centredLeft, true);
 
     if (info.automationShown)
@@ -417,7 +417,7 @@ void TrackHeader::paint (juce::Graphics& g)
         g.fillEllipse (text.removeFromLeft (8.0f).withSizeKeepingCentre (8.0f, 8.0f));
         text.removeFromLeft (6.0f);
         g.setColour (automationTargetAutomated ? colour::accent : colour::text);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (automationName, text, juce::Justification::centredLeft, true);
     }
 }

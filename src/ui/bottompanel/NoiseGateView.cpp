@@ -13,7 +13,7 @@ NoiseGateView::NoiseGateView (AudioEngine& e, Selection& s) : engine (e), select
 
     // Like the Monitoring button: green while it's on.
     onButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
-    onButton.setFont (fonts::uiSemiBold (12.0f));
+    onButton.setFont (fonts::uiSemiBold (textSize::sm));
     onButton.setCornerRadius (6.0f);
     onButton.onClick = [this]
     {
@@ -95,16 +95,16 @@ void NoiseGateView::paint (juce::Graphics& g)
     if (! isAudio)
         return;
 
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.setColour (threshold.isEnabled() ? colour::textSecondary : colour::textSecondary.withMultipliedAlpha (0.5f));
     g.drawText ("Threshold", thresholdRow, juce::Justification::centredLeft);
 
     g.setColour (threshold.isEnabled() ? colour::text : colour::textSecondary);
-    g.setFont (fonts::mono (12.0f));
+    g.setFont (fonts::mono (textSize::sm));
     g.drawText (thresholdText, valueArea, juce::Justification::centredRight);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText ("Silences the track while it's quieter than the threshold.",
                       hintArea, juce::Justification::topLeft, 2, 1.0f);
 }

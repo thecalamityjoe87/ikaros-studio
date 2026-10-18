@@ -11,7 +11,7 @@ namespace
 {
     constexpr int rowGap = 14, headingHeight = 24, noteGap = 4, rightMargin = 8;
 
-    const juce::Font noteFont() { return fonts::ui (12.5f); }
+    const juce::Font noteFont() { return fonts::ui (textSize::smPlus); }
 
     // How tall some text is when wrapped to a width.
     int measureHeight (const juce::String& text, const juce::Font& font, int width)
@@ -41,7 +41,7 @@ public:
             {
                 case Row::Kind::heading:
                     g.setColour (colour::text);
-                    g.setFont (fonts::uiBold (15.0f));
+                    g.setFont (fonts::uiBold (textSize::xl));
                     g.drawText (row.text, row.textArea, juce::Justification::centredLeft);
                     g.setColour (colour::borderSoft);
                     g.fillRect (row.textArea.getX(), row.textArea.getBottom(), row.textArea.getWidth(), 1);
@@ -49,7 +49,7 @@ public:
 
                 case Row::Kind::labelled:
                     g.setColour (colour::text);
-                    g.setFont (fonts::ui (13.5f));
+                    g.setFont (fonts::ui (textSize::mdPlus));
                     g.drawText (row.text, row.textArea, juce::Justification::centredLeft);
                     break;
 
@@ -126,7 +126,7 @@ void PreferencesPage::styleButton (IconButton& b)
     auto colours = IconButton::raisedColours();
     colours.border = colour::border;
     b.setColours (colours);
-    b.setFont (fonts::ui (13.0f));
+    b.setFont (fonts::ui (textSize::md));
 }
 
 void PreferencesPage::fillChoices (juce::ComboBox& box, std::initializer_list<const char*> choices, int selectedIndex)

@@ -43,28 +43,28 @@ public:
         const bool on = getToggleState();
 
         g.setColour (on ? colour::selectedRow : (over ? colour::raised : colour::cardBg));
-        g.fillRoundedRectangle (r, 12.0f);
+        g.fillRoundedRectangle (r, size::radiusCard);
         g.setColour (on ? colour::accent : colour::borderSoft);
-        g.drawRoundedRectangle (r, 12.0f, on ? 2.0f : 1.0f);
+        g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
 
         auto content = getLocalBounds().reduced (20);
         auto iconArea = content.removeFromTop (64);
         g.setColour (colour::wellBg);
-        g.fillRoundedRectangle (iconArea.withSizeKeepingCentre (64, 64).toFloat(), 14.0f);
+        g.fillRoundedRectangle (iconArea.withSizeKeepingCentre (64, 64).toFloat(), size::radiusPill);
         icons::draw (g, icon, iconArea.toFloat(), iconColour, 36.0f, 1.6f);
 
         content.removeFromTop (14);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (16.0f));
+        g.setFont (fonts::uiBold (textSize::xxl));
         g.drawText (getName(), content.removeFromTop (22), juce::Justification::centred);
 
         content.removeFromTop (6);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (description, content, juce::Justification::centredTop, 3, 1.0f);
 
         if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
+            IkarosLookAndFeel::drawFocusRing (g, r, size::radiusCard);
     }
 
 private:
@@ -224,23 +224,23 @@ void NewTrackDialog::mouseDown (const juce::MouseEvent& e)
 void NewTrackDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the dialog.
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (colour::scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
+    shadow::dialog.drawForRectangle (g, panel);
     g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
     g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
     g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText ("Choose a track type", r.removeFromTop (26), juce::Justification::centredLeft);
 
     if (audioChosen)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("Input", audioOptionsArea.withWidth (60), juce::Justification::centredLeft);
 
         if (inputs.empty())

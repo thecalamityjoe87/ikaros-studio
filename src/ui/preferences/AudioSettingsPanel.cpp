@@ -42,7 +42,7 @@ void AudioSettingsPanel::paint (juce::Graphics& g)
     if (! status.running)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("The audio device isn't running. Choose one above.", r, juce::Justification::topLeft, 2);
         return;
     }
@@ -50,7 +50,7 @@ void AudioSettingsPanel::paint (juce::Graphics& g)
     auto ms = [] (double v) { return juce::String (juce::roundToInt (v)) + " ms"; };
 
     g.setColour (colour::text);
-    g.setFont (fonts::uiSemiBold (14.0f));
+    g.setFont (fonts::uiSemiBold (textSize::lg));
     g.drawText ("Monitoring delay (latency): " + ms (status.monitoringLatencyMs),
                 r.removeFromTop (20), juce::Justification::centredLeft);
 
@@ -63,7 +63,7 @@ void AudioSettingsPanel::paint (juce::Graphics& g)
         details << "\nDropouts since the device started: " << status.dropouts << ".";
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.5f));
+    g.setFont (fonts::ui (textSize::smPlus));
     g.drawFittedText (details, r.withTrimmedTop (4), juce::Justification::topLeft, 4, 1.0f);
 }
 

@@ -149,13 +149,13 @@ public:
 
     Row()
     {
-        mainButton.setFont (fonts::uiSemiBold (13.0f));
+        mainButton.setFont (fonts::uiSemiBold (textSize::md));
         mainButton.onClick = [this] { if (onMain) onMain(); };
         addChildComponent (mainButton);
 
         greyColours.border = colour::border;
         removeButton.setColours (greyColours);
-        removeButton.setFont (fonts::uiSemiBold (13.0f));
+        removeButton.setFont (fonts::uiSemiBold (textSize::md));
         removeButton.onClick = [this] { if (onRemove) onRemove(); };
         addChildComponent (removeButton);
     }
@@ -184,27 +184,27 @@ public:
     {
         auto card = getLocalBounds().reduced (0, 4).toFloat();
         g.setColour (view.highlighted ? colour::selectedRow : colour::cardBg);
-        g.fillRoundedRectangle (card, 10.0f);
+        g.fillRoundedRectangle (card, size::radiusLarge);
 
         if (view.highlighted)
         {
             g.setColour (colour::accent.withAlpha (0.6f));
-            g.drawRoundedRectangle (card.reduced (0.5f), 10.0f, 1.0f);
+            g.drawRoundedRectangle (card.reduced (0.5f), size::radiusLarge, 1.0f);
         }
 
         // Left: name, facts, then the description (or why a download failed).
         auto text = contentArea().withTrimmedRight (actionsWidth + 16);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (15.0f));
+        g.setFont (fonts::uiBold (textSize::xl));
         g.drawText (view.title, text.removeFromTop (20), juce::Justification::centredLeft, true);
 
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         g.drawText (view.facts, text.removeFromTop (18), juce::Justification::centredLeft, true);
 
         text.removeFromTop (4);
         g.setColour (view.error.isNotEmpty() ? colour::record : colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (view.error.isNotEmpty() ? view.error : view.description, text,
                           juce::Justification::topLeft, 2, 1.0f);
 
@@ -218,20 +218,20 @@ public:
             case RowView::Status::progress:
             {
                 g.setColour (colour::textSecondary);
-                g.setFont (fonts::ui (12.0f));
+                g.setFont (fonts::ui (textSize::sm));
                 g.drawText (view.statusText, status.removeFromTop (16), juce::Justification::centredRight);
 
                 auto bar = status.withSizeKeepingCentre (status.getWidth(), 6).toFloat();
                 g.setColour (colour::controlFill);
-                g.fillRoundedRectangle (bar, 3.0f);
+                g.fillRoundedRectangle (bar, size::radiusTiny);
                 g.setColour (colour::accent);
-                g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, view.progress)), 3.0f);
+                g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, view.progress)), size::radiusTiny);
                 break;
             }
 
             case RowView::Status::text:
                 g.setColour (colour::textSecondary);
-                g.setFont (fonts::ui (13.0f));
+                g.setFont (fonts::ui (textSize::md));
                 g.drawText (view.statusText, status, juce::Justification::centredRight);
                 break;
 
@@ -248,7 +248,7 @@ public:
     {
         // The main button (Download, Update, Cancel) rightmost, Remove to its left.
         auto buttons = contentArea().removeFromBottom (buttonHeight);
-        const int mainWidth = juce::jmax (buttonWidth, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (13.0f), view.mainAction)) + 32);
+        const int mainWidth = juce::jmax (buttonWidth, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (textSize::md), view.mainAction)) + 32);
 
         if (mainButton.isVisible())
         {
@@ -273,7 +273,7 @@ private:
     static void drawInstalled (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const juce::String word ("Installed");
-        auto font = fonts::uiSemiBold (13.0f);
+        auto font = fonts::uiSemiBold (textSize::md);
         const float textWidth = juce::GlyphArrangement::getStringWidth (font, word);
         const float tickSize = 16.0f, gap = 6.0f;
 
@@ -621,17 +621,17 @@ void MoreSoundsDialog::mouseDown (const juce::MouseEvent& e)
 
 void MoreSoundsDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (colour::scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
+    shadow::dialog.drawForRectangle (g, panel);
     g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
     g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
     g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText (welcome ? juce::String ("Welcome to Ikaros Studio") : titleFor (showAll ? juce::String() : category),
                 r.removeFromTop (26), juce::Justification::centredLeft);
 
@@ -643,7 +643,7 @@ void MoreSoundsDialog::paint (juce::Graphics& g)
                                                    : "Start with the starter sounds: real instruments and loops to play and build "
                                                      "songs with. You can download more any time from More Sounds.";
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (13.0f));
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (subtitle, r.removeFromTop (welcome ? 40 : 22), juce::Justification::topLeft, 2, 1.0f);
 
     if (statusText.isNotEmpty())
@@ -662,7 +662,7 @@ void MoreSoundsDialog::resized()
 
     // Bottom right: the main button, with Not Now to its left.
     auto bottom = r.removeFromBottom (36);
-    const int doneWidth = juce::jmax (96, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (14.0f), doneText)) + 40);
+    const int doneWidth = juce::jmax (96, juce::roundToInt (juce::GlyphArrangement::getStringWidth (fonts::uiSemiBold (textSize::lg), doneText)) + 40);
     doneButton.setBounds (bottom.removeFromRight (doneWidth));
     bottom.removeFromRight (8);
     notNowButton.setBounds (bottom.removeFromRight (96));

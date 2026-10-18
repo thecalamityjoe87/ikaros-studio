@@ -90,12 +90,12 @@ public:
     {
         auto key = area.reduced (1.0f, 0.0f);
         g.setColour (isDown ? colour::pianoWhiteLit : (isOver ? colour::pianoWhite.darker (0.05f) : colour::pianoWhite));
-        g.fillRoundedRectangle (key.withTrimmedTop (-6.0f), 5.0f);   // round only the bottom corners
+        g.fillRoundedRectangle (key.withTrimmedTop (-6.0f), size::radiusSmall);   // round only the bottom corners
 
         if (note % 12 == 0)
         {
             g.setColour (colour::pianoLabel);
-            g.setFont (fonts::ui (10.0f));
+            g.setFont (fonts::ui (textSize::tiny));
             g.drawText ("C" + juce::String (note / 12 - 1), key.removeFromBottom (18.0f), juce::Justification::centred);
         }
     }
@@ -105,7 +105,7 @@ public:
     {
         auto key = area.withTrimmedTop (-4.0f);
         g.setColour (isDown ? colour::accent : (isOver ? colour::pianoBlack.brighter (0.15f) : colour::pianoBlack));
-        g.fillRoundedRectangle (key, 4.0f);
+        g.fillRoundedRectangle (key, size::radiusXs);
 
         g.setColour (colour::border);
         g.fillRoundedRectangle (key.removeFromBottom (3.0f), 1.5f);

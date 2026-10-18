@@ -47,7 +47,7 @@ FolderField::FolderField (const juce::String& n) : name (n)
         auto colours = IconButton::raisedColours();
         colours.border = colour::border;
         b->setColours (colours);
-        b->setFont (fonts::ui (13.0f));
+        b->setFont (fonts::ui (textSize::md));
         addAndMakeVisible (b);
     }
 
@@ -90,7 +90,7 @@ void FolderField::paint (juce::Graphics& g)
     g.drawRoundedRectangle (pathArea.toFloat().reduced (0.5f), size::radiusSmall, 1.0f);
 
     const bool isDefault = chosenFolder == juce::File();
-    const auto font = fonts::ui (13.0f);
+    const auto font = fonts::ui (textSize::md);
     const auto text = describe (isDefault ? defaultFolder : chosenFolder);
 
     g.setColour (isDefault ? colour::textSecondary : colour::text);

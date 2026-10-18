@@ -41,7 +41,7 @@ HintBubble::HintBubble (juce::Component& target, const juce::String& text,
     : actionName (name), action (std::move (fn))
 {
     juce::AttributedString s;
-    s.append (text, fonts::ui (13.0f), colour::text);
+    s.append (text, fonts::ui (textSize::md), colour::text);
     s.setWordWrap (juce::AttributedString::byWord);
     layout.createLayout (s, bubbleWidth - padding * 2.0f);
 
@@ -106,7 +106,7 @@ void HintBubble::paint (juce::Graphics& g)
         g.setColour (colour::accent);
         g.fillRoundedRectangle (actionArea, size::radiusSmall);
         g.setColour (colour::textOnAccent);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (actionName, actionArea, juce::Justification::centred, true);
     }
 }

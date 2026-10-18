@@ -30,7 +30,7 @@ FreesoundSetupDialog::FreesoundSetupDialog (AudioEngine& e)
     for (auto* b : { &signUpButton, &applyButton, &closeButton, &forgetButton })
     {
         b->setColours (grey);
-        b->setFont (fonts::uiSemiBold (13.0f));
+        b->setFont (fonts::uiSemiBold (textSize::md));
         b->setIconSize (14.0f);
         addAndMakeVisible (b);
     }
@@ -47,15 +47,14 @@ FreesoundSetupDialog::FreesoundSetupDialog (AudioEngine& e)
     };
 
     connectButton.setColours (IconButton::accentColours());
-    connectButton.setFont (fonts::uiSemiBold (13.0f));
+    connectButton.setFont (fonts::uiSemiBold (textSize::md));
     connectButton.onClick = [this] { connect(); };
     addAndMakeVisible (connectButton);
 
     keyField.setTextToShowWhenEmpty ("Paste your key here", colour::textSecondary);
-    keyField.setFont (fonts::ui (14.0f));
+    keyField.setFont (fonts::ui (textSize::lg));
     keyField.setTitle ("Freesound API key");
     keyField.setIndents (10, 9);
-    keyField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     keyField.setSelectAllWhenFocused (true);
     keyField.onReturnKey = [this] { connect(); };
     keyField.onEscapeKey = [this] { close(); };
@@ -123,21 +122,21 @@ void FreesoundSetupDialog::mouseDown (const juce::MouseEvent& e)
 //==============================================================================
 void FreesoundSetupDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (colour::scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
+    shadow::dialog.drawForRectangle (g, panel);
     g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
     g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
     g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText ("Find loops on Freesound", r.removeFromTop (26), juce::Justification::centredLeft);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (13.0f));
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText ("Freesound is a free library of sounds shared by its community. To search it from here you need your "
                       "own free API key. It takes a couple of minutes to get.",
                       r.removeFromTop (46).withTrimmedTop (6), juce::Justification::topLeft, 3, 1.0f);
@@ -148,15 +147,15 @@ void FreesoundSetupDialog::paint (juce::Graphics& g)
         g.setColour (colour::accent);
         g.fillEllipse (badge);
         g.setColour (colour::toolbarBg);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (juce::String (number), badge.toNearestInt(), juce::Justification::centred);
 
         area.removeFromLeft (8);
         g.setColour (colour::text);
-        g.setFont (fonts::uiSemiBold (14.0f));
+        g.setFont (fonts::uiSemiBold (textSize::lg));
         g.drawText (title, area.removeFromTop (22), juce::Justification::centredLeft);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         g.drawFittedText (detail, area, juce::Justification::topLeft, 3, 1.0f);
     };
 
@@ -185,11 +184,11 @@ void FreesoundSetupDialog::paint (juce::Graphics& g)
     }
 
     g.setColour (statusColour);
-    g.setFont (fonts::ui (13.0f));
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (status, statusArea, juce::Justification::topLeft, 3, 1.0f);
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText ("Only loops shared under CC0 or CC BY are shown. Loops you add are credited to their authors on the "
                       "Acknowledgements page of the About window. Your key stays on this computer.",
                       footerArea, juce::Justification::topLeft, 3, 1.0f);

@@ -125,7 +125,7 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
         if (editable)
         {
             g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (11.0f));
+            g.setFont (fonts::ui (textSize::xs));
             g.drawText ("Click to add a point", juce::Rectangle<float> (8.0f, y < 24.0f ? y + 4.0f : y - 18.0f, 200.0f, 14.0f),
                         juce::Justification::centredLeft, false);
         }
@@ -180,7 +180,7 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
             const auto& p = points[(size_t) labelPoint];
             const auto pos = pointPosition (p);
             const auto text = owner.engine.getTracks().automation().describeValue (trackId, targetId, p.value);
-            g.setFont (fonts::mono (11.0f));
+            g.setFont (fonts::mono (textSize::xs));
             auto label = juce::Rectangle<float> (90.0f, 18.0f).withCentre (pos).translated (0.0f, pos.y > 28.0f ? -16.0f : 16.0f);
             g.setColour (colour::raised);
             g.fillRoundedRectangle (label, size::radiusSmall);

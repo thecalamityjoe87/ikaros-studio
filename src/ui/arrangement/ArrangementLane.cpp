@@ -148,11 +148,11 @@ void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
     auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
 
     g.setColour (colour::record.withAlpha (0.25f));
-    g.fillRoundedRectangle (r, 8.0f);
+    g.fillRoundedRectangle (r, size::radius);
     g.setColour (colour::record);
-    g.drawRoundedRectangle (r, 8.0f, 1.5f);
+    g.drawRoundedRectangle (r, size::radius, 1.5f);
 
-    g.setFont (fonts::uiBold (11.0f));
+    g.setFont (fonts::uiBold (textSize::xs));
     g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
 }
 
@@ -168,21 +168,21 @@ void ArrangementView::Lane::paint (juce::Graphics& g)
 
     if (geo.pixelsPerBeat >= 6.0)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.025f));
+        g.setColour (colour::tintLight.withAlpha (0.025f));
 
         for (double beat = std::ceil (geo.scrollBeats); geo.beatToX (beat) <= (float) getWidth(); beat += 1.0)
             g.fillRect (juce::roundToInt (geo.beatToX (beat)), 0, 1, r.getHeight());
     }
 
     // ...and bar lines (stronger).
-    g.setColour (juce::Colours::white.withAlpha (0.05f));
+    g.setColour (colour::tintLight.withAlpha (0.05f));
     forEachVisibleBar (geo, getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
 
     g.setColour (colour::divider);
     g.fillRect (r.removeFromBottom (1));
 
     if (showFocusRing && hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), 4.0f);
+        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), size::radiusXs);
 }
 
 void ArrangementView::Lane::resized()

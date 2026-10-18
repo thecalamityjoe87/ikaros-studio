@@ -9,7 +9,7 @@ namespace ikaros
 using namespace tokens;
 
 IconButton::IconButton (const juce::String& accessibleName, std::optional<Icon> i, const juce::String& t)
-    : juce::Button (accessibleName), icon (i), text (t), font (fonts::uiSemiBold (14.0f))
+    : juce::Button (accessibleName), icon (i), text (t), font (fonts::uiSemiBold (textSize::lg))
 {
     // Accessibility: setTitle is what screen readers announce. For icon-only
     // buttons we also show it as a tooltip so sighted users can discover it.

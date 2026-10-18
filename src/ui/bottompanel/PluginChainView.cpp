@@ -86,7 +86,7 @@ public:
         }
 
         g.setColour (slot.enabled && ! slot.missing ? colour::text : colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (slot.name, area, juce::Justification::centredLeft, true);
 
         if (showFocusRing && hasKeyboardFocus (false))
@@ -196,7 +196,7 @@ public:
         icons::draw (g, Icon::plus, content.removeFromLeft (16.0f), colour::textSecondary, 16.0f, 2.0f);
         content.removeFromLeft (8.0f);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("Add effect", content, juce::Justification::centredLeft);
 
         if (hasKeyboardFocus (false))
@@ -307,14 +307,14 @@ void PluginChainView::paint (juce::Graphics& g)
     if (trackId == 0)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Select a track to see its plug-ins.", getLocalBounds().reduced (sidePadding, 8),
                           juce::Justification::topLeft, 2);
         return;
     }
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText (masterMode ? "Effects on the whole mix. They run from top to bottom."
                                  : "Change how this track sounds. Effects run from top to bottom.",
                       hintArea, juce::Justification::topLeft, 2, 1.0f);   // 1.0 = wrap, never squash
@@ -322,7 +322,7 @@ void PluginChainView::paint (juce::Graphics& g)
     auto drawLabel = [&] (juce::Rectangle<int> area, const juce::String& text)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::uiBold (10.0f).withExtraKerningFactor (0.1f));
+        g.setFont (fonts::uiBold (textSize::tiny).withExtraKerningFactor (0.1f));
         g.drawText (text, area, juce::Justification::centredLeft);
     };
 
@@ -349,7 +349,7 @@ void PluginChainView::paint (juce::Graphics& g)
         }
 
         g.setColour (instrument->missing ? colour::textSecondary : colour::text);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (instrument->name + (instrument->missing ? " (not installed)" : ""), r, juce::Justification::centredLeft, true);
     }
 

@@ -86,21 +86,21 @@ public:
         const bool on = getToggleState();
 
         g.setColour (on ? colour::selectedRow : (over ? colour::raised : colour::cardBg));
-        g.fillRoundedRectangle (r, 12.0f);
+        g.fillRoundedRectangle (r, size::radiusCard);
 
         auto art = getLocalBounds().reduced (8).removeFromTop (artHeightFor (getWidth())).toFloat();
         paintArt (g, art);
 
         auto text = getLocalBounds().reduced (12, 0).withTrimmedTop ((int) art.getBottom() + 8);
         g.setColour (colour::text);
-        g.setFont (fonts::uiBold (14.0f));
+        g.setFont (fonts::uiBold (textSize::lg));
         g.drawText (getName(), text.removeFromTop (20), juce::Justification::centredLeft, true);
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         g.drawFittedText (detail, text.removeFromTop (30), juce::Justification::topLeft, 2, 1.0f);
 
         g.setColour (on ? colour::accent : colour::borderSoft);
-        g.drawRoundedRectangle (r, 12.0f, on ? 2.0f : 1.0f);
+        g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
     }
 
 private:
@@ -115,7 +115,7 @@ private:
     {
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (art, 8.0f);
+        shape.addRoundedRectangle (art, size::radius);
         g.reduceClipRegion (shape);
 
         if (icon.has_value())
@@ -167,18 +167,18 @@ public:
         if (on || over)
         {
             g.setColour (on ? colour::selectedRow : colour::raised.withAlpha (0.5f));
-            g.fillRoundedRectangle (r, 8.0f);
+            g.fillRoundedRectangle (r, size::radius);
         }
 
         auto content = getLocalBounds().reduced (12, 0);
         icons::draw (g, icon, content.removeFromLeft (20).toFloat(), on ? colour::accent : colour::textSecondary, 18.0f, 1.8f);
         content.removeFromLeft (10);
         g.setColour (on ? colour::text : colour::textMenu);
-        g.setFont (on ? fonts::uiSemiBold (14.0f) : fonts::ui (14.0f));
+        g.setFont (on ? fonts::uiSemiBold (textSize::lg) : fonts::ui (textSize::lg));
         g.drawText (getName(), content, juce::Justification::centredLeft);
 
         if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 8.0f);
+            IkarosLookAndFeel::drawFocusRing (g, r, size::radius);
     }
 
 private:
@@ -270,9 +270,8 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     tempoField.setText ("120", false);
     tempoField.setInputRestrictions (3, "0123456789");
     tempoField.setJustification (juce::Justification::centred);
-    tempoField.setFont (fonts::mono (14.0f));
+    tempoField.setFont (fonts::mono (textSize::lg));
     tempoField.setTitle ("Tempo");
-    tempoField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     tempoField.onReturnKey = [this] { choose(); };
     addChildComponent (tempoField);
 
@@ -446,17 +445,17 @@ bool SessionChooser::keyPressed (const juce::KeyPress& key)
 void SessionChooser::paint (juce::Graphics& g)
 {
     // Dim the app behind the chooser.
-    g.fillAll (juce::Colours::black.withAlpha (0.6f));
+    g.fillAll (colour::scrimStrong);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
+    shadow::dialog.drawForRectangle (g, panel);
     g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
 
     // Sidebar, with its own background, rounded on the left only.
     {
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (panel.toFloat(), 14.0f);
+        shape.addRoundedRectangle (panel.toFloat(), size::radiusPill);
         g.reduceClipRegion (shape);
         g.setColour (colour::sidebarBg);
         g.fillRect (sidebar);
@@ -467,21 +466,21 @@ void SessionChooser::paint (juce::Graphics& g)
     }
 
     g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     g.setColour (colour::text);
-    g.setFont (fonts::uiBold (13.0f));
+    g.setFont (fonts::uiBold (textSize::md));
     g.drawText ("Ikaros Studio", sidebar.reduced (20, 0).withHeight (headerHeight).withY (sidebar.getY()),
                 juce::Justification::centredLeft);
 
     auto title = header.reduced (24, 0);
-    g.setFont (fonts::uiBold (20.0f));
+    g.setFont (fonts::uiBold (textSize::display));
     g.drawText (page == Page::newSession ? "Choose a template" : "Recent sessions", title, juce::Justification::centredLeft);
 
     if (page == Page::recent && recentSessions.empty())
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.drawFittedText ("Sessions you save or open will show up here.\nUse \"Open Other...\" to find one on your computer.",
                           viewport.getBounds().withHeight (80), juce::Justification::centred, 3);
     }
@@ -490,7 +489,7 @@ void SessionChooser::paint (juce::Graphics& g)
     {
         // Labels for the detail fields.
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
 
         auto label = [&g] (const juce::String& text, juce::Component& field)
         {

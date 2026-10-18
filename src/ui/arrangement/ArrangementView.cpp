@@ -70,7 +70,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     auto snapColours = IconButton::raisedColours();
     snapColours.border = colour::border;
     snapButton.setColours (snapColours);
-    snapButton.setFont (fonts::ui (12.0f));
+    snapButton.setFont (fonts::ui (textSize::sm));
     snapButton.setCornerRadius (size::radiusSmall);
     snapButton.setTooltip ("Snap to grid: where moved regions and edges land");
     snapButton.onClick = [this] { showSnapMenu(); };
@@ -749,7 +749,7 @@ juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
         // A small rounded swatch beside each name.
         auto swatch = std::make_unique<juce::DrawablePath>();
         juce::Path shape;
-        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, 3.0f);
+        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, size::radiusTiny);
         swatch->setPath (shape);
         swatch->setFill (c);
 

@@ -23,7 +23,7 @@ RecordingView::RecordingView (AudioEngine& e, Selection& s) : engine (e), select
     addChildComponent (inputBox);
 
     monitorButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
-    monitorButton.setFont (fonts::uiSemiBold (12.0f));
+    monitorButton.setFont (fonts::uiSemiBold (textSize::sm));
     monitorButton.setCornerRadius (6.0f);
     monitorButton.setTooltip ("Hear the input through your speakers or headphones");
     monitorButton.onClick = [this]
@@ -107,7 +107,7 @@ int RecordingView::getIdealHeight() const
 void RecordingView::paint (juce::Graphics& g)
 {
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setFont (fonts::ui (textSize::sm));
 
     if (trackId == 0)
     {

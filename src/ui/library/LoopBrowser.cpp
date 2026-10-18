@@ -136,7 +136,7 @@ public:
         if (item.kind == Item::Kind::more)
         {
             g.setColour (over ? colour::text : colour::textSecondary);
-            g.setFont (fonts::uiSemiBold (13.0f));
+            g.setFont (fonts::uiSemiBold (textSize::md));
             g.drawText (item.name, getLocalBounds(), juce::Justification::centred);
             return;
         }
@@ -166,7 +166,7 @@ public:
             if (busy)
             {
                 g.setColour (colour::textSecondary);
-                g.setFont (fonts::ui (14.0f));
+                g.setFont (fonts::ui (textSize::lg));
                 g.drawText ("...", zone.toNearestInt(), juce::Justification::centredRight);
             }
             else if (item.removable)
@@ -179,13 +179,13 @@ public:
             }
         }
 
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         auto detailWidth = juce::jmin (content.getWidth() / 2,
                                        (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), item.detail)) + 4);
         g.setColour (item.added ? colour::effectOn : colour::textSecondary);
         g.drawText (item.detail, content.removeFromRight (detailWidth), juce::Justification::centredRight, true);
 
-        g.setFont (fonts::ui (14.0f));
+        g.setFont (fonts::ui (textSize::lg));
         g.setColour (colour::text);
         g.drawText (item.name, content.withTrimmedRight (6), juce::Justification::centredLeft, true);
 
@@ -249,7 +249,7 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     {
         b->setColours (grey);
         b->setCornerRadius (6.0f);
-        b->setFont (fonts::uiSemiBold (12.0f));
+        b->setFont (fonts::uiSemiBold (textSize::sm));
         b->setIconSize (14.0f);
         addAndMakeVisible (b);
     }
@@ -260,7 +260,7 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
         auto* tab = filterTabs.add (new IconButton (name, std::nullopt, name));
         tab->setColours (grey);
         tab->setCornerRadius (6.0f);
-        tab->setFont (fonts::uiSemiBold (11.0f));
+        tab->setFont (fonts::uiSemiBold (textSize::xs));
         tab->setTooltip (juce::String ("Choose a ") + juce::String (name).toLowerCase() + " to narrow the loops. Click again to fold it away.");
         tab->onClick = [this, i]
         {
@@ -283,7 +283,7 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     addAndMakeVisible (clearButton);
 
     setupButton.setColours (IconButton::accentColours());
-    setupButton.setFont (fonts::uiSemiBold (13.0f));
+    setupButton.setFont (fonts::uiSemiBold (textSize::md));
     addChildComponent (setupButton);
 
     backButton.onClick = [this] { close(); };
@@ -295,10 +295,9 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     tempoButton.setTooltip ("Only show loops at a tempo");
     tempoButton.onClick = [this] { showTempoMenu(); };
 
-    searchField.setFont (fonts::ui (14.0f));
+    searchField.setFont (fonts::ui (textSize::lg));
     searchField.setTitle ("Search loops");
     searchField.setIndents (36, 9);   // room for the magnifier (see paintOverChildren)
-    searchField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     searchField.onTextChange = [this]
     {
         if (scope == Scope::mine)
@@ -490,7 +489,7 @@ void LoopBrowser::buildChips()
         auto* chip = chips.add (new IconButton (label, std::nullopt, label));
         chip->setColours (grey);
         chip->setCornerRadius (6.0f);
-        chip->setFont (fonts::ui (12.0f));
+        chip->setFont (fonts::ui (textSize::sm));
         chip->setToggleState (chosen[filterTab] == i, juce::dontSendNotification);
         chip->onClick = [this, i]
         {
@@ -784,19 +783,19 @@ void LoopBrowser::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromRight (1));
 
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::uiBold (11.0f).withExtraKerningFactor (0.1f));
+    g.setFont (fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText (heading, headingArea, juce::Justification::centredLeft, true);
 
     if (rows.isEmpty())
     {
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (emptyText, emptyArea, juce::Justification::topLeft, 5, 1.0f);
     }
 
     if (scope == Scope::freesound)
     {
         g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (11.0f));
+        g.setFont (fonts::ui (textSize::xs));
         g.drawFittedText ("Loops from freesound.org, shared under CC0 or CC BY. Each one is credited to its author.",
                           footerArea, juce::Justification::centredLeft, 3, 1.0f);
     }

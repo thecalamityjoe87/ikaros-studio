@@ -15,7 +15,7 @@ WindowControls::WindowControls()
 
     auto close = normal;
     close.hoverBackground = colour::record.darker (0.15f);
-    close.hoverForeground = juce::Colours::white;
+    close.hoverForeground = colour::textOnColour;
 
     for (auto* b : { &minimiseButton, &maximiseButton, &closeButton })
     {

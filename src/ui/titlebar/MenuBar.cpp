@@ -137,8 +137,8 @@ void MenuBar::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
     // Centred title: [dot] Session name · Ikaros Studio
-    auto nameFont = fonts::uiSemiBold (12.0f);
-    auto appFont = fonts::uiBold (12.0f);
+    auto nameFont = fonts::uiSemiBold (textSize::sm);
+    auto appFont = fonts::uiBold (textSize::sm);
     const juce::String appText = juce::String::fromUTF8 ("  \xc2\xb7  Ikaros Studio");   // " · Ikaros Studio"
 
     const float dotSpace = unsavedChanges ? 12.0f : 0.0f;
@@ -170,7 +170,7 @@ void MenuBar::paint (juce::Graphics& g)
     g.drawText (separator, title.removeFromLeft (juce::jmin (separatorWidth, title.getWidth())), juce::Justification::centredLeft, true);
 
     g.setColour (colour::accent);
-    g.setFont (fonts::uiBold (12.0f));
+    g.setFont (fonts::uiBold (textSize::sm));
     g.drawText ("Ikaros Studio", title, juce::Justification::centredLeft, true);
 }
 
