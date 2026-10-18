@@ -22,10 +22,14 @@ using namespace tokens;
 namespace
 {
     constexpr int minLibraryWidth = 200, maxLibraryWidth = 420;
-    constexpr int minArrangementHeight = 160;   // ruler, one track and the scroll bar
 
     // Dragging a panel's edge this far past its smallest size hides the panel.
     constexpr int collapseDistance = 80;
+
+    // The bottom panel's height, remembered between runs. It's only this
+    // window's business, so it's declared here rather than in Preferences.h
+    // with the settings the engine reads.
+    constexpr IntSetting bottomPanelHeightSetting { "bottomPanelHeight", BottomPanel::defaultHeight };
 }
 
 MainComponent::MainComponent (AudioEngine& e) : engine (e)
@@ -166,19 +170,22 @@ void MainComponent::resized()
         library.setBounds (r.removeFromLeft (libraryWidth));
     }
 
-    const int bottomHeight = bottomPanelVisible ? juce::jlimit (BottomPanel::preferredHeight,
+    const int bottomHeight = bottomPanelVisible ? juce::jlimit (BottomPanel::minHeight,
                                                                 getMaxBottomPanelHeight(), bottomPanelHeight)
                                                 : BottomPanel::collapsedHeight;
     bottomPanel.setBounds (r.removeFromBottom (bottomHeight));
     arrangement.setBounds (r);
 
-    // The handles straddle the panel edges, on top of everything else. The
-    // library's handle stays out while it's being dragged, even when the drag
-    // has hidden the library, so dragging back out can show it again.
+    // The library's handle straddles its edge, on top of everything else. It
+    // stays out while it's being dragged, even when the drag has hidden the
+    // library, so dragging back out can show it again.
     const int half = ResizeHandle::thickness / 2;
     libraryResizer.setVisible (libraryVisible || libraryResizer.isDragging());
     libraryResizer.setBounds (r.getX() - half, r.getY(), ResizeHandle::thickness, bottomPanel.getBottom() - r.getY());
-    bottomResizer.setBounds (r.getX(), bottomPanel.getY() - half, r.getWidth(), ResizeHandle::thickness);
+
+    // The bottom panel's handle is the grip strip along its top edge (the
+    // panel says where; its bounds are in the panel's own coordinates).
+    bottomResizer.setBounds (bottomPanel.getHandleBounds() + bottomPanel.getPosition());
 }
 
 //==============================================================================
@@ -199,8 +206,11 @@ void MainComponent::setUpResizers()
     libraryResizer.onDragEnd = [this] { resized(); commands.commandStatusChanged(); };
     libraryResizer.onDoubleClick = [this] { libraryWidth = size::sidebarWidth; resized(); };
 
-    // Bottom panel: drag its top edge. Well below the smallest height it
-    // collapses to its header row; dragging up opens it again.
+    // Bottom panel: drag the grip on its top edge. Well below the smallest
+    // height it collapses to a slim strip; dragging up (or clicking the
+    // strip) opens it again.
+    bottomPanelHeight = engine.getPreferences().get (bottomPanelHeightSetting);
+    bottomResizer.setShowsGrip (true);
     bottomResizer.onDragStart = [this]
     {
         resizeStartSize = bottomPanelVisible ? bottomPanel.getHeight() : BottomPanel::collapsedHeight;
@@ -208,20 +218,26 @@ void MainComponent::setUpResizers()
     bottomResizer.onDrag = [this] (int offset)
     {
         const int height = resizeStartSize - offset;   // dragging up makes it taller
-        const bool show = height > BottomPanel::preferredHeight - collapseDistance;
+        const bool show = height > BottomPanel::minHeight - collapseDistance;
 
         if (show)
-            bottomPanelHeight = juce::jlimit (BottomPanel::preferredHeight, getMaxBottomPanelHeight(), height);
+            bottomPanelHeight = juce::jlimit (BottomPanel::minHeight, getMaxBottomPanelHeight(), height);
 
         if (show != bottomPanelVisible)
             setBottomPanelVisible (show);
         else
             resized();
     };
-    bottomResizer.onDragEnd = [this] { commands.commandStatusChanged(); };
+    bottomResizer.onDragEnd = [this]
+    {
+        engine.getPreferences().set (bottomPanelHeightSetting, bottomPanelHeight);
+        commands.commandStatusChanged();
+    };
+    bottomResizer.onClick = [this] { setBottomPanelVisible (true); };   // the collapsed strip opens the panel
     bottomResizer.onDoubleClick = [this]
     {
-        bottomPanelHeight = BottomPanel::preferredHeight;
+        bottomPanelHeight = BottomPanel::defaultHeight;
+        engine.getPreferences().set (bottomPanelHeightSetting, bottomPanelHeight);
         setBottomPanelVisible (true);
         resized();
     };
@@ -232,8 +248,8 @@ void MainComponent::setUpResizers()
 
 int MainComponent::getMaxBottomPanelHeight() const
 {
-    const int available = getHeight() - size::menuBarHeight - size::toolbarHeight;
-    return juce::jmax (BottomPanel::preferredHeight, available - minArrangementHeight);
+    // Up to half the window (the arrangement keeps the other half).
+    return juce::jmax (BottomPanel::minHeight, getHeight() / 2);
 }
 
 void MainComponent::setLibraryVisible (bool shouldShow)
@@ -382,7 +398,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
-                                   CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleDetails,
+                                   CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleInspector,
                                    CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
@@ -665,9 +681,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (bottomPanel.isMixerShown());
             info.addDefaultKeypress ('4', cmd);
             break;
-        case CommandIDs::toggleDetails:
-            info.setInfo ("Show Details", "Show advanced track details", "View", 0);
-            info.setTicked (bottomPanel.areDetailsVisible());
+        case CommandIDs::toggleInspector:
+            info.setInfo ("Show Inspector", "Show or hide the bottom panel's inspector column", "View", 0);
+            info.setTicked (bottomPanel.isInspectorVisible());
             break;
 
         case CommandIDs::toggleFullScreen:
@@ -834,7 +850,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::toggleLibrary:     setLibraryVisible (! libraryVisible); break;
         case CommandIDs::toggleBottomPanel: setBottomPanelVisible (! bottomPanelVisible); break;
 
-        // Picking a tab (or details) also opens the bottom panel if it's hidden.
+        // Picking a tab (or the inspector) also opens the bottom panel if it's hidden.
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
@@ -849,9 +865,9 @@ bool MainComponent::perform (const InvocationInfo& info)
         }
         case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
-        case CommandIDs::toggleDetails:
+        case CommandIDs::toggleInspector:
             setBottomPanelVisible (true);
-            bottomPanel.setDetailsVisible (! bottomPanel.areDetailsVisible());
+            bottomPanel.setInspectorVisible (! bottomPanel.isInspectorVisible());
             break;
 
         case CommandIDs::toggleFullScreen:

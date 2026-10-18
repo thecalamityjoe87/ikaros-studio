@@ -69,7 +69,7 @@ namespace CommandIDs
         toggleTempoLane,
         compactTracks,
         tallTracks,
-        toggleDetails,
+        toggleInspector,
 
         toggleFullScreen,
         moreSounds,

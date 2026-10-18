@@ -132,7 +132,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::showEqTab);
         add (CommandIDs::showMixerTab);
         m.addSeparator();
-        add (CommandIDs::toggleDetails);
+        add (CommandIDs::toggleInspector);
     }
     else if (name == "Window")
     {

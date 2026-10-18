@@ -18,6 +18,17 @@ ResizeHandle::ResizeHandle (Orientation o) : orientation (o)
 
 void ResizeHandle::paint (juce::Graphics& g)
 {
+    if (showsGrip)
+    {
+        // A short rounded bar in the middle, brighter while hovered or dragged.
+        constexpr float gripWidth = 40.0f, gripHeight = 3.0f;
+        const auto grip = orientation == Orientation::vertical ? getLocalBounds().toFloat().withSizeKeepingCentre (gripHeight, gripWidth)
+                                                               : getLocalBounds().toFloat().withSizeKeepingCentre (gripWidth, gripHeight);
+        g.setColour (dragging || isMouseOver() ? colour::textSecondary : colour::borderStrong);
+        g.fillRoundedRectangle (grip, gripHeight * 0.5f);
+        return;
+    }
+
     if (! dragging && ! isMouseOver())
         return;
 
@@ -61,7 +72,7 @@ void ResizeHandle::mouseDrag (const juce::MouseEvent& e)
         onDrag (offset);
 }
 
-void ResizeHandle::mouseUp (const juce::MouseEvent&)
+void ResizeHandle::mouseUp (const juce::MouseEvent& e)
 {
     if (! std::exchange (dragging, false))
         return;
@@ -70,6 +81,9 @@ void ResizeHandle::mouseUp (const juce::MouseEvent&)
 
     if (onDragEnd)
         onDragEnd();
+
+    if (! e.mouseWasDraggedSinceMouseDown() && onClick)
+        onClick();
 }
 
 void ResizeHandle::mouseDoubleClick (const juce::MouseEvent&)

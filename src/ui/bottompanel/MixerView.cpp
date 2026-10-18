@@ -4,6 +4,7 @@
 #include "ui/theme/Tokens.h"
 #include "ui/theme/TrackColours.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/widgets/IconButton.h"
 #include <array>
 #include <tuple>
 
@@ -25,6 +26,8 @@ namespace
     constexpr int captionHeight = 30;        // a caption under a knob
     constexpr int stripGap = 10;
     constexpr int masterStripWidth = 110;
+    constexpr int nameRowHeight = 20;        // the strip's name, with M and S beside it
+    constexpr int muteSoloWidth = 20;
 }
 
 //==============================================================================
@@ -90,6 +93,25 @@ public:
 
         for (int bus = 0; bus < SendBuses::numBuses; ++bus)
             guard (sendKnobs[(size_t) bus], automationTargets::send (bus));
+
+        // M and S beside the name, the same as the track header's Mute and
+        // Solo: both just ask the engine, and the model change it reports
+        // updates the header and this strip alike (see update).
+        auto setupToggle = [this] (IconButton& b, juce::Colour onColour)
+        {
+            b.setColours ({ colour::buttonFill, colour::buttonIcon, onColour, colour::textOnAccent, colour::buttonBorder,
+                            std::nullopt, std::nullopt, onColour });
+            b.setCornerRadius (size::radiusXs);
+            b.setFont (fonts::uiBold (textSize::xs));
+            addAndMakeVisible (b);
+        };
+
+        setupToggle (muteButton, colour::accent);   // a muted track's Mute is "on"
+        setupToggle (soloButton, colour::solo);
+        muteButton.setTooltip ("Mute");
+        soloButton.setTooltip ("Solo");
+        muteButton.onClick = [this] { engine.getTracks().setMute (trackId, ! muted); };
+        soloButton.onClick = [this] { engine.getTracks().setSolo (trackId, ! soloed); };
     }
 
     // "C", or how far left/right, e.g. "L 30".
@@ -125,6 +147,12 @@ public:
             setAutomatedLook (sendKnobs[(size_t) bus], automated.contains (automationTargets::send (bus)));
 
         name = t.name;
+        muted = t.muted;
+        soloed = t.solo;
+        muteButton.setToggleState (muted, juce::dontSendNotification);
+        soloButton.setToggleState (soloed, juce::dontSendNotification);
+        muteButton.setTitle ((muted ? "Unmute " : "Mute ") + t.name);   // what a screen reader says
+        soloButton.setTitle ((soloed ? "Unsolo " : "Solo ") + t.name);
         colour = colour::forTrack (t);
         selected = isSelected;
         dbText = describeDb (t.volumeDb);
@@ -189,14 +217,14 @@ public:
             g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (width * 0.5f), size::radiusCard - width * 0.5f, width);
         }
 
-        auto area = getLocalBounds().reduced (10);
         g.setColour (colour::text);
         g.setFont (fonts::uiBold (textSize::md));
-        g.drawText (name, area.removeFromTop (18), juce::Justification::centred, true);
+        g.drawText (name, nameArea, juce::Justification::centredLeft, true);
 
+        // The dB readout, under the fader.
         g.setColour (colour::textSecondary);
         g.setFont (fonts::mono (textSize::sm));
-        g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
+        g.drawText (dbText, dbArea, juce::Justification::centred);
 
         // Each knob's caption: its name, and its setting underneath.
         const juce::String names[] { "Pan", SendBuses::getBusName (SendBuses::reverb), SendBuses::getBusName (SendBuses::delay) };
@@ -220,8 +248,17 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (10);
-        area.removeFromTop (22);
-        area.removeFromBottom (24);
+
+        // The top row: the name, then M and S on the right.
+        auto nameRow = area.removeFromTop (nameRowHeight);
+        soloButton.setBounds (nameRow.removeFromRight (muteSoloWidth));
+        nameRow.removeFromRight (4);
+        muteButton.setBounds (nameRow.removeFromRight (muteSoloWidth));
+        nameRow.removeFromRight (6);
+        nameArea = nameRow;
+        area.removeFromTop (2);
+
+        auto bottomRow = area.removeFromBottom (24);
 
         // Pan, Reverb and Delay go right of the fader, either stacked in a
         // column with captions beside them, or side by side with captions
@@ -263,6 +300,7 @@ public:
         area.removeFromTop (4);
 
         auto meterArea = area.withSizeKeepingCentre (64, area.getHeight());
+        dbArea = bottomRow.withX (meterArea.getX()).withWidth (meterArea.getWidth()).withTrimmedTop (8);
         meter.setBounds (meterArea.removeFromLeft (24));
         meterArea.removeFromLeft (6);
         fader.setBounds (meterArea.withTrimmedTop (-7).withTrimmedBottom (-7));
@@ -278,6 +316,10 @@ private:
     std::array<juce::Slider, SendBuses::numBuses> sendKnobs { juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox },
                                                               juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox } };
     juce::String name, dbText, panText { "C" };
+    IconButton muteButton { "Mute", std::nullopt, "M" };
+    IconButton soloButton { "Solo", std::nullopt, "S" };
+    bool muted = false, soloed = false;
+    juce::Rectangle<int> nameArea, dbArea;              // see resized
     std::array<juce::Rectangle<int>, 3> captionAreas;   // pan, reverb, delay
     bool captionsBelow = false;                         // knobs side by side, captions under them
     std::array<juce::String, SendBuses::numBuses> sendTexts { "0%", "0%" };
