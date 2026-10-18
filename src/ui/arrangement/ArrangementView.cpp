@@ -24,6 +24,7 @@ using namespace arrangement;
 namespace
 {
     constexpr int scrollBarHeight = 12;
+    constexpr int bottomBarHeight = 26;   // the strip along the bottom: zoom under the track headers, the scroll bar beside it
 
     // Zoom range, in pixels per beat: from about 200 bars across the window
     // down to a single beat filling a large part of it.
@@ -66,8 +67,8 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     timeScrollBar.addListener (this);
     addAndMakeVisible (timeScrollBar);
 
-    // Snap and zoom live above the track headers, next to "TRACKS", styled
-    // like the headers' small buttons.
+    // Snap lives above the track headers, next to "TRACKS", styled like the
+    // headers' small buttons. (Zoom is in the bottom strip: see resized.)
     auto snapColours = IconButton::raisedColours();
     snapColours.background = colour::buttonFill;
     snapColours.border = colour::buttonBorder;
@@ -103,8 +104,43 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     tempoLaneButton.onClick = [this] { setTempoLaneShown (! tempoLaneShown); };
     addAndMakeVisible (tempoLaneButton);
 
+    // "+" at the right of the tracks bar: adds a track like the "Add track"
+    // row under the last track, but it stays in view however many tracks
+    // there are. (The Sections row's button below it is a flag, so this is
+    // the only "+" there.)
+    auto newTrackColours = snapColours;
+    newTrackColours.foreground = colour::buttonIcon;
+    newTrackButton.setColours (newTrackColours);
+    newTrackButton.setCornerRadius (size::radiusSmall);
+    newTrackButton.setIconSize (14.0f);
+    newTrackButton.setTooltip ("Add track");
+    newTrackButton.onClick = [this] { if (onAddTrack) onAddTrack(); };
+    addAndMakeVisible (newTrackButton);
+
+    // Zoom out | reset | zoom in, beside the zoom slider: one step out, back
+    // to the starting zoom, one step in (like View > Zoom Out, Reset Zoom,
+    // Zoom In). The buttons are transparent; paint() draws their shared
+    // outline and the lines between them, like the app's segmented controls.
+    for (auto* b : { &zoomOutButton, &zoomResetButton, &zoomInButton })
+    {
+        b->setColours ({ juce::Colours::transparentBlack, colour::buttonIcon, juce::Colours::transparentBlack, colour::buttonIcon });
+        b->setCornerRadius (size::radiusSmall);
+        b->setIconSize (13.0f);
+        addAndMakeVisible (b);
+    }
+
+    zoomOutButton.setIconSize (15.0f);   // magnifiers: a little larger, so the − and + inside them read
+    zoomInButton.setIconSize (15.0f);
+    zoomOutButton.setTooltip ("Zoom out");
+    zoomOutButton.onClick = [this] { zoomOut(); };
+    zoomResetButton.setTooltip ("Reset zoom");
+    zoomResetButton.setIconSize (12.0f);
+    zoomResetButton.onClick = [this] { resetZoom(); };
+    zoomInButton.setTooltip ("Zoom in");
+    zoomInButton.onClick = [this] { zoomIn(); };
+
     zoomSlider.setTitle ("Zoom");
-    zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
+    zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel). Double-click to reset.");
     zoomSlider.setRange (0.0, 1.0);
     zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), getZoomAnchorX ((float) getLaneWidth() * 0.5f)); };
     addAndMakeVisible (zoomSlider);
@@ -276,6 +312,11 @@ void ArrangementView::zoomIn()
 void ArrangementView::zoomOut()
 {
     setZoom (geometry.pixelsPerBeat / 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
+}
+
+void ArrangementView::resetZoom()
+{
+    setZoom (startPixelsPerBeat, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::scrollToBeat (double beat)
@@ -484,12 +525,26 @@ void ArrangementView::paint (juce::Graphics& g)
 {
     g.fillAll (colour::windowBg);
 
-    // The corner under the track headers, beside the scroll bar.
-    auto corner = getLocalBounds().removeFromBottom (scrollBarHeight).withWidth (headerWidth);
+    // The bottom strip: a line along its top, and under the track headers
+    // the column's background (the zoom slider sits there), with its divider.
+    auto strip = getLocalBounds().removeFromBottom (bottomBarHeight);
+    auto corner = strip.withWidth (headerWidth);
     g.setColour (colour::trackColumnBg);
     g.fillRect (corner.withTrimmedRight (1));
     g.setColour (colour::divider);
     g.fillRect (corner.removeFromRight (1));
+    g.setColour (colour::trackRowLine);
+    g.fillRect (strip.removeFromTop (1));
+
+    // The zoom buttons: one outline around all three, a line between each.
+    const auto group = zoomButtonsArea.toFloat();
+    g.setColour (colour::buttonFill);
+    g.fillRoundedRectangle (group, size::radiusSmall);
+    g.setColour (colour::buttonBorder);
+    g.drawRoundedRectangle (group.reduced (0.5f), size::radiusSmall, 1.0f);
+
+    for (auto* b : { &zoomResetButton, &zoomInButton })
+        g.fillRect (b->getX() - 1, zoomButtonsArea.getY() + 4, 1, zoomButtonsArea.getHeight() - 8);
 }
 
 void ArrangementView::paintOverChildren (juce::Graphics& g)
@@ -509,24 +564,50 @@ void ArrangementView::resized()
     sectionStrip->setBounds (r.removeFromTop (sectionStripHeight));
 
     // The tracks bar, in the ruler's header part: "TRACKS" | snap |
-    // automation | tempo lane | zoom. It has the column's padding, so the
-    // zoom slider ends where the track headers' controls do.
+    // automation | tempo lane ... add track. It has the column's padding,
+    // and the "+" is centred in the column the track headers' arm buttons
+    // and pan knobs use (as is the Sections row's button below it). Zoom
+    // is in the bottom strip, where it has room for fine control.
     {
         auto bar = juce::Rectangle<int> (columnPadding, top.getY(), columnRight - columnPadding, top.getHeight() - 1)
                        .withSizeKeepingCentre (columnRight - columnPadding, 22);
         bar.removeFromLeft (columnLabelWidth ("TRACKS") + 12);
+        newTrackButton.setBounds (bar.removeFromRight (TrackHeader::controlColumnWidth).withSizeKeepingCentre (24, 22));
+        bar.removeFromRight (8);
         snapButton.setBounds (bar.removeFromLeft (72));
         bar.removeFromLeft (8);
         automationButton.setBounds (bar.removeFromLeft (24));
         bar.removeFromLeft (8);
         tempoLaneButton.setBounds (bar.removeFromLeft (24));
-        bar.removeFromLeft (12);
-        zoomIconArea = bar.removeFromLeft (14).withSizeKeepingCentre (14, 14);
-        bar.removeFromLeft (6);
-        zoomSlider.setBounds (bar);
     }
 
-    timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
+    // The bottom strip: zoom under the track headers, with the column's
+    // padding so it lines up with the controls above, and the time scroll
+    // bar beside it. Zooming and scrolling the timeline live together.
+    {
+        auto strip = r.removeFromBottom (bottomBarHeight);
+        auto zoomArea = strip.removeFromLeft (headerWidth).withTrimmedTop (1);   // under the strip's top line
+        zoomArea = { columnPadding, zoomArea.getY(), columnRight - columnPadding, zoomArea.getHeight() };
+
+        // The zoom buttons on the right, ending where the controls above end;
+        // then a gap. Each button is 26 wide; the 1px lines between them
+        // come out of that width (see paint).
+        constexpr int zoomButtonWidth = 26;
+        zoomButtonsArea = zoomArea.removeFromRight (zoomButtonWidth * 3).withSizeKeepingCentre (zoomButtonWidth * 3, 22);
+        auto inside = zoomButtonsArea.reduced (1);   // inside the outline, so a hovered button doesn't cover it
+        zoomOutButton.setBounds (inside.removeFromLeft (zoomButtonWidth - 1));
+        inside.removeFromLeft (1);
+        zoomResetButton.setBounds (inside.removeFromLeft (zoomButtonWidth - 2));
+        inside.removeFromLeft (1);
+        zoomInButton.setBounds (inside);
+        zoomArea.removeFromRight (20);
+
+        zoomIconArea = zoomArea.removeFromLeft (14).withSizeKeepingCentre (14, 14);
+        zoomArea.removeFromLeft (8);
+        zoomSlider.setBounds (zoomArea.withSizeKeepingCentre (zoomArea.getWidth(), 22));
+
+        timeScrollBar.setBounds (strip.withTrimmedTop (1).withSizeKeepingCentre (strip.getWidth(), scrollBarHeight));
+    }
     viewport.setBounds (r);
 
     // The first time there's room, zoom so 16 bars fill the lanes (as milestone 1 did).
@@ -537,6 +618,10 @@ void ArrangementView::resized()
         geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
                                                getLaneWidth() / geometry.tempo.barToBeat (16));
         startPixelsPerBeat = geometry.pixelsPerBeat;
+
+        // Double-clicking the slider resets it (to here). The slider runs
+        // 0..1, so the value it returns to is this zoom's slider position.
+        zoomSlider.setDoubleClickReturnValue (true, zoomToSlider (startPixelsPerBeat));
     }
 
     layoutContent();

@@ -118,6 +118,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::zoomIn);
         add (CommandIDs::zoomOut);
+        add (CommandIDs::zoomReset);
         m.addSeparator();
         add (CommandIDs::snapToBar);
         add (CommandIDs::snapToBeat);

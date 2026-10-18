@@ -80,6 +80,7 @@ namespace CommandIDs
         exportStems,
 
         showPlugins,        // Mix > Plug-ins...: the library's plug-in list
+        zoomReset,          // View > Reset Zoom: back to the starting zoom
     };
 }
 

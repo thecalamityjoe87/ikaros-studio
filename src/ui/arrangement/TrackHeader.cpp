@@ -29,7 +29,8 @@ namespace
     constexpr int bottomRowHeight = 22;
     constexpr int smallButtonWidth = 26;  // Mute, Solo, Monitor, Automation
     constexpr int smallButtonGap = 4;
-    constexpr int roundSize = TrackHeader::controlColumnWidth;   // the arm button, and the pan knob under it (one column)
+    constexpr int roundSize = TrackHeader::controlColumnWidth;   // the column the arm button and the pan knob under it share
+    constexpr int armSize = 24;   // the arm button: as wide as the pan knob's ring (not its whole box), so they look the same size
     constexpr int flexWidth = 38, flexHeight = 22;   // as tall as the Monitor button beside it
 
     // The text a slider's value bubble shows while it's dragged.
@@ -69,13 +70,14 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     armButton.setTooltip ("Record arm");
     flexButton.setTooltip ("Flex Time");
 
-    // Record-arm: a round button, an outlined ring with a grey dot when off,
-    // filled red with a white dot when armed. Half its size as the corner
-    // radius makes the rounded rectangle a circle.
-    armButton.setColours ({ juce::Colours::transparentBlack, colour::buttonIcon, colour::record, colour::textOnColour,
-                            colour::outline, std::nullopt, std::nullopt, colour::record });
-    armButton.setCornerRadius (roundSize * 0.5f);
-    armButton.setIconSize (11.0f);
+    // Record-arm: a round button with the same grey fill and border as the
+    // small buttons beside it, and a grey dot. Armed, it fills red with a
+    // white dot and keeps the border. Half its size as the corner radius
+    // makes the rounded rectangle a circle.
+    armButton.setColours ({ colour::buttonFill, colour::buttonIcon, colour::record, colour::textOnColour,
+                            colour::buttonBorder });
+    armButton.setCornerRadius (armSize * 0.5f);
+    armButton.setIconSize (10.0f);
     armButton.onClick = [this]
     {
         selection.selectTrack (info.id);
@@ -497,7 +499,8 @@ void TrackHeader::resized()
     // Laid out from the top: when zooming (or Tall Tracks) makes the row
     // taller, the controls stay together and the lane gets the extra room.
     // Left and right edges have the column's padding, so the tile lines up
-    // with "TRACKS" above and the arm button and pan knob with the zoom slider.
+    // with "TRACKS" above, and the arm button and pan knob sit in one column
+    // with the tracks bar's "+" and the Sections row's flag button.
     const int padding = size::panelPadding;
     const int right = getWidth() - padding;
 
@@ -508,7 +511,7 @@ void TrackHeader::resized()
     // only; they sit up here so the volume slider below is as long on
     // every track.
     auto top = juce::Rectangle<int> (left, topPadding, right - left, topRowHeight);
-    armButton.setBounds (top.removeFromRight (roundSize).withSizeKeepingCentre (roundSize, roundSize));
+    armButton.setBounds (top.removeFromRight (roundSize).withSizeKeepingCentre (armSize, armSize));   // centred over the pan knob
     top.removeFromRight (8);
 
     if (monitorButton.isVisible())
@@ -542,8 +545,8 @@ void TrackHeader::resized()
         bottom.removeFromLeft (smallButtonGap);
     }
 
-    // The pan knob is the same size as the arm button above it, with the
-    // same right edge, so the two sit in one column.
+    // The pan knob shares the arm button's column, centred under it. Its
+    // ring is as wide as the arm button; the box around it is the column.
     pan.setBounds (bottom.removeFromRight (roundSize).withSizeKeepingCentre (roundSize, roundSize));
     bottom.removeFromRight (16);
 

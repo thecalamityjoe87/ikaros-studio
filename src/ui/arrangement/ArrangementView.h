@@ -18,14 +18,14 @@ namespace ikaros
 
     Layout:
         ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
-        │ TRACKS [Snap: Beat] ⟋ ◷ ⌕─○│ ruler  1   2   3   4 ...      │  30px
+        │ TRACKS [Snap] ⟋ ◷     [+] │ ruler  1   2   3   4 ...      │  30px
         │ TEMPO                     │ tempo lane (when shown) ▔▔╲▁▁ │  44px
-        │ SECTIONS              [+] │ [Intro   ][Verse      ][Cho.. │  24px
+        │ SECTIONS              [⚑] │ [Intro   ][Verse      ][Cho.. │  24px
         ├───────────────────────────┼───────────────────────────────┤
         │ TrackHeader               │ lane  [region] [region]       │ 84px (Tall: 100)
         │ TrackHeader               │ lane                          │ (+18 w/ automation)
         │ ┌╌╌╌╌╌ + Add track ╌╌╌╌╌┐ │ ┌ drop zone ┐                 │
-        │                           │ ◀═══════ scroll bar ═══════▶  │  12px
+        │ ⌕ ───── zoom ───○ [⊖|↺|⊕] │ ◀═══════ scroll bar ═══════▶  │  26px
         └───────────────────────────┴───────────────────────────────┘
     Headers + lanes scroll vertically together inside a Viewport. Time
     (horizontal zoom and scroll) is handled here instead: the ruler, lanes and
@@ -105,6 +105,10 @@ public:
 
     void zoomIn();
     void zoomOut();
+
+    /** Back to the starting zoom (16 bars across when the view first had
+        room), where tracks are their normal height. */
+    void resetZoom();
 
     /** Shows the rename field on a region (scrolling it into view first). */
     void startRenaming (RegionId);
@@ -194,8 +198,13 @@ private:
     IconButton snapButton { "Snap to grid", std::nullopt, "Snap: Beat" };
     IconButton automationButton { "Show automation", Icon::automation };
     IconButton tempoLaneButton { "Show tempo lane", Icon::clock };
+    IconButton newTrackButton { "Add track", Icon::plus };   // the tracks bar's "+", always in view
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Rectangle<int> zoomIconArea;
+    juce::Rectangle<int> zoomIconArea;                       // the magnifier in front of the zoom slider
+    IconButton zoomOutButton { "Zoom out", Icon::zoomOut };   // the "zoom out | reset | zoom in" group beside the zoom slider
+    IconButton zoomResetButton { "Reset zoom", Icon::reset };
+    IconButton zoomInButton { "Zoom in", Icon::zoomIn };
+    juce::Rectangle<int> zoomButtonsArea;                   // their shared outline (drawn in paint)
 
     std::vector<TrackInfo> tracks;
     double contentEndBeat = 0.0;

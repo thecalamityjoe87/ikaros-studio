@@ -43,7 +43,7 @@ namespace palette
     inline const juce::Colour selectedInset   { 0xff4a5260 };   // 1px inset outline on the selected track header
     inline const juce::Colour neutralActive   { 0xff323844 };   // "pressed" fill for non-accent toggles, tabs, segments
     inline const juce::Colour field           { 0xff1c2027 };   // clickable fields in the transport readout
-    inline const juce::Colour outline         { 0xff424958 };   // dashed "add" outlines, the unarmed record-arm ring
+    inline const juce::Colour outline         { 0xff424958 };   // dashed "add" outlines
     inline const juce::Colour textSoft        { 0xffc4c9d1 };   // text on a dashed "add" button
     inline const juce::Colour knobCap         { 0xff14171c };   // the centre of a small knob
 }
@@ -102,7 +102,7 @@ namespace colour
     inline const juce::Colour buttonFill     = palette::button;
     inline const juce::Colour buttonBorder   = palette::buttonBorder;
     inline const juce::Colour buttonIcon     = palette::textMuted;
-    inline const juce::Colour outline        = palette::outline;     // dashed "add" outlines, the unarmed record-arm ring
+    inline const juce::Colour outline        = palette::outline;     // dashed "add" outlines
     inline const juce::Colour textSoft       = palette::textSoft;
     inline const juce::Colour knobCap        = palette::knobCap;
     inline const juce::Colour thumb          { 0xffffffff };         // round slider thumbs (track volume)

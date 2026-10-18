@@ -394,7 +394,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
                                    CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
-                                   CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
+                                   CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut, CommandIDs::zoomReset,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
@@ -632,6 +632,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Zoom Out", "Zoom out on the timeline", "View", 0);
             info.addDefaultKeypress ('-', cmd);
             break;
+        case CommandIDs::zoomReset:
+            info.setInfo ("Reset Zoom", "Go back to the starting zoom (16 bars across)", "View", 0);
+            info.addDefaultKeypress ('0', cmd);
+            break;
         case CommandIDs::snapToBar:
             info.setInfo ("Snap to Bars", "Regions and edges land on bar lines", "View", 0);
             info.setTicked (arrangement.getSnap() == ArrangementView::Snap::bar);
@@ -846,6 +850,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
         case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
+        case CommandIDs::zoomReset:       arrangement.resetZoom(); break;
         case CommandIDs::snapToBar:       arrangement.setSnap (ArrangementView::Snap::bar); break;
         case CommandIDs::snapToBeat:      arrangement.setSnap (ArrangementView::Snap::beat); break;
         case CommandIDs::snapOff:         arrangement.setSnap (ArrangementView::Snap::off); break;
