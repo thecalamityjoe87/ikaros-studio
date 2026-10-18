@@ -4,11 +4,21 @@
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/Decibels.h"
 
 namespace ikaros
 {
 
 using namespace tokens;
+
+namespace
+{
+    // The right-hand side, from the transport outwards.
+    constexpr int speakerWidth = 20, speakerGap = 8;
+    constexpr int masterWidth = 150;        // "Master", its dB readout and the slider
+    constexpr int masterLabelHeight = 13;   // the "Master  −3.0 dB" row
+    constexpr int statsGap = 14, statsWidth = 110;
+}
 
 Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     : engine (e), commands (cm), transport (e)
@@ -16,7 +26,7 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     auto raisedWithBorder = IconButton::raisedColours();
     raisedWithBorder.border = colour::border;
 
-    for (auto* b : { &libraryButton, &newTrackButton, &undoButton, &redoButton })
+    for (auto* b : { &libraryButton, &undoButton, &redoButton })
     {
         b->setColours (raisedWithBorder);
         addAndMakeVisible (b);
@@ -25,11 +35,8 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     // Showing the library isn't an "on" state in the accent sense: neutral fill.
     libraryButton.setColours (IconButton::neutralToggleColours());
 
-    newTrackButton.setIconSize (16.0f);
-
     // invokeDirectly runs the command synchronously, same as picking it from a menu.
     libraryButton.onClick  = [this] { commands.invokeDirectly (CommandIDs::toggleLibrary, true); };
-    newTrackButton.onClick = [this] { if (onNewTrackRequested) onNewTrackRequested (&newTrackButton); };
     undoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::undo, true); };
     redoButton.onClick     = [this] { commands.invokeDirectly (CommandIDs::redo, true); };
 
@@ -63,9 +70,16 @@ void Toolbar::update (bool libraryVisible)
         auto& tc = engine.getTracks();
         masterVolume.setValue (tc.getMasterVolume(), juce::dontSendNotification);
 
-        const auto db = tc.getMasterVolumeDb();
-        masterVolume.setTooltip ("Master volume: " + (db <= -99.0f ? juce::String ("off") : juce::String (db, 1) + " dB")
-                                 + " (double-click for 0 dB)");
+        masterVolume.setTooltip ("Master volume (double-click for 0 dB)");
+    }
+
+    // The readout follows the volume live, during a drag too.
+    const auto dbText = decibelText (engine.getTracks().getMasterVolumeDb());
+
+    if (dbText != masterDbText)
+    {
+        masterDbText = dbText;
+        repaint (masterArea.withHeight (masterLabelHeight));
     }
 
     // CPU text changes constantly; refreshing it ~3 times a second is easier to read.
@@ -102,11 +116,18 @@ void Toolbar::paint (juce::Graphics& g)
     g.setColour (colour::divider);
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
+    icons::draw (g, Icon::speaker, speakerArea.toFloat(), colour::textSecondary, 18.0f);
+
+    // "Master" on the left and the dB readout on the right, in one row.
+    const auto labelRow = masterArea.withHeight (masterLabelHeight);
     g.setColour (colour::textSecondary);
     g.setFont (fonts::ui (textSize::xs));
-    g.drawText ("Master", masterArea.withHeight (13), juce::Justification::centredLeft);
-
+    g.drawText ("Master", labelRow, juce::Justification::centredLeft);
+    g.setColour (colour::text);
     g.setFont (fonts::mono (textSize::xs));
+    g.drawText (masterDbText, labelRow, juce::Justification::centredRight);
+
+    g.setColour (colour::textSecondary);
     auto s = statsArea;
     g.drawText (statsLine1, s.removeFromTop (s.getHeight() / 2), juce::Justification::bottomRight);
     g.drawText (statsLine2, s, juce::Justification::topRight);
@@ -118,7 +139,7 @@ void Toolbar::paint (juce::Graphics& g)
         g.setColour (colour::meterGreen.withAlpha (0.18f));
         g.fillRoundedRectangle (badge, size::radiusTiny);
         g.setColour (colour::meterGreen);
-        g.setFont (fonts::mono (textSize::badge));
+        g.setFont (fonts::mono (textSize::xs));
         g.drawText ("RT", badge, juce::Justification::centred);
     }
 }
@@ -127,7 +148,7 @@ juce::Rectangle<int> Toolbar::getRealtimeBadgeArea() const
 {
     // Right-aligned with the text, just under its second line (which sits
     // at the top of its half of statsArea, so the badge can tuck up a little).
-    return { statsArea.getRight() - 20, statsArea.getBottom() - 2, 20, 12 };
+    return { statsArea.getRight() - 22, statsArea.getBottom() - 3, 22, 14 };
 }
 
 juce::String Toolbar::getTooltip()
@@ -148,29 +169,40 @@ juce::String Toolbar::getTooltip()
 
 void Toolbar::resized()
 {
-    auto r = getLocalBounds().withTrimmedBottom (1).reduced (12, 0);
+    auto r = getLocalBounds().withTrimmedBottom (1).reduced (size::panelPadding, 0);
 
     // Centre the transport in the whole toolbar, not just the leftover space.
-    auto transportWidth = juce::jmin (transport.getPreferredWidth(), r.getWidth() - 2 * 300);
-    transport.setBounds (r.withSizeKeepingCentre (transportWidth, 52));
+    // In a narrow window it moves off-centre (and then shrinks) rather than
+    // run into the buttons on either side.
+    const int gap = 12;
+    const int leftWidth = 3 * 38 + 2 * 6;   // library, Undo, Redo
+    const int rightWidth = speakerWidth + speakerGap + masterWidth + statsGap + statsWidth;
+    const int transportWidth = juce::jmin (transport.getPreferredWidth(), r.getWidth() - leftWidth - rightWidth - 2 * gap);
+    const int transportX = juce::jlimit (r.getX() + leftWidth + gap, r.getRight() - rightWidth - gap - transportWidth,
+                                         r.getCentreX() - transportWidth / 2);
+    transport.setBounds (r.withX (transportX).withWidth (transportWidth).withSizeKeepingCentre (transportWidth, 52));
 
-    auto left = r.withRight (transport.getX() - 12);
+    auto left = r.withRight (transport.getX() - gap);
     auto place = [&] (juce::Component& c, int w)
     {
         c.setBounds (left.removeFromLeft (w).withSizeKeepingCentre (w, 38));
         left.removeFromLeft (6);
     };
     place (libraryButton, 38);
-    place (newTrackButton, 124);
     place (undoButton, 38);
     place (redoButton, 38);
 
-    auto right = r.withLeft (transport.getRight() + 12);
-    statsArea = right.removeFromRight (110).withSizeKeepingCentre (110, 32);
-    right.removeFromRight (14);
-    // "Master", and the level-and-volume slider under it.
-    masterArea = right.removeFromRight (120).withSizeKeepingCentre (120, 34);
-    masterVolume.setBounds (masterArea.withTrimmedTop (14).expanded (6, 0));   // the handle overhangs the bars a little
+    // From the right edge: stats, then the master block, then its speaker icon.
+    auto right = r.withLeft (transport.getRight() + gap);
+    statsArea = right.removeFromRight (statsWidth).withSizeKeepingCentre (statsWidth, 32);
+    right.removeFromRight (statsGap);
+
+    // "Master  −3.0 dB" in one row, and the level-and-volume slider under it.
+    masterArea = right.removeFromRight (masterWidth).withSizeKeepingCentre (masterWidth, 34);
+    masterVolume.setBounds (masterArea.withTrimmedTop (masterLabelHeight + 1)
+                                      .expanded (6, 0));   // the handle overhangs the bars a little
+    right.removeFromRight (speakerGap);
+    speakerArea = right.removeFromRight (speakerWidth).withSizeKeepingCentre (speakerWidth, speakerWidth);
 }
 
 } // namespace ikaros

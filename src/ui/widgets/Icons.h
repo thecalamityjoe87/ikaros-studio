@@ -13,7 +13,8 @@ enum class Icon
     keyboards, drums, bass, synths, guitar, strings, woodwinds, brass, loops, mic,
     windowMinimise, windowMaximise, windowRestore, windowClose,
     power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
-    plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash
+    plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash,
+    speaker, timer
 };
 
 namespace icons

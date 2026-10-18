@@ -46,7 +46,6 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     arrangement.onTempoLaneToggled = [this] { commands.commandStatusChanged(); };
-    toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };

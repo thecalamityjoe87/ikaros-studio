@@ -104,6 +104,12 @@ namespace colour
     inline const juce::Colour textMenu       { 0xffc9d0da };   // menu bar items, icon buttons, slider thumbs
     inline const juce::Colour textOnAccent   = palette::onAccent;
     inline const juce::Colour textOnColour   { 0xffffffff };   // icons/text on saturated fills (record, track colours)
+    inline const juce::Colour textDisabled   = palette::disabled;   // icons/text of a disabled control (e.g. Redo with nothing to redo)
+
+    // Clickable values in the transport readout (tempo, time signature, key):
+    // a shade lighter than the readout, brightened on hover.
+    inline const juce::Colour field          = palette::field;
+    inline const juce::Colour logoOutline    = palette::buttonBorder;   // keeps the dark logo tile visible on the title bar
 
     // The accent only ever means "on": active toggles (cycle, metronome,
     // count-in, a muted track's Mute, Flex, open automation), Play while
@@ -204,8 +210,7 @@ namespace shadow
 // labels (BAR · BEAT, BPM, TIME, KEY) may go below it.
 namespace textSize
 {
-    inline constexpr float caption = 9.0f;    // transport readout captions
-    inline constexpr float badge   = 9.5f;    // TODO(milestone-7): below the 11px minimum
+    inline constexpr float caption = 9.5f;    // transport readout captions (the only text allowed below 11px)
     inline constexpr float tiny    = 10.0f;   // TODO(milestone-7): below the 11px minimum
     inline constexpr float xs      = 11.0f;
     inline constexpr float sm      = 12.0f;
@@ -226,6 +231,7 @@ namespace textSize
 namespace size
 {
     inline constexpr int menuBarHeight     = 30;
+    inline constexpr int logoSize          = 18;    // the app logo in the title bar
     inline constexpr int toolbarHeight     = 64;
     inline constexpr int sidebarWidth      = 264;   // 250–280 in the spec
     inline constexpr int rulerHeight       = 30;

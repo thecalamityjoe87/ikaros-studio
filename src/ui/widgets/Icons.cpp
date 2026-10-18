@@ -80,6 +80,8 @@ namespace
             case Icon::clock:          return "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3.5 2";
             case Icon::headphones:     return "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z";
             case Icon::waveform:       return "M4 10v4 M8 7v10 M12 4v16 M16 7v10 M20 10v4";
+            case Icon::speaker:        return "M3 9h4l5-4v14l-5-4H3z M16 9.5a3.5 3.5 0 0 1 0 5 M18.5 7a7 7 0 0 1 0 10";   // speaker with sound waves
+            case Icon::timer:          return "M12 6a7.5 7.5 0 1 0 0 15a7.5 7.5 0 1 0 0-15 M12 10v3.5l2.5 1.5 M9.5 2.5h5 M12 2.5V6";   // a stopwatch
             case Icon::mute:           return "M3 9h4l5-4v14l-5-4H3z M16 9l5 6 M21 9l-5 6";   // speaker with a cross
             case Icon::plugin:         return "M9 3v5 M15 3v5 M6 8h12v4a6 6 0 0 1-12 0z M12 18v3";   // a mains plug
             case Icon::folder:         return "M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z";

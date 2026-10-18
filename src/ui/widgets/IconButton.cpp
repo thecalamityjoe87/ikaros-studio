@@ -70,8 +70,15 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
     auto bg = on ? colours.backgroundOn : colours.background;
     auto fg = on ? colours.foregroundOn : colours.foreground;
 
+    auto border = colours.border;
+
     if (! isEnabled())
-        fg = fg.withMultipliedAlpha (0.4f);
+    {
+        // Clearly "not now": grey icon/text, and a flatter, fainter button.
+        fg = colour::textDisabled;
+        bg = bg.withMultipliedAlpha (0.5f);
+        border = border.withMultipliedAlpha (0.5f);
+    }
     else if ((over || down) && colours.hoverBackground.has_value())
     {
         bg = down ? colours.hoverBackground->darker (0.15f) : *colours.hoverBackground;
@@ -85,9 +92,9 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
     g.setColour (bg);
     g.fillRoundedRectangle (r, cornerRadius);
 
-    if (! colours.border.isTransparent())
+    if (! border.isTransparent())
     {
-        g.setColour (colours.border);
+        g.setColour (border);
         g.drawRoundedRectangle (r.reduced (0.5f), cornerRadius, 1.0f);
     }
 

@@ -290,6 +290,7 @@ set(IKAROS_UI_SOURCES
     # widgets: small reusable controls
     src/ui/widgets/Icons.h                  src/ui/widgets/Icons.cpp
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
+    src/ui/widgets/Decibels.h
     src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
