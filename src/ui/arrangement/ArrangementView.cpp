@@ -76,7 +76,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     snapButton.onClick = [this] { showSnapMenu(); };
     addAndMakeVisible (snapButton);
 
-    // Show Automation: every track's automation at once (amber while it shows).
+    // Show Automation: every track's automation at once (amber while it's on).
     auto automationColours = snapColours;   // like the snap button, amber when on
     automationColours.foreground = colour::textSecondary;
     automationColours.backgroundOn = colour::accent;

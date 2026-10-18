@@ -24,7 +24,13 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
         addAndMakeVisible (b);
     }
 
-    playButton.setColours (IconButton::accentColours());
+    // Neutral while stopped, amber while playing. The button never toggles
+    // itself on click; update() sets its toggle state from the transport.
+    auto playColours = IconButton::accentColours();
+    playColours.background = colour::neutralActive;
+    playColours.foreground = colour::text;
+    playColours.backgroundOn = colour::accent;
+    playButton.setColours (playColours);
     playButton.setCornerRadius (size::radiusLarge);
     playButton.setIconSize (20.0f);
     addAndMakeVisible (playButton);
@@ -76,6 +82,7 @@ void TransportBar::update()
         playButton.setIcon (state.playing ? Icon::pause : Icon::play);
         playButton.setTitle (state.playing ? "Pause" : "Play");
         playButton.setTooltip (state.playing ? "Pause (Space)" : "Play (Space)");
+        playButton.setToggleState (state.playing, juce::dontSendNotification);
     }
 
     recordButton.setToggleState (state.recording, juce::dontSendNotification);

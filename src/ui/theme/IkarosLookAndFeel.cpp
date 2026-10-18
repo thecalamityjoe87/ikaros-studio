@@ -17,39 +17,41 @@ IkarosLookAndFeel::IkarosLookAndFeel()
                        colour::border,          // outline
                        colour::text,            // defaultText
                        colour::raised,          // defaultFill
-                       colour::textOnAccent,    // highlightedText
-                       colour::accent,          // highlightedFill
+                       colour::text,            // highlightedText
+                       colour::neutralActive,   // highlightedFill (not the accent: that only means "on")
                        colour::text });         // menuText
 
     setColour (juce::ResizableWindow::backgroundColourId, colour::windowBg);
     setColour (juce::DocumentWindow::textColourId, colour::text);
 
     setColour (juce::TextButton::buttonColourId, colour::raised);
-    setColour (juce::TextButton::buttonOnColourId, colour::accent);
+    setColour (juce::TextButton::buttonOnColourId, colour::neutralActive);
     setColour (juce::TextButton::textColourOffId, colour::text);
-    setColour (juce::TextButton::textColourOnId, colour::textOnAccent);
+    setColour (juce::TextButton::textColourOnId, colour::text);
 
     setColour (juce::Label::textColourId, colour::text);
     setColour (juce::Label::textWhenEditingColourId, colour::text);
     setColour (juce::Label::backgroundWhenEditingColourId, colour::raised);
-    setColour (juce::Label::outlineWhenEditingColourId, colour::accent);
+    setColour (juce::Label::outlineWhenEditingColourId, colour::highlight);
 
-    setColour (juce::Slider::trackColourId, colour::accent);
+    // Slider fills and knob arcs default to neutral grey; track controls set
+    // their own (the track colour) per slider.
+    setColour (juce::Slider::trackColourId, colour::textSecondary);
     setColour (juce::Slider::backgroundColourId, colour::controlFill);
     setColour (juce::Slider::thumbColourId, colour::text);
-    setColour (knobArcColourId, colour::accent);
+    setColour (knobArcColourId, colour::textSecondary);
 
     setColour (juce::TextEditor::backgroundColourId, colour::wellBg);
     setColour (juce::TextEditor::textColourId, colour::text);
-    setColour (juce::TextEditor::highlightColourId, colour::accent.withAlpha (0.35f));
+    setColour (juce::TextEditor::highlightColourId, colour::highlight.withAlpha (0.25f));
     setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
-    setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
-    setColour (juce::CaretComponent::caretColourId, colour::accent);
+    setColour (juce::TextEditor::focusedOutlineColourId, colour::selectedBorder);
+    setColour (juce::CaretComponent::caretColourId, colour::text);
 
     setColour (juce::PopupMenu::backgroundColourId, colour::toolbarBg);
     setColour (juce::PopupMenu::textColourId, colour::text);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, colour::accent);
-    setColour (juce::PopupMenu::highlightedTextColourId, colour::textOnAccent);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, colour::neutralActive);
+    setColour (juce::PopupMenu::highlightedTextColourId, colour::text);
     setColour (juce::PopupMenu::headerTextColourId, colour::textSecondary);
 
     setColour (juce::ScrollBar::thumbColourId, colour::borderStrong);
@@ -119,13 +121,13 @@ void IkarosLookAndFeel::styleInlineEditor (juce::TextEditor& editor)
     // Colours set on the component itself win over the LookAndFeel's defaults
     // (findColour checks the component first, then its parents, then the L&F).
     editor.setColour (juce::TextEditor::backgroundColourId, colour::raised);
-    editor.setColour (juce::TextEditor::outlineColourId, colour::accent);
-    editor.setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
+    editor.setColour (juce::TextEditor::outlineColourId, colour::selectedBorder);
+    editor.setColour (juce::TextEditor::focusedOutlineColourId, colour::selectedBorder);
 }
 
 void IkarosLookAndFeel::drawFocusRing (juce::Graphics& g, juce::Rectangle<float> bounds, float cornerRadius)
 {
-    g.setColour (colour::accent);
+    g.setColour (colour::highlight);
     g.drawRoundedRectangle (bounds.reduced (1.0f), cornerRadius, 2.0f);
 }
 
@@ -169,14 +171,14 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         g.fillRoundedRectangle (slot, size::radiusTiny);
 
         auto cap = juce::Rectangle<float> (26.0f, 14.0f).withCentre ({ slot.getCentreX(), sliderPos });
-        g.setColour (automated ? colour::accent : colour::textMenu);
+        g.setColour (automated ? colour::automated : colour::textMenu);
         g.fillRoundedRectangle (cap, size::radiusXs);
         g.setColour (colour::lcdLabel);
         g.fillRect (cap.removeFromBottom (2.0f).reduced (3.0f, 0.0f));
     }
     else
     {
-        // Track header volume: thin track, accent fill, round thumb.
+        // Track header volume: thin track, filled in trackColourId, round thumb.
         auto track = bounds.withSizeKeepingCentre (bounds.getWidth(), 4.0f);
         g.setColour (colour::controlFill);
         g.fillRoundedRectangle (track, size::radiusHair);
@@ -185,7 +187,7 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         g.fillRoundedRectangle (track.withRight (sliderPos), size::radiusHair);
 
         auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ sliderPos, track.getCentreY() });
-        g.setColour (automated ? colour::accent : colour::text);
+        g.setColour (automated ? colour::automated : colour::text);
         g.fillEllipse (thumb);
     }
 
@@ -247,8 +249,8 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     // getPointOnCircumference measures angles clockwise from 12 o'clock, like the slider does.
     auto inner = centre.getPointOnCircumference (capRadius * 0.27f, valueAngle);
     auto outer = centre.getPointOnCircumference (capRadius * 0.8f, valueAngle);
-    // An automated knob's needle is amber (see drawLinearSlider).
-    g.setColour ((bool) s.getProperties()["automated"] ? colour::accent : colour::text);
+    // An automated knob's needle is in the "automated" colour (see drawLinearSlider).
+    g.setColour ((bool) s.getProperties()["automated"] ? colour::automated : colour::text);
     g.drawLine ({ inner, outer }, size * 0.055f);
 
     if (s.hasKeyboardFocus (false))

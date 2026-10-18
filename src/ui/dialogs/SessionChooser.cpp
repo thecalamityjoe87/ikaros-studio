@@ -24,7 +24,7 @@ namespace
 
     const TemplateInfo templates[]
     {
-        { SessionTemplate::empty,      "Empty Session",       "One instrument track, ready to play.",       Icon::plus,      colour::accent },
+        { SessionTemplate::empty,      "Empty Session",       "One instrument track, ready to play.",       Icon::plus,      colour::textSecondary },
         { SessionTemplate::keyboards,  "Keyboard Collection", "Piano, electric piano and organ.",           Icon::keyboards, colour::trackBlue },
         { SessionTemplate::voice,      "Voice",               "A vocal track and a piano to sing along to.", Icon::mic,       colour::trackOrange },
         { SessionTemplate::beats,      "Beat",                "Drum kit, synth bass and a pad.",            Icon::drums,     colour::trackPurple },
@@ -99,7 +99,7 @@ public:
         g.setFont (fonts::ui (textSize::sm));
         g.drawFittedText (detail, text.removeFromTop (30), juce::Justification::topLeft, 2, 1.0f);
 
-        g.setColour (on ? colour::accent : colour::borderSoft);
+        g.setColour (on ? colour::selectedBorder : colour::borderSoft);
         g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
     }
 
@@ -171,7 +171,7 @@ public:
         }
 
         auto content = getLocalBounds().reduced (12, 0);
-        icons::draw (g, icon, content.removeFromLeft (20).toFloat(), on ? colour::accent : colour::textSecondary, 18.0f, 1.8f);
+        icons::draw (g, icon, content.removeFromLeft (20).toFloat(), on ? colour::text : colour::textSecondary, 18.0f, 1.8f);
         content.removeFromLeft (10);
         g.setColour (on ? colour::text : colour::textMenu);
         g.setFont (on ? fonts::uiSemiBold (textSize::lg) : fonts::ui (textSize::lg));
@@ -305,7 +305,7 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     cancelButton.onClick = [this] { close(); };
     addAndMakeVisible (cancelButton);
 
-    chooseButton.setColours (IconButton::accentColours());
+    chooseButton.setColours (IconButton::primaryColours());
     chooseButton.onClick = [this] { choose(); };
     addAndMakeVisible (chooseButton);
 }

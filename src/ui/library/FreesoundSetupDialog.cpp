@@ -46,7 +46,7 @@ FreesoundSetupDialog::FreesoundSetupDialog (AudioEngine& e)
         keyField.clear();
     };
 
-    connectButton.setColours (IconButton::accentColours());
+    connectButton.setColours (IconButton::primaryColours());
     connectButton.setFont (fonts::uiSemiBold (textSize::md));
     connectButton.onClick = [this] { connect(); };
     addAndMakeVisible (connectButton);
@@ -144,9 +144,9 @@ void FreesoundSetupDialog::paint (juce::Graphics& g)
     auto drawStep = [&g] (int number, juce::Rectangle<int> area, const juce::String& title, const juce::String& detail)
     {
         auto badge = area.removeFromLeft (24).removeFromTop (22).toFloat().withSizeKeepingCentre (22.0f, 22.0f);
-        g.setColour (colour::accent);
+        g.setColour (colour::neutralActive);
         g.fillEllipse (badge);
-        g.setColour (colour::toolbarBg);
+        g.setColour (colour::text);
         g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (juce::String (number), badge.toNearestInt(), juce::Justification::centred);
 

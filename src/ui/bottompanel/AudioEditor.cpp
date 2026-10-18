@@ -44,7 +44,7 @@ AudioEditor::AudioEditor (AudioEngine& e) : engine (e)
     timeScroll.addListener (this);
     addAndMakeVisible (timeScroll);
 
-    setRegion (std::nullopt, colour::accent, TempoMap());
+    setRegion (std::nullopt, colour::master, TempoMap());
 }
 
 AudioEditor::~AudioEditor()
@@ -865,9 +865,9 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
     if (selection.has_value())
     {
         const float from = beatToX (selection->getStart()), to = beatToX (selection->getEnd());
-        g.setColour (colour::accent.withAlpha (0.14f));
+        g.setColour (colour::highlight.withAlpha (0.1f));
         g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, area.getY(), to, area.getBottom()));
-        g.setColour (colour::accent.withAlpha (0.6f));
+        g.setColour (colour::highlight.withAlpha (0.6f));
         g.fillRect (from, area.getY(), 1.0f, area.getHeight());
         g.fillRect (to - 1.0f, area.getY(), 1.0f, area.getHeight());
     }

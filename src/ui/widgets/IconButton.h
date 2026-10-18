@@ -39,9 +39,12 @@ public:
     void setIconColour (std::optional<juce::Colour> c) { iconColour = c; repaint(); }
 
     /** Preset colour schemes from the design. */
-    static Colours raisedColours();     // grey raised button, amber when toggled on
-    static Colours accentColours();     // amber button with dark icon (Play)
+    static Colours raisedColours();     // grey raised button, amber when toggled on (active toggles only)
+    static Colours accentColours();     // amber button with dark icon
     static Colours ghostColours();      // transparent until hovered
+    static Colours neutralToggleColours();   // grey raised button, neutralActive when toggled on (e.g. library shown)
+    static Colours segmentColours();    // a segment/tab: transparent, neutralActive when chosen
+    static Colours primaryColours();    // a dialog's main action (Done, Export, Create)
 
 protected:
     void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;

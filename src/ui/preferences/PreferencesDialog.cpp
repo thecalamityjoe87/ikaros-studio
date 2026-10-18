@@ -59,7 +59,7 @@ PreferencesDialog::PreferencesDialog (AudioEngine& e, juce::ApplicationCommandMa
     pageList.setTitle ("Sections");
     addAndMakeVisible (pageList);
 
-    doneButton.setColours (IconButton::accentColours());
+    doneButton.setColours (IconButton::primaryColours());
     doneButton.onClick = [this] { close(); };
     addAndMakeVisible (doneButton);
 }
@@ -171,7 +171,7 @@ void PreferencesDialog::paintListBoxItem (int row, juce::Graphics& g, int width,
     {
         g.setColour (colour::selectedRow);
         g.fillRoundedRectangle (r, size::radiusSmall);
-        g.setColour (colour::accent);
+        g.setColour (colour::highlight);
         g.fillRoundedRectangle (r.withWidth (3.0f).reduced (0.0f, 8.0f), 1.5f);
     }
 

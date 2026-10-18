@@ -96,14 +96,14 @@ void HintBubble::paint (juce::Graphics& g)
 
     g.setColour (colour::raised);
     g.fillPath (outline);
-    g.setColour (colour::accent);
+    g.setColour (colour::automated);
     g.strokePath (outline, juce::PathStrokeType (1.0f));
 
     layout.draw (g, bubble.reduced (padding).withHeight (layout.getHeight()));
 
     if (! actionArea.isEmpty())
     {
-        g.setColour (colour::accent);
+        g.setColour (colour::automated);
         g.fillRoundedRectangle (actionArea, size::radiusSmall);
         g.setColour (colour::textOnAccent);
         g.setFont (fonts::uiBold (textSize::sm));

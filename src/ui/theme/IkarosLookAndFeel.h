@@ -68,7 +68,7 @@ public:
     int getDefaultScrollbarWidth() override;
 
     /** Styles a text field that edits something in place (a section name,
-        a tempo value): raised fill with an accent outline. */
+        a tempo value): raised fill with a light grey outline. */
     static void styleInlineEditor (juce::TextEditor&);
 
     /** Shared keyboard-focus ring, used by our custom components too. */

@@ -179,9 +179,9 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
     fill.lineTo (width + 10.0f, (float) r.getHeight());
     fill.lineTo (-10.0f, (float) r.getHeight());
     fill.closeSubPath();
-    g.setColour (colour::accent.withAlpha (0.1f));
+    g.setColour (colour::tempoCurve.withAlpha (0.1f));
     g.fillPath (fill);
-    g.setColour (colour::accent.withAlpha (hover.kind == Hit::Kind::line ? 1.0f : 0.8f));
+    g.setColour (hover.kind == Hit::Kind::line ? colour::text : colour::tempoCurve);
     g.strokePath (line, juce::PathStrokeType (1.5f));
 
     // A point and its tempo at each change (the first one at the song's start).
@@ -194,7 +194,7 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
                           || (selected.kind == Hit::Kind::point && selected.index == (int) i);
         const float radius = lit ? pointRadius + 1.0f : pointRadius;
 
-        g.setColour (selected.kind == Hit::Kind::point && selected.index == (int) i ? colour::text : colour::accent);
+        g.setColour (selected.kind == Hit::Kind::point && selected.index == (int) i ? colour::text : colour::tempoCurve);
         g.fillEllipse (x - radius, y - radius, radius * 2.0f, radius * 2.0f);
 
         // The number goes above the line, or below it near the top.

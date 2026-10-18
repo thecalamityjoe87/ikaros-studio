@@ -359,7 +359,7 @@ private:
         slider.setRange (0.0, 100.0, 1.0);
         slider.setValue (initial, juce::dontSendNotification);
         slider.setDoubleClickReturnValue (true, initial);
-        slider.setColour (juce::Slider::trackColourId, colour::accent);
+        slider.setColour (juce::Slider::trackColourId, colour::textSecondary);
         slider.onValueChange = [this]
         {
             if (owner.onQuantizeFeelChanged)

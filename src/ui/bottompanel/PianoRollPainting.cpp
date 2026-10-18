@@ -66,7 +66,8 @@ void PianoRoll::paintKeys (juce::Graphics& g)
         auto row = juce::Rectangle<float> ((float) keysArea.getX(), pitchToY (note), (float) keysArea.getWidth(), rowHeight);
         const bool down = note == previewNote;
 
-        g.setColour (down ? colour::accent : isBlackKey (note) ? colour::wellBg : colour::textMenu);
+        g.setColour (down ? (isBlackKey (note) ? colour::pianoBlackDown : colour::pianoWhiteDown)
+                          : isBlackKey (note) ? colour::wellBg : colour::textMenu);
         g.fillRect (row.reduced (0.0f, 0.5f));
 
         if (note % 12 == 0 && rowHeight >= 8.0f)
@@ -195,9 +196,9 @@ void PianoRoll::paintNotes (juce::Graphics& g)
 
     if (gesture.mode == Gesture::Mode::marquee)
     {
-        g.setColour (colour::accent.withAlpha (0.12f));
+        g.setColour (colour::highlight.withAlpha (0.08f));
         g.fillRect (gesture.marquee);
-        g.setColour (colour::accent);
+        g.setColour (colour::highlight);
         g.drawRect (gesture.marquee, 1);
     }
 }

@@ -199,7 +199,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
         if (drag->target.has_value())
         {
             const float x = beatToLaneX (*drag->target);
-            g.setColour (colour::accent);
+            g.setColour (colour::highlight);
             g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight() - 1.0f);
 
             juce::Path arrow;

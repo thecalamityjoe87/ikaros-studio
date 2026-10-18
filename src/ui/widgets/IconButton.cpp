@@ -45,6 +45,23 @@ IconButton::Colours IconButton::ghostColours()
     return { juce::Colours::transparentBlack, colour::textMenu, colour::raised, colour::text };
 }
 
+IconButton::Colours IconButton::neutralToggleColours()
+{
+    return { colour::raised, colour::text, colour::neutralActive, colour::text, colour::border };
+}
+
+IconButton::Colours IconButton::segmentColours()
+{
+    return { juce::Colours::transparentBlack, colour::textSecondary, colour::neutralActive, colour::text };
+}
+
+IconButton::Colours IconButton::primaryColours()
+{
+    // Neutral, like everything that isn't "on"; the light border and bold
+    // text are what mark it as the main action.
+    return { colour::neutralActive, colour::text, colour::neutralActive, colour::text, colour::selectedBorder };
+}
+
 void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
 {
     auto r = getLocalBounds().toFloat();

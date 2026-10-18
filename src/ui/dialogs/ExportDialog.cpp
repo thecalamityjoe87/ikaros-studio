@@ -105,7 +105,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
             (stemsToggle.getToggleState() ? result.files[0].getParentDirectory() : result.files[0]).revealToUser();
     };
 
-    exportButton.setColours (IconButton::accentColours());
+    exportButton.setColours (IconButton::primaryColours());
     exportButton.onClick = [this]
     {
         if (stage == Stage::done)

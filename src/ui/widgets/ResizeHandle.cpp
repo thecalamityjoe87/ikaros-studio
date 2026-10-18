@@ -22,7 +22,7 @@ void ResizeHandle::paint (juce::Graphics& g)
         return;
 
     // A 2px line along the middle of the strip, i.e. on the edge itself.
-    g.setColour (colour::accent.withAlpha (dragging ? 1.0f : 0.7f));
+    g.setColour (colour::highlight.withAlpha (dragging ? 0.8f : 0.5f));
     auto r = getLocalBounds().toFloat();
 
     if (orientation == Orientation::vertical)

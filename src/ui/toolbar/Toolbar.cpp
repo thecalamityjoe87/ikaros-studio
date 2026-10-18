@@ -22,6 +22,9 @@ Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
         addAndMakeVisible (b);
     }
 
+    // Showing the library isn't an "on" state in the accent sense: neutral fill.
+    libraryButton.setColours (IconButton::neutralToggleColours());
+
     newTrackButton.setIconSize (16.0f);
 
     // invokeDirectly runs the command synchronously, same as picking it from a menu.

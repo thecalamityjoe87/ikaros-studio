@@ -168,7 +168,7 @@ public:
 
         mainButton.setVisible (v.mainAction.isNotEmpty());
         mainButton.setText (v.mainAction);
-        mainButton.setColours (v.mainIsCancel ? greyColours : IconButton::accentColours());
+        mainButton.setColours (v.mainIsCancel ? greyColours : IconButton::primaryColours());
         mainButton.setTitle (v.mainAction + " " + v.title);
 
         removeButton.setVisible (v.canRemove);
@@ -188,7 +188,7 @@ public:
 
         if (view.highlighted)
         {
-            g.setColour (colour::accent.withAlpha (0.6f));
+            g.setColour (colour::selectedBorder);
             g.drawRoundedRectangle (card.reduced (0.5f), size::radiusLarge, 1.0f);
         }
 
@@ -224,7 +224,7 @@ public:
                 auto bar = status.withSizeKeepingCentre (status.getWidth(), 6).toFloat();
                 g.setColour (colour::controlFill);
                 g.fillRoundedRectangle (bar, size::radiusTiny);
-                g.setColour (colour::accent);
+                g.setColour (colour::highlight);
                 g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, view.progress)), size::radiusTiny);
                 break;
             }
@@ -350,7 +350,7 @@ MoreSoundsDialog::MoreSoundsDialog (AudioEngine& e, bool isWelcome, const juce::
     };
     addChildComponent (notNowButton);
 
-    doneButton.setColours (IconButton::accentColours());
+    doneButton.setColours (IconButton::primaryColours());
     doneButton.onClick = [this]
     {
         // Welcome, before choosing: the big button downloads the starter sounds.

@@ -89,7 +89,7 @@ public:
                         bool isDown, bool isOver, juce::Colour, juce::Colour) override
     {
         auto key = area.reduced (1.0f, 0.0f);
-        g.setColour (isDown ? colour::pianoWhiteLit : (isOver ? colour::pianoWhite.darker (0.05f) : colour::pianoWhite));
+        g.setColour (isDown ? colour::pianoWhiteDown : (isOver ? colour::pianoWhite.darker (0.05f) : colour::pianoWhite));
         g.fillRoundedRectangle (key.withTrimmedTop (-6.0f), size::radiusSmall);   // round only the bottom corners
 
         if (note % 12 == 0)
@@ -104,7 +104,7 @@ public:
                         bool isDown, bool isOver, juce::Colour) override
     {
         auto key = area.withTrimmedTop (-4.0f);
-        g.setColour (isDown ? colour::accent : (isOver ? colour::pianoBlack.brighter (0.15f) : colour::pianoBlack));
+        g.setColour (isDown ? colour::pianoBlackDown : (isOver ? colour::pianoBlack.brighter (0.15f) : colour::pianoBlack));
         g.fillRoundedRectangle (key, size::radiusXs);
 
         g.setColour (colour::border);

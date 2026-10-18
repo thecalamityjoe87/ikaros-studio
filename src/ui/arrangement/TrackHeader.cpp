@@ -30,7 +30,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
         addAndMakeVisible (b);
     };
 
-    setupToggle (muteButton, colour::mute);
+    setupToggle (muteButton, colour::accent);   // a muted track's Mute is "on"
     setupToggle (soloButton, colour::solo);
     muteButton.setIconSize (14.0f);
     soloButton.setIconSize (14.0f);
@@ -290,9 +290,9 @@ void TrackHeader::showAutomationMenu()
         juce::PopupMenu::Item item (a.name);
         item.setTicked (a.id == current);
 
-        // Settings with automation stand out in amber, like their controls.
+        // Settings with automation stand out, in the same colour as their controls.
         if (a.automated)
-            item.setColour (colour::accent);
+            item.setColour (colour::automated);
 
         item.setAction ([&eng, id, targetId = a.id] { eng.getTracks().automation().setLaneTarget (id, targetId); });
         return item;
@@ -424,7 +424,7 @@ void TrackHeader::paint (juce::Graphics& g)
         g.setColour (getAutomationColour (info.automationTarget));
         g.fillEllipse (text.removeFromLeft (8.0f).withSizeKeepingCentre (8.0f, 8.0f));
         text.removeFromLeft (6.0f);
-        g.setColour (automationTargetAutomated ? colour::accent : colour::text);
+        g.setColour (automationTargetAutomated ? colour::automated : colour::text);
         g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (automationName, text, juce::Justification::centredLeft, true);
     }

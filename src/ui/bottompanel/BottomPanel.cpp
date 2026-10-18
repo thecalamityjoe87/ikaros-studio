@@ -60,7 +60,7 @@ public:
         };
         addChildComponent (openWindowButton);
 
-        downloadButton.setColours (IconButton::accentColours());
+        downloadButton.setColours (IconButton::primaryColours());
         downloadButton.setFont (fonts::uiSemiBold (textSize::md));
         downloadButton.onClick = [this]
         {
@@ -78,7 +78,7 @@ public:
         detailsVisible = showDetails;
         auto id = selection.getTrack();
         auto& tc = engine.getTracks();
-        auto arc = track.has_value() ? track->colour : colour::accent;
+        auto arc = track.has_value() ? track->colour : colour::master;
 
         // Audio tracks have no synth: no knobs or keyboard, just a pointer
         // to where their settings are.
@@ -330,7 +330,7 @@ public:
     explicit MasterPage (AudioEngine& e) : engine (e)
     {
         volume.setName ("Volume");
-        volume.setArcColour (colour::accent);
+        volume.setArcColour (colour::master);
         volume.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
         volume.onValueChange = [this] (float v)
         {
@@ -419,7 +419,8 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     // Segmented controls (the tabs, Track | Master): the panel draws the
     // shared rounded background (see paint), and the chosen segment is a
     // rounded pill inside it, like the rest of the app's buttons.
-    auto tabColours = IconButton::Colours { juce::Colours::transparentBlack, colour::text, colour::accent, colour::textOnAccent };
+    // Chosen segments are neutral (neutralActive), never the accent.
+    auto tabColours = IconButton::segmentColours();
 
     int index = 0;
 
@@ -459,6 +460,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     masterModeButton.onClick = [this] { setMasterMode (true); if (onViewStateChanged) onViewStateChanged(); };
     regionModeButton.setTooltip ("Settings for the region in the Editor");
+    regionModeButton.setVisible (tab == Tab::editor);   // it sits in Master's place (see showTabPage)
     regionModeButton.onClick = [this] { setRegionMode (true); };
 
     // The Editor's grid and Quantize live in the region inspector, but
@@ -482,8 +484,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     addChildComponent (regionInspector);
 
-    auto mixerColours = IconButton::raisedColours();
-    mixerColours.border = colour::border;
+    auto mixerColours = IconButton::neutralToggleColours();
     mixerButton.setColours (mixerColours);
     mixerButton.setFont (fonts::ui (textSize::md));
     mixerButton.setTooltip ("Every track's fader at once");
@@ -632,7 +633,7 @@ void BottomPanel::openEffect (PluginId id)
         return;
 
     effectViewport.setViewedComponent (nullptr, false);
-    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::accent : t->colour);
+    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::master : t->colour);
 
     // onClose runs from inside the editor (its Done button or its timer), so
     // the editor can't be deleted right there; close on the next message-loop
@@ -697,8 +698,10 @@ void BottomPanel::updateTabButtons()
     eqTab.setToggleState (tabShowing && tab == Tab::eq, juce::dontSendNotification);
     editorTab.setToggleState (tabShowing && tab == Tab::editor, juce::dontSendNotification);
     trackModeButton.setToggleState (tab == Tab::editor ? ! regionMode : ! masterMode, juce::dontSendNotification);
-    masterModeButton.setToggleState (masterMode, juce::dontSendNotification);
-    regionModeButton.setToggleState (regionMode, juce::dontSendNotification);
+    // Master and Region share a radio group with Track, so only the one that's
+    // showing for this tab may be switched on (turning one on turns Track off).
+    masterModeButton.setToggleState (tab != Tab::editor && masterMode, juce::dontSendNotification);
+    regionModeButton.setToggleState (tab == Tab::editor && regionMode, juce::dontSendNotification);
     mixerButton.setToggleState (mixerShown, juce::dontSendNotification);
 }
 
@@ -729,7 +732,7 @@ void BottomPanel::refreshTrack()
     inspector.refresh();
     soundPage->refresh (track, detailsVisible);
     masterPage->refresh();
-    eqView.setTarget (getTarget(), showsMaster() ? colour::accent : track.has_value() ? track->colour : colour::accent);
+    eqView.setTarget (getTarget(), showsMaster() ? colour::master : track.has_value() ? track->colour : colour::master);
 
     if (mixer.isVisible())
         mixer.refresh();
@@ -755,7 +758,7 @@ void BottomPanel::refreshEditor()
 
     // The region picks the editor; with none, the track does.
     const bool audio = region.has_value() ? ! region->isMidi : audioTrack;
-    const auto trackColour = track.has_value() ? track->colour : colour::accent;
+    const auto trackColour = track.has_value() ? track->colour : colour::master;
 
     // Only one of them has the region, so the other forgets its drag and view.
     const auto tempo = engine.getTempoMap();

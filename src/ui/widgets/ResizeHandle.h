@@ -8,7 +8,7 @@ namespace ikaros
 //==============================================================================
 /**
     A thin, invisible strip laid over the edge between two panels. Dragging it
-    resizes a panel; double-clicking resets it. An accent line shows while it's
+    resizes a panel; double-clicking resets it. A light line shows while it's
     hovered or dragged.
 
     The owner does the actual resizing: it remembers the panel's size in

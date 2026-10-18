@@ -328,12 +328,12 @@ public:
         g.setColour (colour::cardBg);
         g.fillRoundedRectangle (r, size::radiusCard);
 
-        // An accent top edge, like the track strips' coloured one.
+        // A neutral top edge, like the track strips' coloured one.
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
         shape.addRoundedRectangle (r, size::radiusCard);
         g.reduceClipRegion (shape);
-        g.setColour (colour::accent);
+        g.setColour (colour::master);
         g.fillRect (r.removeFromTop (3.0f));
 
         auto area = getLocalBounds().reduced (10);

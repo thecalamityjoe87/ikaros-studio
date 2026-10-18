@@ -144,7 +144,7 @@ public:
         const bool playing = owner.playingFile == item.file;
 
         if (playing)
-            g.setColour (colour::accent.withAlpha (0.14f));
+            g.setColour (colour::selectedBg);
         else
             g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
 
@@ -175,7 +175,7 @@ public:
             }
             else
             {
-                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? colour::accent : colour::textSecondary, 14.0f);
+                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? colour::text : colour::textSecondary, 14.0f);
             }
         }
 
@@ -242,8 +242,8 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     setOpaque (true);
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
+    // Tabs and filter chips are choices, not "on" states: neutral when chosen.
+    auto grey = IconButton::neutralToggleColours();
 
     for (auto* b : { &backButton, &mineTab, &freesoundTab, &tempoButton })
     {
@@ -282,7 +282,7 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     clearButton.onClick = [this] { clearFilters(); };
     addAndMakeVisible (clearButton);
 
-    setupButton.setColours (IconButton::accentColours());
+    setupButton.setColours (IconButton::primaryColours());
     setupButton.setFont (fonts::uiSemiBold (textSize::md));
     addChildComponent (setupButton);
 
@@ -479,8 +479,8 @@ void LoopBrowser::buildChips()
     if (filterTab < 0)
         return;
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
+    // Tabs and filter chips are choices, not "on" states: neutral when chosen.
+    auto grey = IconButton::neutralToggleColours();
     auto& options = filterGroups()[(size_t) filterTab].options;
 
     for (int i = 0; i < (int) options.size(); ++i)

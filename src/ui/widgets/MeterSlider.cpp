@@ -47,9 +47,9 @@ void MeterSlider::paint (juce::Graphics& g)
     auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ x, centreY });
     g.setColour (colour::toolbarBg);
     g.fillEllipse (thumb.expanded (1.5f));
-    // Amber while automation moves it (see setAutomatedLook).
+    // In the "automated" colour while automation moves it (see setAutomatedLook).
     const bool automated = getProperties()["automated"];
-    g.setColour (! isEnabled() ? colour::textSecondary : automated ? colour::accent : colour::text);
+    g.setColour (! isEnabled() ? colour::textSecondary : automated ? colour::automated : colour::text);
     g.fillEllipse (thumb);
 
     if (hasKeyboardFocus (false))

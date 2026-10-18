@@ -51,7 +51,7 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     g.setOrigin (r.getX(), 0);
     auto& geo = owner.geometry;
 
-    // Loop range: an amber bar along the top.
+    // Cycle range: an amber bar along the top (the accent: cycle is on).
     if (looping && loopEnd > loopStart)
     {
         auto x1 = geo.beatToX (loopStart);

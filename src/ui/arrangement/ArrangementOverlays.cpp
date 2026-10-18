@@ -166,9 +166,9 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
 
     if (! dropArea.isEmpty())
     {
-        g.setColour (colour::accent.withAlpha (0.12f));
+        g.setColour (colour::highlight.withAlpha (0.08f));
         g.fillRoundedRectangle (dropArea, size::radiusLarge);
-        g.setColour (colour::accent);
+        g.setColour (colour::highlight);
         g.drawRoundedRectangle (dropArea.reduced (1.0f), size::radiusLarge, 1.5f);
         // Where a file will start. (Sounds have no position: markerX < 0.)
         const bool hasMarker = dropMarkerX >= 0.0f;

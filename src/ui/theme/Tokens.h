@@ -75,6 +75,15 @@ namespace colour
     inline const juce::Colour controlFill    { 0xff2a2f38 };   // slider tracks, inactive pills
     inline const juce::Colour selectedRow    { 0xff242831 };
 
+    // The "pressed" fill for neutral toggles, chosen tabs and segments, and
+    // the stopped Play button. Not the accent: those aren't "on" states.
+    inline const juce::Colour neutralActive  = palette::neutralActive;
+    // Border of a chosen tile or card (library category, dialog choices).
+    inline const juce::Colour selectedBorder = palette::disabled;
+    // Neutral marker for drop targets, insertion lines, marquee boxes,
+    // range selections and the keyboard focus ring.
+    inline const juce::Colour highlight      = palette::selectedOutline;
+
     // The selected track, wherever it shows (header, lane, regions, mixer
     // strip). Deliberately neutral: the accent only ever means "on".
     inline const juce::Colour selectedBg      = palette::selectedBg;
@@ -93,13 +102,16 @@ namespace colour
     inline const juce::Colour text           { 0xffeef1f5 };
     inline const juce::Colour textSecondary  { 0xffa3abb8 };
     inline const juce::Colour textMenu       { 0xffc9d0da };   // menu bar items, icon buttons, slider thumbs
-    inline const juce::Colour textOnAccent   { 0xff121418 };
+    inline const juce::Colour textOnAccent   = palette::onAccent;
     inline const juce::Colour textOnColour   { 0xffffffff };   // icons/text on saturated fills (record, track colours)
 
-    inline const juce::Colour accent         { 0xffffb547 };
-    inline const juce::Colour accentLight    { 0xffffc46b };
+    // The accent only ever means "on": active toggles (cycle, metronome,
+    // count-in, a muted track's Mute, Flex, open automation), Play while
+    // playing, the playhead and the cycle range. Nothing else uses it.
+    inline const juce::Colour accent         = palette::accent;
+    inline const juce::Colour accentLight    = palette::accent.brighter (0.15f);
     inline const juce::Colour record         { 0xffff5a5a };
-    inline const juce::Colour mute           { 0xffff8f5a };
+    inline const juce::Colour warning        { 0xffffd25a };   // e.g. a plug-in that failed to load
     inline const juce::Colour solo           { 0xffffd25a };
 
     inline const juce::Colour meterGreen     { 0xff4fd18b };
@@ -108,7 +120,8 @@ namespace colour
     inline const juce::Colour effectOn       { 0xff4fd18b };
 
     inline const juce::Colour pianoWhite     { 0xffe9edf2 };
-    inline const juce::Colour pianoWhiteLit  { 0xffffd79a };
+    inline const juce::Colour pianoWhiteDown = palette::textMuted;   // a pressed key
+    inline const juce::Colour pianoBlackDown = palette::disabled;
     inline const juce::Colour pianoBlack     { 0xff1a1d23 };
     inline const juce::Colour pianoLabel     { 0xff5b6270 };
 
@@ -151,6 +164,15 @@ namespace colour
     inline const juce::Colour automationDelay  { 0xffffa877 };   // orange
     inline const juce::Colour automationSound  { 0xffffe07a };   // yellow: the Sound tab's knobs
     inline const juce::Colour automationPlugin { 0xffff8ac6 };   // pink: plug-in parameters
+    inline const juce::Colour tempoCurve       = palette::textMuted;   // the tempo lane's line and points
+
+    // A control whose value is driven by automation (needle, thumb, fader
+    // cap, its name in the automation picker, the "it's automated" hint).
+    inline const juce::Colour automated        { 0xff7cc0ff };
+
+    // The master channel has no instrument family, so it's neutral grey
+    // (its knob arcs, its mixer strip's top edge).
+    inline const juce::Colour master           = palette::textMuted;
 
     /** Darker variant of a track colour for region label strips (white text). */
     inline juce::Colour regionStrip (juce::Colour track)

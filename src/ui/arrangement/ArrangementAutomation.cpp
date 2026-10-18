@@ -191,9 +191,9 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
 
     if (! selectBox.isEmpty())
     {
-        g.setColour (colour::accent.withAlpha (0.1f));
+        g.setColour (colour::highlight.withAlpha (0.08f));
         g.fillRect (selectBox);
-        g.setColour (colour::accent);
+        g.setColour (colour::highlight);
         g.drawRect (selectBox, 1.0f);
     }
 }

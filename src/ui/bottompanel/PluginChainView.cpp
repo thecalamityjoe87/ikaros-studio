@@ -76,7 +76,7 @@ public:
 
         if (slot.missing)
         {
-            icons::draw (g, Icon::warning, area.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            icons::draw (g, Icon::warning, area.removeFromRight (16).toFloat(), colour::warning, 14.0f);
             area.removeFromRight (4);
         }
         else if (slot.isThirdParty)
@@ -247,7 +247,7 @@ void PluginChainView::refresh()
 
     trackId = masterMode ? masterTrackId : selection.getTrack();
     auto track = tracks.getTrack (trackId);
-    trackColour = track.has_value() ? track->colour : colour::accent;
+    trackColour = track.has_value() ? track->colour : colour::master;
     instrument = tracks.effects().getInstrument (trackId);
     chain = tracks.effects().getEffectChain (trackId);
 
@@ -340,7 +340,7 @@ void PluginChainView::paint (juce::Graphics& g)
         r.removeFromLeft (8);
         if (instrument->missing)
         {
-            icons::draw (g, Icon::warning, r.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            icons::draw (g, Icon::warning, r.removeFromRight (16).toFloat(), colour::warning, 14.0f);
             r.removeFromRight (4);
         }
         else if (instrumentWindowButton.isVisible())
@@ -358,7 +358,7 @@ void PluginChainView::paint (juce::Graphics& g)
     {
         const int top = effectsLabelArea.getBottom() + 2;
         const int y = top + dropIndex * (rowHeight + rowGap) - rowGap / 2 - 1;
-        g.setColour (colour::accent);
+        g.setColour (colour::highlight);
         g.fillRoundedRectangle ((float) sidePadding, (float) y, (float) (getWidth() - sidePadding * 2), 2.0f, 1.0f);
     }
 }

@@ -50,8 +50,7 @@ AboutDialog::AboutDialog (AudioEngine& e)
     addChildComponent (text);
 
     // The chosen tab is a rounded pill inside the shared background drawn in paint().
-    const auto tabColours = IconButton::Colours { juce::Colours::transparentBlack, colour::text,
-                                                  colour::accent, colour::textOnAccent };
+    const auto tabColours = IconButton::segmentColours();
     int index = 0;
 
     for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
@@ -65,7 +64,7 @@ AboutDialog::AboutDialog (AudioEngine& e)
         ++index;
     }
 
-    doneButton.setColours (IconButton::accentColours());
+    doneButton.setColours (IconButton::primaryColours());
     doneButton.onClick = [this] { close(); };
     addAndMakeVisible (doneButton);
 
@@ -248,7 +247,7 @@ void AboutDialog::paint (juce::Graphics& g)
     g.setFont (fonts::uiBold (textSize::hero));
     g.drawText ("Ikaros Studio", r.removeFromTop (34), juce::Justification::centred);
 
-    g.setColour (colour::accent);
+    g.setColour (colour::textSecondary);
     g.setFont (fonts::uiSemiBold (textSize::md));
     g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha)",
                 r.removeFromTop (22), juce::Justification::centred);

@@ -44,7 +44,7 @@ public:
 
         g.setColour (on ? colour::selectedRow : (over ? colour::raised : colour::cardBg));
         g.fillRoundedRectangle (r, size::radiusCard);
-        g.setColour (on ? colour::accent : colour::borderSoft);
+        g.setColour (on ? colour::selectedBorder : colour::borderSoft);
         g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
 
         auto content = getLocalBounds().reduced (20);
@@ -142,7 +142,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     cancelButton.onClick = [this] { close(); };
     addAndMakeVisible (cancelButton);
 
-    createButton.setColours (IconButton::accentColours());
+    createButton.setColours (IconButton::primaryColours());
     createButton.onClick = [this] { create(); };
     addAndMakeVisible (createButton);
 

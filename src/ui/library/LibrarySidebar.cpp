@@ -61,9 +61,10 @@ public:
         auto r = getLocalBounds().toFloat().reduced (0.5f);
         const bool on = getToggleState();
 
-        g.setColour (on ? colour::selectedRow : colour::tileBg.brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
+        // The chosen category is neutral: selected fill, grey border.
+        g.setColour (on ? colour::selectedBg : colour::tileBg.brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
         g.fillRoundedRectangle (r, size::radiusLarge);
-        g.setColour (on ? iconColour : colour::borderSoft);
+        g.setColour (on ? colour::selectedBorder : colour::borderSoft);
         g.drawRoundedRectangle (r, size::radiusLarge, 1.0f);
 
         auto content = getLocalBounds().reduced (10, 8);
@@ -134,7 +135,7 @@ public:
         const bool playing = item.kind == Item::Kind::file && owner.playingFile == item.file;
 
         if (active || playing)
-            g.setColour (colour::accent.withAlpha (0.14f));
+            g.setColour (colour::selectedBg);
         else
             g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
 
@@ -156,7 +157,7 @@ public:
                 icons::draw (g, Icon::plugin, lead, colour::textSecondary, 14.0f);
                 break;
             default:
-                g.setColour (active ? colour::accent : colour::borderStrong);
+                g.setColour (active ? colour::text : colour::borderStrong);
                 g.fillEllipse (lead.withSizeKeepingCentre (6.0f, 6.0f));
                 break;
         }
@@ -165,7 +166,7 @@ public:
         g.setFont (fonts::ui (textSize::sm));
         auto detailWidth = juce::jmin (content.getWidth() / 2,
                                        (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), detail)) + 4);
-        g.setColour (active ? colour::accentLight : colour::textSecondary);
+        g.setColour (active ? colour::text : colour::textSecondary);
         g.drawText (detail, content.removeFromRight (detailWidth), juce::Justification::centredRight, true);
 
         g.setFont (fonts::ui (textSize::lg));

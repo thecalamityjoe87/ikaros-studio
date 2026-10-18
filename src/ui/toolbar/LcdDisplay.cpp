@@ -100,7 +100,7 @@ void LcdDisplay::paint (juce::Graphics& g)
     g.setColour (colour::lcdBg);
     g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusLarge);
 
-    g.setColour (colour::accent);
+    g.setColour (colour::text);
     g.setFont (fonts::monoBold (textSize::lcd));
     g.drawText (positionText, positionArea.withTrimmedBottom (12), juce::Justification::bottomLeft);
     paintCaption (g, positionArea, juce::String::fromUTF8 ("BAR \xc2\xb7 BEAT"));

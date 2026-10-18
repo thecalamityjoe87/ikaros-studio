@@ -45,7 +45,7 @@ PianoRoll::PianoRoll (AudioEngine& e) : engine (e)
         addAndMakeVisible (bar);
     }
 
-    setRegion (std::nullopt, colour::accent, TempoMap());
+    setRegion (std::nullopt, colour::master, TempoMap());
 }
 
 PianoRoll::~PianoRoll()

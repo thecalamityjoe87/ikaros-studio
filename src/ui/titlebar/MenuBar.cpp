@@ -154,7 +154,7 @@ void MenuBar::paint (juce::Graphics& g)
 
     if (unsavedChanges)
     {
-        g.setColour (colour::accent);
+        g.setColour (colour::textSecondary);
         g.fillEllipse (title.removeFromLeft (dotSpace).withSizeKeepingCentre (6.0f, 6.0f).translated (-3.0f, 0.0f));
     }
 
@@ -162,14 +162,14 @@ void MenuBar::paint (juce::Graphics& g)
     g.setFont (nameFont);
     g.drawText (sessionName, title.removeFromLeft (juce::jmin (nameWidth, title.getWidth())), juce::Justification::centredLeft, true);
 
-    // The "·" separator stays grey; the app name keeps its amber brand colour.
+    // The "·" separator stays grey; the app name is bold.
     const juce::String separator = juce::String::fromUTF8 ("  \xc2\xb7  ");
     const float separatorWidth = juce::GlyphArrangement::getStringWidth (appFont, separator);
     g.setFont (appFont);
     g.setColour (colour::textSecondary);
     g.drawText (separator, title.removeFromLeft (juce::jmin (separatorWidth, title.getWidth())), juce::Justification::centredLeft, true);
 
-    g.setColour (colour::accent);
+    g.setColour (colour::text);
     g.setFont (fonts::uiBold (textSize::sm));
     g.drawText ("Ikaros Studio", title, juce::Justification::centredLeft, true);
 }
