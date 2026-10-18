@@ -15,6 +15,16 @@
 //
 // Splitting, trimming, copying and looping don't need it: the clip's state
 // (markers included) is copied or kept as it is, and its content stays put.
+//
+// Between two markers, Tracktion stretches the audio evenly in seconds. If
+// the tempo changes in between, beats aren't evenly spread in seconds
+// there, so putting just the markers back on their beats would leave the
+// hits between them off theirs. So the layout keeps every moment of the
+// recording on its beat: captureFlexLayout notes where the audio is at
+// each tempo change inside the region, and restoreFlexLayout adds a
+// "tempo marker" wherever the tempo changes inside it afterwards (and
+// drops the ones no longer needed). Between any two markers the tempo is
+// then steady, and seconds and beats are in step again.
 
 #include "engine/FlexMap.h"
 #include <tracktion_engine/tracktion_engine.h>
@@ -31,6 +41,9 @@ inline const juce::Identifier flexProp ("ikarosFlex");
 /** On a TAKE of an audio clip: the warp markers of that take, kept while
     another take plays (see TakeEditor). */
 inline const juce::Identifier takeWarpMarkersType ("IKAROSTAKEWARP");
+
+/** On a WARPMARKER: it's a tempo marker (see WarpPoint::tempoMarker). */
+inline const juce::Identifier tempoMarkerProp ("ikarosTempoMarker");
 
 inline bool isFlexTrack (const te::Track& track)    { return (bool) track.state.getProperty (flexProp, false); }
 
@@ -86,7 +99,12 @@ struct FlexLayout
 {
     double startBeat = 0.0, endBeat = 0.0;   // the region
     double contentStartBeat = 0.0;           // contentStartOf, in beats
-    std::vector<double> markerBeats;         // each marker, in beats from the content start
+
+    // Each marker (sourceSeconds), and where it plays in beats from the
+    // content start. Also a point wherever the tempo changes inside the
+    // region (as tempo markers, though the clip may not have them yet), so
+    // the audio's beats are in step with its markers' all the way through.
+    std::vector<FlexMarker> markers;
     bool looped = false;
     double loopStartBeats = 0.0, loopEndBeats = 0.0;   // from the content start
 };
@@ -95,8 +113,9 @@ struct FlexLayout
 std::optional<FlexLayout> captureFlexLayout (const te::Clip&);
 
 /** Puts a flexed clip back on the beats in `layout`, moved by `shiftBeats`:
-    its start, end and offset, its loop, and every marker. Part of the open
-    undo step; writes nothing that's already right. */
+    its start, end and offset, its loop, and every marker, with tempo
+    markers where the tempo changes inside it now. Part of the open undo
+    step; writes nothing that's already right. */
 void restoreFlexLayout (te::Clip&, const FlexLayout&, double shiftBeats = 0.0);
 
 /** For edits that move a clip (fn does the moving): keeps it flexed on its

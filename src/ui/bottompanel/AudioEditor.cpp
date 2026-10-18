@@ -252,8 +252,11 @@ std::optional<AudioEditor::FlexTarget> AudioEditor::flexTargetAt (juce::Point<in
     };
 
     // The markers in between the ends (the ends of the recording stay put).
+    // Tempo markers aren't shown, so they can't be grabbed either (a hit on
+    // one is grabbed as a hit).
     for (size_t i = 1; i + 1 < flex.markers.size(); ++i)
-        consider (flex.markers[i].sourceSeconds, flex.markers[i].beat, true);
+        if (! flex.markers[i].tempoMarker)
+            consider (flex.markers[i].sourceSeconds, flex.markers[i].beat, true);
 
     if (! markersOnly)
         for (auto& t : flex.transients)
@@ -956,12 +959,12 @@ void AudioEditor::paintFlex (juce::Graphics& g, juce::Rectangle<float> area)
     for (auto& m : markers)
         map.push_back ({ m.sourceSeconds, m.beat });
 
-    // The hits: faint lines (unless a marker's on them).
+    // The hits: faint lines (unless a marker's on them; tempo markers aren't drawn).
     g.setColour (juce::Colours::white.withAlpha (0.18f));
 
     for (auto& t : flex.transients)
     {
-        if (flexmap::indexOf (map, t.sourceSeconds) >= 0)
+        if (const int on = flexmap::indexOf (map, t.sourceSeconds); on >= 0 && ! markers[(size_t) on].tempoMarker)
             continue;
 
         forEachRepeat (flexmap::toWarp (map, t.sourceSeconds), [&] (double beat, double)
@@ -975,6 +978,9 @@ void AudioEditor::paintFlex (juce::Graphics& g, juce::Rectangle<float> area)
     // drawn in the track's colour, and some tracks are amber.)
     for (size_t i = 1; i + 1 < markers.size(); ++i)
     {
+        if (markers[i].tempoMarker)
+            continue;
+
         forEachRepeat (markers[i].beat, [&] (double beat, double)
         {
             const float x = beatToX (beat - start);

@@ -24,6 +24,11 @@ struct WarpPoint
     double source = 0.0;
     double warp = 0.0;
 
+    // A tempo marker: one the engine adds where the tempo changes inside
+    // the region, so the audio either side stays on its beats (see
+    // FlexHelpers.h). It isn't shown, dragged or removed like the others.
+    bool tempoMarker = false;
+
     bool operator== (const WarpPoint&) const = default;
 };
 
@@ -33,6 +38,7 @@ struct FlexMarker
 {
     double sourceSeconds = 0.0;
     double beat = 0.0;
+    bool tempoMarker = false;   // see WarpPoint::tempoMarker
 
     bool operator== (const FlexMarker&) const = default;
 };

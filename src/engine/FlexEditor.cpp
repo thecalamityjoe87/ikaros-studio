@@ -66,7 +66,8 @@ std::vector<WarpPoint> getWarpPoints (const te::AudioClipBase& clip)
     std::vector<WarpPoint> points;
 
     for (auto marker : markersTreeOf (clip))
-        points.push_back ({ (double) marker[te::IDs::sourceTime], (double) marker[te::IDs::warpTime] });
+        points.push_back ({ (double) marker[te::IDs::sourceTime], (double) marker[te::IDs::warpTime],
+                            (bool) marker.getProperty (tempoMarkerProp, false) });
 
     return points;
 }
@@ -167,19 +168,34 @@ void setWarpPoints (te::AudioClipBase& clip, const std::vector<WarpPoint>& point
     // Reuse the markers that are there (in order), then add or remove the rest.
     const int common = juce::jmin (list.getNumChildren(), (int) points.size());
 
+    // A tempo marker has the property; any other marker has none (as in
+    // sessions from before tempo markers).
+    auto setTempoMarker = [um] (juce::ValueTree tree, bool isTempoMarker)
+    {
+        if (isTempoMarker && ! tree.hasProperty (tempoMarkerProp))
+            tree.setProperty (tempoMarkerProp, true, um);
+        else if (! isTempoMarker && tree.hasProperty (tempoMarkerProp))
+            tree.removeProperty (tempoMarkerProp, um);
+    };
+
     for (int i = 0; i < common; ++i)
     {
         setIfDifferent (list.getChild (i), te::IDs::sourceTime, points[(size_t) i].source);
         setIfDifferent (list.getChild (i), te::IDs::warpTime, points[(size_t) i].warp);
+        setTempoMarker (list.getChild (i), points[(size_t) i].tempoMarker);
     }
 
     while (list.getNumChildren() > (int) points.size())
         list.removeChild (list.getNumChildren() - 1, um);
 
     for (size_t i = (size_t) common; i < points.size(); ++i)
-        list.addChild (te::createValueTree (te::IDs::WARPMARKER,
-                                            te::IDs::sourceTime, points[i].source,
-                                            te::IDs::warpTime, points[i].warp), -1, um);
+    {
+        auto marker = te::createValueTree (te::IDs::WARPMARKER,
+                                           te::IDs::sourceTime, points[i].source,
+                                           te::IDs::warpTime, points[i].warp);
+        setTempoMarker (marker, points[i].tempoMarker);   // not in the Edit yet: no undo either way
+        list.addChild (marker, -1, um);
+    }
 
     // How long the warped copy of the recording is: up to the last marker.
     setIfDifferent (list.getParent(), te::IDs::warpEndMarkerTime, points.back().warp);
@@ -210,6 +226,54 @@ te::TimeDuration contentLengthOf (const te::AudioClipBase& clip)
 }
 
 //==============================================================================
+// The beats where the tempo changes: where a beat starts lasting a
+// different time. (The hidden tempo steps that keep beats the same length
+// where the time signature changes don't count, see AudioEngine.)
+static std::vector<double> tempoChangeBeats (te::Edit& edit)
+{
+    std::vector<double> beats;
+    auto& tempos = edit.tempoSequence;
+
+    for (auto* tempo : tempos.getTempos())
+    {
+        const double beat = tempo->getStartBeat().inBeats();
+
+        if (beat <= 0.0)
+            continue;
+
+        // How long the beat before and the beat after it last.
+        auto timeAt = [&tempos] (double b) { return tempos.toTime (te::BeatPosition::fromBeats (b)).inSeconds(); };
+        const double before = timeAt (beat) - timeAt (beat - 0.001);
+        const double after = timeAt (beat + 0.001) - timeAt (beat);
+
+        if (std::abs (before - after) > 1.0e-9)
+            beats.push_back (beat);
+    }
+
+    return beats;
+}
+
+// Adds a tempo marker to `markers` (sorted by source, beats from the content
+// start) at `beat`, if it's between the first and last and there's no
+// marker there already. Its place in the recording comes from the beats of
+// the markers either side: they're in step with the audio's beats (see FlexLayout).
+static void addTempoMarkerAt (std::vector<FlexMarker>& markers, double beat)
+{
+    constexpr double sameBeat = 1.0e-6;
+
+    if (markers.size() < 2 || beat <= markers.front().beat + sameBeat || beat >= markers.back().beat - sameBeat)
+        return;
+
+    auto next = std::find_if (markers.begin(), markers.end(), [beat] (const FlexMarker& m) { return m.beat >= beat; });
+
+    if (std::abs (next->beat - beat) < sameBeat || std::abs ((next - 1)->beat - beat) < sameBeat)
+        return;
+
+    const auto& prev = *(next - 1);
+    const double source = prev.sourceSeconds + (beat - prev.beat) / (next->beat - prev.beat) * (next->sourceSeconds - prev.sourceSeconds);
+    markers.insert (next, { source, beat, true });
+}
+
 std::optional<FlexLayout> captureFlexLayout (const te::Clip& clip)
 {
     auto* wave = asWave (clip);
@@ -236,7 +300,23 @@ std::optional<FlexLayout> captureFlexLayout (const te::Clip& clip)
     };
 
     for (auto& p : points)
-        layout.markerBeats.push_back (beatOf (p.warp));
+        layout.markers.push_back ({ p.source, beatOf (p.warp), p.tempoMarker });
+
+    // Where the tempo changes now, between two markers, the audio plays
+    // evenly in seconds but not in beats. A point there (where the audio
+    // plays now, from the markers in seconds) keeps that bend in the layout.
+    for (double beat : tempoChangeBeats (edit))
+    {
+        const double warp = (beatToTime (edit, beat) - contentStart).inSeconds();
+
+        if (warp > points.front().warp && warp < points.back().warp && flexmap::indexOf (points, flexmap::toSource (points, warp)) < 0)
+        {
+            const FlexMarker m { flexmap::toSource (points, warp), beat - layout.contentStartBeat, true };
+            auto at = std::upper_bound (layout.markers.begin(), layout.markers.end(), m.sourceSeconds,
+                                        [] (double s, const FlexMarker& other) { return s < other.sourceSeconds; });
+            layout.markers.insert (at, m);
+        }
+    }
 
     if (clip.isLooping())
     {
@@ -252,18 +332,40 @@ void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBe
 {
     auto* wave = asWave (clip);
 
-    if (wave == nullptr)
+    if (wave == nullptr || layout.markers.size() < 2)
         return;
-
-    auto points = getWarpPoints (*wave);
-
-    if (points.size() != layout.markerBeats.size())
-        return;   // the markers changed in between: nothing to put back
 
     auto& edit = clip.edit;
     auto* um = &edit.getUndoManager();
     const double contentStartBeat = layout.contentStartBeat + shiftBeats;
     const auto contentStart = beatToTime (edit, contentStartBeat);
+
+    // Tempo markers where the tempo changes now (in beats from the content start)...
+    auto markers = layout.markers;
+    std::vector<double> changes;
+
+    for (double beat : tempoChangeBeats (edit))
+    {
+        changes.push_back (beat - contentStartBeat);
+        addTempoMarkerAt (markers, changes.back());
+    }
+
+    // ...and none where it doesn't any more, unless the audio bends there
+    // (its beats aren't in line either side: the tempo used to change there
+    // while the markers either side were further apart, say).
+    for (size_t i = 1; i + 1 < markers.size();)
+    {
+        const auto& prev = markers[i - 1];
+        const auto& here = markers[i];
+        const auto& next = markers[i + 1];
+        const double inLine = prev.beat + (here.sourceSeconds - prev.sourceSeconds) / (next.sourceSeconds - prev.sourceSeconds) * (next.beat - prev.beat);
+        const bool atChange = std::any_of (changes.begin(), changes.end(), [&here] (double c) { return std::abs (c - here.beat) < 1.0e-6; });
+
+        if (here.tempoMarker && ! atChange && std::abs (inLine - here.beat) < 1.0e-6)
+            markers.erase (markers.begin() + (std::ptrdiff_t) i);
+        else
+            ++i;
+    }
 
     // Seconds into the content of a beat (counted from the content start).
     auto secondsAt = [&] (double beatsFromContentStart)
@@ -272,8 +374,10 @@ void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBe
     };
 
     // The markers first: they decide how long the content is.
-    for (size_t i = 0; i < points.size(); ++i)
-        points[i].warp = secondsAt (layout.markerBeats[i]);
+    std::vector<WarpPoint> points;
+
+    for (auto& m : markers)
+        points.push_back ({ m.sourceSeconds, secondsAt (m.beat), m.tempoMarker });
 
     setWarpPoints (*wave, points);
 
@@ -348,7 +452,7 @@ void switchTakeWarp (te::WaveAudioClip& clip, juce::ValueTree fromTake, juce::Va
     std::vector<WarpPoint> points;
 
     for (auto m : toTake.getChildWithName (takeWarpMarkersType).getChildWithName (te::IDs::WARPMARKERS))
-        points.push_back ({ (double) m[te::IDs::sourceTime], (double) m[te::IDs::warpTime] });
+        points.push_back ({ (double) m[te::IDs::sourceTime], (double) m[te::IDs::warpTime], (bool) m.getProperty (tempoMarkerProp, false) });
 
     if (points.size() < 2)
     {
@@ -494,7 +598,9 @@ static std::vector<std::pair<int, double>> quantizeMoves (te::WaveAudioClip& cli
     {
         const double targetBeat = hit.beat + juce::jlimit (0.0, 1.0, settings.strength) * (hit.line - hit.beat);
         const double shift = beatToTime (edit, targetBeat).inSeconds() - hit.heardAt;
-        moves.emplace_back (flexmap::indexOf (points, hit.source), hit.warp + shift);
+        const int index = flexmap::indexOf (points, hit.source);
+        points[(size_t) index].tempoMarker = false;   // a hit on a tempo marker: it's the hit's marker now
+        moves.emplace_back (index, hit.warp + shift);
     }
 
     // Sorted by index (the markers are sorted by source, and so are the hits).
@@ -597,7 +703,8 @@ FlexInfo FlexEditor::getFlex (RegionId id) const
         points = { { 0.0, 0.0 }, { length, length } };
     }
 
-    info.hasEdits = points.size() > 2 || flexmap::isWarped (points);
+    info.hasEdits = flexmap::isWarped (points)
+                     || std::any_of (points.begin() + 1, points.end() - 1, [] (const WarpPoint& p) { return ! p.tempoMarker; });
     const auto contentStart = contentStartOf (*wave);
 
     auto beatOf = [&] (double source)
@@ -606,7 +713,7 @@ FlexInfo FlexEditor::getFlex (RegionId id) const
     };
 
     for (auto& p : points)
-        info.markers.push_back ({ p.source, beatOf (p.source) });
+        info.markers.push_back ({ p.source, beatOf (p.source), p.tempoMarker });
 
     // The hits: while Flex is on (and the clip's warp state is in place,
     // so asking for the WarpTimeManager doesn't make one), or Quantize is
@@ -654,7 +761,7 @@ std::vector<FlexMarker> FlexEditor::previewMove (const FlexInfo& info, double so
     std::vector<double> transients;
 
     for (auto& m : info.markers)
-        points.push_back ({ m.sourceSeconds, m.beat });
+        points.push_back ({ m.sourceSeconds, m.beat, m.tempoMarker });
 
     for (auto& t : info.transients)
         transients.push_back (t.sourceSeconds);
@@ -670,7 +777,7 @@ std::vector<FlexMarker> FlexEditor::previewMove (const FlexInfo& info, double so
     std::vector<FlexMarker> result;
 
     for (auto& p : points)
-        result.push_back ({ p.source, p.warp });
+        result.push_back ({ p.source, p.warp, p.tempoMarker });
 
     return result;
 }
@@ -698,6 +805,7 @@ bool FlexEditor::moveMarker (RegionId id, double sourceSeconds, double newBeat)
 
     const double wanted = (beatToTime (*edit, newBeat) - contentStartOf (*wave)).inSeconds();
     points[(size_t) index].warp = flexmap::limitMove (points, index, wanted);
+    points[(size_t) index].tempoMarker = false;   // dragged: it's an ordinary marker now
 
     if (std::abs (points[(size_t) index].warp - flexmap::toWarp (before, sourceSeconds)) < flexmap::sameMarkerSeconds)
         return false;   // it didn't move (a click, or held against a neighbour)
@@ -717,7 +825,8 @@ bool FlexEditor::removeMarker (RegionId id, double sourceSeconds)
     auto points = getWarpPoints (*wave);
     const int index = flexmap::indexOf (points, sourceSeconds);
 
-    if (index <= 0 || index >= (int) points.size() - 1)
+    // (A tempo marker isn't the user's to remove: it keeps the audio on its beats.)
+    if (index <= 0 || index >= (int) points.size() - 1 || points[(size_t) index].tempoMarker)
         return false;
 
     points.erase (points.begin() + index);

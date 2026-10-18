@@ -2862,12 +2862,45 @@ static void runFlexSection (const juce::File& dir)
     engine.setTimeSignature (4, 4);
     pumpMessages();
 
-    // A tempo change in the middle of the region (bar 3 = beat 8).
-    engine.addTempoChange (2, 60.0);
-    pumpMessages();
+    // A tempo change in the middle of the region (bar 3 = beat 8). The hits
+    // after it (beats 8, 9 and 10) have no markers of their own: they stay
+    // on their beats too, held by a tempo marker the user doesn't see.
+    auto shownMarkers = [&] (const FlexInfo& i)
+    {
+        return std::count_if (i.markers.begin(), i.markers.end(), [] (const FlexMarker& m) { return ! m.tempoMarker; });
+    };
+
+    auto unmarkedHitsOnBeats = [&] (const FlexInfo& i)
+    {
+        bool onBeats = i.transients.size() == clickSeconds.size();
+
+        for (size_t h = 3; onBeats && h < i.transients.size(); ++h)
+            onBeats = std::abs (i.transients[h].beat - (5.0 + (double) h)) < 0.005;
+
+        return onBeats;
+    };
+
+    const auto beforeTempoChange = flex.getFlex (region);
+    checkUndoRoundTrip (engine, "Add Tempo Change", [&] { engine.addTempoChange (2, 80.0); });
     info = flex.getFlex (region);
     check (std::abs (info.markers[2].beat - 6.25) < 1.0e-6 && std::abs (info.markers[3].beat - 7.0) < 0.005,
            "a tempo change inside the region keeps its markers on their beats");
+    check (unmarkedHitsOnBeats (info) && shownMarkers (info) == shownMarkers (beforeTempoChange),
+           "...and the hits between markers too (with no new markers to see)");
+    {
+        // 120 BPM up to beat 8 (4 s), 80 after: beats 9 and 10 are at 4.75 s and 5.5 s.
+        const auto worst = worstMs (exportSong(), { 2.5, 3.125, 3.5, 4.0, 4.75, 5.5 });
+        std::cout << "  (tempo change inside: hits within " << worst << " ms)\n";
+        check (worst < toleranceMs, "...where they play (80 BPM from beat 8)");
+    }
+
+    // Taking the tempo change away again: the tempo marker isn't needed any more.
+    engine.removeTempoChange (1);
+    pumpMessages();
+    info = flex.getFlex (region);
+    check (unmarkedHitsOnBeats (info) && info.markers.size() == beforeTempoChange.markers.size(),
+           "without the tempo change, the hits stay on their beats and the tempo marker goes");
+    engine.undo();
     engine.undo();
     pumpMessages();
 
@@ -2925,6 +2958,27 @@ static void runFlexSection (const juce::File& dir)
     engine.undo();   // the tempo change
     pumpMessages();
     check (sameOffsets (markerOffsets (region), offsets) && regions.getRegion (region)->startBeat == 4.0, "undo puts it back");
+
+    // Moved so a tempo change (90 BPM from beat 32) falls inside it: every
+    // hit keeps its beat, the ones without markers too.
+    engine.addTempoChange (8, 90.0);
+    pumpMessages();
+    regions.moveRegions ({ { region, drums, 28.0 } });
+    pumpMessages();
+    {
+        std::vector<double> expected;
+
+        for (double b : { 29.0, 30.25, 31.0, 32.0, 33.0, 34.0 })
+            expected.push_back (b <= 32.0 ? b * 0.5 : 16.0 + (b - 32.0) * 60.0 / 90.0);
+
+        const auto worst = worstMs (exportSong(), expected);
+        std::cout << "  (moved across a tempo change: hits within " << worst << " ms)\n";
+        check (worst < toleranceMs && shownMarkers (flex.getFlex (region)) == (long) offsets.size(),
+               "a flexed region moved across a tempo change keeps every hit on its beat");
+    }
+    engine.undo();
+    engine.undo();
+    pumpMessages();
 
     // Split: both halves keep the markers, and the hits play as before.
     std::vector<RegionId> right;
