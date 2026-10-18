@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 #include "ui/widgets/AutomationHint.h"
 #include <array>
 #include <tuple>
@@ -124,13 +125,13 @@ public:
             setAutomatedLook (sendKnobs[(size_t) bus], automated.contains (automationTargets::send (bus)));
 
         name = t.name;
-        colour = t.colour;
+        colour = colour::forTrack (t);
         selected = isSelected;
         dbText = describeDb (t.volumeDb);
         panText = describePan (t.pan);
         fader.setTitle (t.name + " volume");
         pan.setTitle (t.name + " pan");
-        pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+        pan.setColour (IkarosLookAndFeel::knobArcColourId, colour);
 
         const float sends[] { t.reverbSend, t.delaySend };
 
@@ -138,7 +139,7 @@ public:
         {
             auto& knob = sendKnobs[(size_t) bus];
             knob.setTitle (t.name + " " + SendBuses::getBusName (bus).toLowerCase() + " send");
-            knob.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+            knob.setColour (IkarosLookAndFeel::knobArcColourId, colour);
 
             if (! knob.isMouseButtonDown())
                 knob.setValue (sends[bus], juce::dontSendNotification);

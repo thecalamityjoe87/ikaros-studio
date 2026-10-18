@@ -47,7 +47,7 @@ void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
     if (isSelected != selected)
         repaint();
 
-    colour = t.colour;
+    colour = colour::forTrack (t);
     selected = isSelected;
     isAudio = t.kind == TrackKind::audio;
     // Quieter when muted; fainter still under automation, so the curve stands out.

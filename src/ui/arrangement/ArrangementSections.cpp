@@ -60,8 +60,10 @@ void ArrangementView::SectionStrip::sync()
 
 void ArrangementView::SectionStrip::resized()
 {
-    // Right-aligned with the track headers' controls below it.
-    addButton.setBounds (juce::Rectangle<int> (columnRight - 22, 0, 22, getHeight() - 1).withSizeKeepingCentre (22, 18));
+    // Centred in the column the track headers' arm buttons and pan knobs
+    // use, so all three line up.
+    constexpr int column = TrackHeader::controlColumnWidth;
+    addButton.setBounds (juce::Rectangle<int> (columnRight - column, 0, column, getHeight() - 1).withSizeKeepingCentre (22, 18));
 }
 
 //==============================================================================

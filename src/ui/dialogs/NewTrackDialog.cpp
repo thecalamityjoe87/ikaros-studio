@@ -92,10 +92,10 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
 
     instrumentCard = std::make_unique<Card> (Icon::keyboards, "Software Instrument",
                                              "Play and record with a MIDI keyboard, your computer keyboard or the on-screen keyboard.",
-                                             colour::trackBlue);
+                                             family::keys);
     audioCard = std::make_unique<Card> (Icon::mic, "Real Instrument",
                                         "Record a microphone, guitar or anything plugged into your audio interface.",
-                                        colour::trackOrange);
+                                        family::audio);   // audio tracks are always the audio blue
 
     for (auto* card : { instrumentCard.get(), audioCard.get() })
     {

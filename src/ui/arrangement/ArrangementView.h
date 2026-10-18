@@ -246,7 +246,6 @@ private:
     void showTrackMenu();
     void showLaneMenu (TrackId, double beat);
     juce::PopupMenu createTrackMenu();
-    juce::PopupMenu createColourMenu (TrackId);
 
     /** Playhead dragging: moves it to an x-position in the lanes, scrolling
         the timeline when that's past either edge. */

@@ -6,6 +6,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros
 {
@@ -16,18 +17,19 @@ namespace
 {
     struct Category { const char* name; juce::Colour colour; };
 
-    // The tiles, in grid order. The last one spans both columns.
+    // The tiles, in grid order. The last one spans both columns. Each
+    // instrument category has its family colour, the same as its tracks'.
     const Category categories[] {
-        { "Keyboards",   colour::categoryKeys },
-        { "Drums",       colour::categoryDrums },
-        { "Bass",        colour::categoryBass },
-        { "Synths",      colour::categorySynths },
-        { "Guitar",      colour::categoryGuitar },
-        { "Strings",     colour::categoryStrings },
-        { "Woodwinds",   colour::categoryWoodwinds },
-        { "Brass",       colour::categoryBrass },
-        { "Loops",       colour::categoryLoops },
-        { "Audio Files", colour::categoryAudio },
+        { "Keyboards",   colour::forCategory ("Keyboards") },
+        { "Drums",       colour::forCategory ("Drums") },
+        { "Bass",        colour::forCategory ("Bass") },
+        { "Synths",      colour::forCategory ("Synths") },
+        { "Guitar",      colour::forCategory ("Guitar") },
+        { "Strings",     colour::forCategory ("Strings") },
+        { "Woodwinds",   colour::forCategory ("Woodwinds") },
+        { "Brass",       colour::forCategory ("Brass") },
+        { "Loops",       colour::forCategory ("Loops") },
+        { "Audio Files", colour::forCategory ("Audio Files") },
         { "Plug-ins",    colour::categoryPlugins },
     };
 

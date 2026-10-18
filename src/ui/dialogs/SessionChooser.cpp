@@ -25,10 +25,10 @@ namespace
     const TemplateInfo templates[]
     {
         { SessionTemplate::empty,      "Empty Session",       "One instrument track, ready to play.",       Icon::plus,      colour::textSecondary },
-        { SessionTemplate::keyboards,  "Keyboard Collection", "Piano, electric piano and organ.",           Icon::keyboards, colour::trackBlue },
-        { SessionTemplate::voice,      "Voice",               "A vocal track and a piano to sing along to.", Icon::mic,       colour::trackOrange },
-        { SessionTemplate::beats,      "Beat",                "Drum kit, synth bass and a pad.",            Icon::drums,     colour::trackPurple },
-        { SessionTemplate::songwriter, "Songwriter",          "Drums, bass, guitar, piano and vocals.",     Icon::guitar,    colour::trackGreen },
+        { SessionTemplate::keyboards,  "Keyboard Collection", "Piano, electric piano and organ.",           Icon::keyboards, family::keys },
+        { SessionTemplate::voice,      "Voice",               "A vocal track and a piano to sing along to.", Icon::mic,       family::audio },
+        { SessionTemplate::beats,      "Beat",                "Drum kit, synth bass and a pad.",            Icon::drums,     family::drums },
+        { SessionTemplate::songwriter, "Songwriter",          "Drums, bass, guitar, piano and vocals.",     Icon::guitar,    family::guitar },
     };
 
     // "Today, 2:05 PM", "Yesterday, 9:30 AM", or "Oct 9, 2026".

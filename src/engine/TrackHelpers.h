@@ -61,11 +61,6 @@ inline bool isEqPlugin (const te::Plugin& p)         { return (bool) p.state.get
 // plugin type is expected; anything else is one of Tracktion's built-in types.
 inline const juce::String thirdPartyPrefix ("plugin:");
 
-// Track colours from the design tokens: blue, orange, green, purple, yellow.
-// They live here (not in the UI tokens) because a track's colour is part of
-// the saved session.
-inline const std::array<juce::uint32, 5> trackPalette { 0xff5aa9ff, 0xffff8f5a, 0xff4fd18b, 0xffc78bff, 0xffffd25a };
-
 inline te::AudioTrack* asAudioTrack (te::Track* t)   { return dynamic_cast<te::AudioTrack*> (t); }
 
 inline te::FourOscPlugin* findSynth (te::AudioTrack& t)

@@ -56,10 +56,14 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     // Cycle range: an amber bar along the top (the accent: cycle is on).
     if (looping && loopEnd > loopStart)
     {
-        auto x1 = geo.beatToX (loopStart);
-        auto x2 = geo.beatToX (loopEnd);
+        // Rounded to whole pixels the same way forEachVisibleBar places the
+        // bar lines, so the range starts exactly on its bar's line (and ends
+        // on the far side of the end bar's 1px line). A hairline corner
+        // radius keeps the ends from looking inset from the lines.
+        const auto x1 = (float) juce::roundToInt (geo.beatToX (loopStart));
+        const auto x2 = (float) juce::roundToInt (geo.beatToX (loopEnd)) + 1.0f;
         g.setColour (colour::accent.withAlpha (0.4f));
-        g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, 3.5f);
+        g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, size::radiusHair);
     }
 
     // Bar numbers with a tick on the left of each. Zoomed out, only every

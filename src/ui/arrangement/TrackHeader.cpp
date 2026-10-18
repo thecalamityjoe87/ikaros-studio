@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 #include "ui/widgets/AutomationHint.h"
 #include "ui/widgets/Decibels.h"
 #include "ui/dialogs/MonitoringWarning.h"
@@ -28,7 +29,7 @@ namespace
     constexpr int bottomRowHeight = 22;
     constexpr int smallButtonWidth = 26;  // Mute, Solo, Monitor, Automation
     constexpr int smallButtonGap = 4;
-    constexpr int roundSize = 28;         // the arm button, and the pan knob under it (one column)
+    constexpr int roundSize = TrackHeader::controlColumnWidth;   // the arm button, and the pan knob under it (one column)
     constexpr int flexWidth = 38, flexHeight = 22;   // as tall as the Monitor button beside it
 
     // The text a slider's value bubble shows while it's dragged.
@@ -183,7 +184,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     // buttons and knobs redraw themselves when their own values change.
     // (std::tie bundles references to the members, so the two sets compare
     // in one go.)
-    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.volumeDb, i.icon, i.soundIcon, i.category, i.colour,
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.volumeDb, i.icon, i.soundIcon, i.category, i.kind,
                                                             i.muted, i.silencedBySolo, i.automationShown, i.automationTarget); };
     bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
 
@@ -220,7 +221,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     const int panAmount = juce::roundToInt (std::abs (t.pan) * 100.0f);
     pan.setTooltip ("Pan: " + (panAmount == 0 ? juce::String ("center") : (t.pan < 0.0f ? "left " : "right ") + juce::String (panAmount))
                     + " (double-click to center)");
-    pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+    pan.setColour (IkarosLookAndFeel::knobArcColourId, colour::forTrack (t));
 
     const bool wasAudio = monitorButton.isVisible();
     const bool hadClipLight = clipLight.isVisible();
@@ -307,7 +308,7 @@ juce::PopupMenu TrackHeader::createIconMenu (AudioEngine& engine, TrackId id)
     {
         auto key = choice.key;
         menu.addItem (juce::PopupMenu::Item (choice.name)
-                          .setImage (icons::createDrawable (choice.icon, track->colour))
+                          .setImage (icons::createDrawable (choice.icon, colour::forTrack (*track)))
                           .setTicked (current == key)
                           .setAction ([&engine, id, key] { engine.getTracks().setTrackIcon (id, key); }));
     }
@@ -433,15 +434,16 @@ void TrackHeader::paint (juce::Graphics& g)
     }
 
     // The colour edge on the left (over the outline's left side).
-    g.setColour (info.colour);
+    const auto trackColour = colour::forTrack (info);
+    g.setColour (trackColour);
     g.fillRect (r.removeFromLeft (edgeWidth));
 
     // Icon tile: tinted with the track colour. The icon the user picked, or
     // else the one the sound suggests, or else the category's.
-    g.setColour (info.colour.withAlpha (colour::trackTileAlpha));
+    g.setColour (trackColour.withAlpha (colour::trackTileAlpha));
     g.fillRoundedRectangle (iconArea.toFloat(), size::radiusMedium);
     icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
-                 iconArea.toFloat(), info.colour, 18.0f);
+                 iconArea.toFloat(), trackColour, 18.0f);
 
     // The name, cut short with "..." if it doesn't fit.
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);

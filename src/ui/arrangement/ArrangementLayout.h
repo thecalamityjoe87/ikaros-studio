@@ -6,6 +6,7 @@
 #include "ui/arrangement/ArrangementView.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros::arrangement
 {

@@ -33,6 +33,11 @@ namespace ikaros
 class TrackHeader  : public juce::Component
 {
 public:
+    /** The width of the right-hand column the arm button and pan knob share.
+        Controls above the track headers (the Sections + button) are centred
+        in a column this wide so they line up. */
+    static constexpr int controlColumnWidth = 28;
+
     TrackHeader (AudioEngine&, Selection&, const TrackInfo&);
 
     void update (const TrackInfo&, bool isSelected);

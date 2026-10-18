@@ -1,6 +1,7 @@
 #include "ui/bottompanel/NoiseGateView.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros
 {
@@ -77,7 +78,7 @@ void NoiseGateView::refresh()
             threshold.setValue (gate.threshold, juce::dontSendNotification);
 
         threshold.setEnabled (gate.on);
-        threshold.setColour (juce::Slider::trackColourId, track->colour);
+        threshold.setColour (juce::Slider::trackColourId, colour::forTrack (*track));
         thresholdText = gate.thresholdText;
     }
 

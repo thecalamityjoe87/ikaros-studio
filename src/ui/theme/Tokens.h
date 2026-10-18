@@ -158,25 +158,18 @@ namespace colour
     inline const juce::Colour scrimStrong    = juce::Colours::black.withAlpha (0.6f);    // session chooser
     inline const juce::Colour scrimLight     = juce::Colours::black.withAlpha (0.45f);   // "Saving…" overlay
 
-    // Track colours (also stored per-track in the session; see TrackController)
-    inline const juce::Colour trackBlue      { 0xff5aa9ff };
-    inline const juce::Colour trackOrange    { 0xffff8f5a };
-    inline const juce::Colour trackGreen     { 0xff4fd18b };
-    inline const juce::Colour trackPurple    { 0xffc78bff };
-    inline const juce::Colour trackYellow    { 0xffffd25a };
+    // Track colours come from the instrument family of the track's sound:
+    // see `family` above and TrackColours.h. Region bodies are the family
+    // colour at these alphas over the lane; their headers are the full colour.
+    inline constexpr float regionBodyAlpha         = 0.2f;
+    inline constexpr float regionBodySelectedAlpha = 0.28f;
 
-    // Library category colours (see LibrarySidebar)
-    inline const juce::Colour categoryKeys      { 0xff5aa9ff };
-    inline const juce::Colour categoryDrums     { 0xffff8f5a };
-    inline const juce::Colour categoryBass      { 0xff4fd18b };
-    inline const juce::Colour categorySynths    { 0xffc78bff };
-    inline const juce::Colour categoryGuitar    { 0xffffd25a };
-    inline const juce::Colour categoryStrings   { 0xffff7aa8 };
-    inline const juce::Colour categoryWoodwinds { 0xff8fd9a8 };
-    inline const juce::Colour categoryBrass     { 0xffe6b85c };
-    inline const juce::Colour categoryLoops     { 0xffffb547 };
-    inline const juce::Colour categoryAudio     { 0xffa3abb8 };
+    // The Plug-ins library tile isn't an instrument family (it leaves the
+    // library in a later phase).
     inline const juce::Colour categoryPlugins   { 0xff6fd6d0 };
+
+    // The EQ's four bands, low to high.
+    inline const juce::Colour eqBands[] { family::audio, family::strings, family::drums, family::bass };
 
     // Automation curves, by what they move (see getAutomationColour). A
     // shade lighter than the track colours, to stand out over regions.
@@ -195,20 +188,6 @@ namespace colour
     // The master channel has no instrument family, so it's neutral grey
     // (its knob arcs, its mixer strip's top edge).
     inline const juce::Colour master           = palette::textMuted;
-
-    /** Darker variant of a track colour for region label strips (white text). */
-    inline juce::Colour regionStrip (juce::Colour track)
-    {
-        if (track == trackYellow)
-            return track;                       // yellow keeps its colour and uses dark text
-
-        return track.withMultipliedSaturation (1.05f).withMultipliedBrightness (0.6f);
-    }
-
-    inline juce::Colour regionStripText (juce::Colour track)
-    {
-        return track == trackYellow ? textOnAccent : textOnColour;
-    }
 }
 
 // ------------------------------------------------------------------ shadows

@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros
 {
@@ -247,7 +248,7 @@ void PluginChainView::refresh()
 
     trackId = masterMode ? masterTrackId : selection.getTrack();
     auto track = tracks.getTrack (trackId);
-    trackColour = track.has_value() ? track->colour : colour::master;
+    trackColour = track.has_value() ? colour::forTrack (*track) : colour::master;
     instrument = tracks.effects().getInstrument (trackId);
     chain = tracks.effects().getEffectChain (trackId);
 

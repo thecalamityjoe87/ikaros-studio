@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 #include "ui/widgets/Icons.h"
 
 namespace ikaros
@@ -207,12 +208,19 @@ void RegionComponent::paint (juce::Graphics& g)
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (shape);
 
-        g.setColour (colour.withAlpha (selected ? 0.24f : 0.14f));
+        // The body is a faint tint of the track's family colour, the header
+        // strip the full colour, with dark or white text to suit it.
+        g.setColour (colour.withAlpha (selected ? colour::regionBodySelectedAlpha : colour::regionBodyAlpha));
         g.fillRect (r);
 
         auto strip = r.removeFromTop ((float) stripHeight);
-        g.setColour (colour::regionStrip (colour));
+        g.setColour (colour);
         g.fillRect (strip);
+        const auto label = colour::textOn (colour);
+
+        // A looped region always shows its loop arrow in the header; others
+        // only while the mouse is over them (so the handle can be found).
+        const bool showLoopIcon = getWidth() >= 32 && (hovering || loopPreview || info.isLooped());
 
         // The take badge (if any) comes first; the name follows it.
         const auto badge = getTakeBadgeBounds().toFloat();
@@ -221,21 +229,21 @@ void RegionComponent::paint (juce::Graphics& g)
         if (! badge.isEmpty())
             nameArea.setLeft (badge.getRight() + 5.0f);
 
-        if (getWidth() >= 32 && (hovering || loopPreview))
+        if (showLoopIcon)
             nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
 
-        g.setColour (colour::regionStripText (colour));
+        g.setColour (label);
         g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
         if (! badge.isEmpty())
         {
             const bool full = getWidth() >= fullTakeBadgeMinWidth;
-            g.setColour (colour::regionStripText (colour).withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
+            g.setColour (label.withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
             g.fillRoundedRectangle (badge, badge.getHeight() * 0.5f);
 
             auto text = badge.reduced (6.0f, 0.0f);
-            g.setColour (colour::regionStripText (colour));
+            g.setColour (label);
             g.setFont (fonts::uiBold (textSize::tiny));
 
             if (full)
@@ -264,20 +272,20 @@ void RegionComponent::paint (juce::Graphics& g)
             paintFades (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
 
         // The loop handle: a small loop arrow in the top-right corner. It
-        // shows faintly while the mouse is over the region (so it can be
-        // found), and lights up over the loop zone or while dragging.
-        if (getWidth() >= 32 && (hovering || loopPreview))
+        // shows faintly (see showLoopIcon above), and lights up over the loop
+        // zone or while dragging.
+        if (showLoopIcon)
         {
             const bool active = hoveringLoopCorner || loopPreview;
             auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth);
 
             if (active)
             {
-                g.setColour (colour::regionStrip (colour).darker (0.3f));
+                g.setColour (colour.darker (0.3f));
                 g.fillRect (handle);
             }
 
-            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
+            icons::draw (g, Icon::loop, handle, label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
         }
 
         // The trim handle: the same, in the bottom-right corner, with a resize arrow.
@@ -290,7 +298,7 @@ void RegionComponent::paint (juce::Graphics& g)
 
             // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.
             icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
-                         colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
+                         label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
         }
     }
 

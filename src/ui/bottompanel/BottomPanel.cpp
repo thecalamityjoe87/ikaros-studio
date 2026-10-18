@@ -5,6 +5,7 @@
 #include "ui/widgets/LevelMeter.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros
 {
@@ -78,7 +79,7 @@ public:
         detailsVisible = showDetails;
         auto id = selection.getTrack();
         auto& tc = engine.getTracks();
-        auto arc = track.has_value() ? track->colour : colour::master;
+        auto arc = track.has_value() ? colour::forTrack (*track) : colour::master;   // the Smart Controls follow the selected track's family
 
         // Audio tracks have no synth: no knobs or keyboard, just a pointer
         // to where their settings are.
@@ -633,7 +634,7 @@ void BottomPanel::openEffect (PluginId id)
         return;
 
     effectViewport.setViewedComponent (nullptr, false);
-    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::master : t->colour);
+    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::master : colour::forTrack (*t));
 
     // onClose runs from inside the editor (its Done button or its timer), so
     // the editor can't be deleted right there; close on the next message-loop
@@ -732,7 +733,7 @@ void BottomPanel::refreshTrack()
     inspector.refresh();
     soundPage->refresh (track, detailsVisible);
     masterPage->refresh();
-    eqView.setTarget (getTarget(), showsMaster() ? colour::master : track.has_value() ? track->colour : colour::master);
+    eqView.setTarget (getTarget(), showsMaster() ? colour::master : track.has_value() ? colour::forTrack (*track) : colour::master);
 
     if (mixer.isVisible())
         mixer.refresh();
@@ -758,7 +759,7 @@ void BottomPanel::refreshEditor()
 
     // The region picks the editor; with none, the track does.
     const bool audio = region.has_value() ? ! region->isMidi : audioTrack;
-    const auto trackColour = track.has_value() ? track->colour : colour::master;
+    const auto trackColour = track.has_value() ? colour::forTrack (*track) : colour::master;
 
     // Only one of them has the region, so the other forgets its drag and view.
     const auto tempo = engine.getTempoMap();
@@ -851,7 +852,7 @@ void BottomPanel::paint (juce::Graphics& g)
     // track the headers, lane and regions highlight; see Selection.)
     auto drawTrack = [&] (const TrackInfo& t, const juce::String& note)
     {
-        g.setColour (t.colour);
+        g.setColour (colour::forTrack (t));
         g.fillEllipse (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat());
         r.removeFromLeft (8);
         drawTitle (t.name, note);

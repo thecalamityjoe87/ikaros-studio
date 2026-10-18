@@ -3629,8 +3629,8 @@ int main (int argc, char* argv[])
             auto copy = tracks.getTrack (settingsCopy);
             check (copy && tracks.getTracks().size() == trackCount + 1 && copy->index == sourceIndex + 1,
                    "duplicate settings adds a track just below");
-            check (copy && copy->soundName == "Soft Piano" && copy->colour == tracks.getTrack (t2)->colour,
-                   "with the same sound and colour");
+            check (copy && copy->soundName == "Soft Piano" && copy->category == tracks.getTrack (t2)->category,
+                   "with the same sound and category (so the same colour)");
             check (tracks.effects().getEffectChain (settingsCopy).size() == tracks.effects().getEffectChain (t2).size(), "and the same effects");
             check (tracks.regions().getRegions (settingsCopy).empty(), "but no regions");
 
@@ -3661,11 +3661,6 @@ int main (int argc, char* argv[])
             check (tracks.getTrack (fullCopy)->name == "Lead", "tracks can be renamed");
             tracks.renameTrack (fullCopy, "   ");
             check (tracks.getTrack (fullCopy)->name == "Lead", "a blank name is ignored");
-
-            auto purple = TrackController::getTrackColours()[3];
-            tracks.setTrackColour (fullCopy, purple);
-            pumpMessages();
-            check (tracks.getTrack (fullCopy)->colour == purple, "track colour can be changed");
 
             check (tracks.getTrack (fullCopy)->icon.isEmpty(), "track icons start automatic");
             tracks.setTrackIcon (fullCopy, "guitar");
@@ -5580,7 +5575,6 @@ int main (int argc, char* argv[])
         checkUndoRoundTrip (engine, "Add Track", [&] { t2 = tracks.addInstrumentTrack(); });
         checkUndoRoundTrip (engine, "Add Audio Track", [&] { audio = tracks.addAudioTrack(); });
         checkUndoRoundTrip (engine, "Rename Track", [&] { tracks.renameTrack (t1, "Lead"); });
-        checkUndoRoundTrip (engine, "Track Color", [&] { tracks.setTrackColour (t1, juce::Colours::orange); });
         checkUndoRoundTrip (engine, "Track Icon", [&] { tracks.setTrackIcon (t1, "guitar"); });
         checkUndoRoundTrip (engine, "Move Track Down", [&] { tracks.moveTrack (t1, 1); });
         TrackId copy = 0;

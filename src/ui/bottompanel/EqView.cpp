@@ -15,8 +15,9 @@ namespace
     constexpr int readoutHeight = 40;
 
     // Each band has a colour of its own, so its point and its readout match.
-    const juce::Colour bandColours[EqSettings::numBands] { colour::trackBlue, colour::trackGreen,
-                                                           colour::trackYellow, colour::trackPurple };
+    // A reference to the token array: the declared size makes the compiler
+    // check there's exactly one colour per band.
+    const juce::Colour (&bandColours)[EqSettings::numBands] = colour::eqBands;
 }
 
 //==============================================================================

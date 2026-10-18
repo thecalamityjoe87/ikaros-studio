@@ -77,20 +77,16 @@ public:
     void deleteTrack (TrackId);
 
     /** Adds a copy of a track just below it: same kind, sound, effects, mixer
-        settings and colour. With withRegions, its regions are copied too
+        settings. With withRegions, its regions are copied too
         (GarageBand's "Duplicate Track"); without, it starts empty ("New Track
         with Duplicate Settings"). Returns the new track, or 0. */
     TrackId duplicateTrack (TrackId, bool withRegions);
 
     void renameTrack (TrackId, const juce::String& newName);
-    void setTrackColour (TrackId, juce::Colour);
 
     /** The icon shown in the track header, as a key such as "guitar" (the UI
         maps keys to pictures). Empty = automatic: follow the sound's category. */
     void setTrackIcon (TrackId, const juce::String& iconKey);
-
-    /** The colours offered for tracks, in the order new tracks use them. */
-    static std::vector<juce::Colour> getTrackColours();
 
     /** Moves a track one place up (-1) or down (+1) the list. */
     void moveTrack (TrackId, int direction);

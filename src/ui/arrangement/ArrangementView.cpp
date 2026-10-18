@@ -751,7 +751,6 @@ juce::PopupMenu ArrangementView::createTrackMenu()
 
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::renameTrack);
-    menu.addSubMenu ("Track Color", createColourMenu (track), track != 0);
     menu.addSubMenu ("Track Icon", TrackHeader::createIconMenu (engine, track), track != 0);
     menu.addCommandItem (&commands, CommandIDs::moveTrackUp);
     menu.addCommandItem (&commands, CommandIDs::moveTrackDown);
@@ -762,35 +761,6 @@ juce::PopupMenu ArrangementView::createTrackMenu()
 
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::deleteTrack);
-    return menu;
-}
-
-juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
-{
-    // Names for TrackController::getTrackColours(), in the same order.
-    static const juce::StringArray names { "Blue", "Orange", "Green", "Purple", "Yellow" };
-
-    juce::PopupMenu menu;
-    const auto info = engine.getTracks().getTrack (track);
-    const auto colours = TrackController::getTrackColours();
-
-    for (size_t i = 0; i < colours.size(); ++i)
-    {
-        const auto c = colours[i];
-
-        // A small rounded swatch beside each name.
-        auto swatch = std::make_unique<juce::DrawablePath>();
-        juce::Path shape;
-        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, size::radiusTiny);
-        swatch->setPath (shape);
-        swatch->setFill (c);
-
-        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Color " + juce::String (i + 1))
-                          .setImage (std::move (swatch))
-                          .setTicked (info && info->colour == c)
-                          .setAction ([this, track, c] { engine.getTracks().setTrackColour (track, c); }));
-    }
-
     return menu;
 }
 

@@ -114,7 +114,6 @@ std::vector<TrackInfo> TrackController::getTracks() const
                 if (in.id == settings.inputId)
                     info.soundName = in.name;
         }
-        info.colour = t->getColour();
         info.muted = t->isMuted (false);
         info.solo = t->isSolo (false);
         info.silencedBySolo = anySolo && ! info.solo;
@@ -162,7 +161,6 @@ TrackId TrackController::addInstrumentTrack()
 
     const auto id = track->itemID.getRawID();
     const int number = existing.size() + 1;
-    track->setColour (juce::Colour (trackPalette[(size_t) (number - 1) % trackPalette.size()]));
 
     // The instrument, as part of this undo step. No effects by default; the
     // user adds them from the Plug-ins inspector.
@@ -202,7 +200,6 @@ TrackId TrackController::createAudioTrack (const juce::String& name)
             ++audioCount;
 
     track->setName (name.isNotEmpty() ? name : "Audio " + juce::String (audioCount));
-    track->setColour (juce::Colour (trackPalette[(size_t) existing.size() % trackPalette.size()]));
     track->state.setProperty (kindProp, "audio", &um);
     track->state.setProperty (categoryProp, "Audio Files", &um);
 
@@ -294,18 +291,6 @@ void TrackController::renameTrack (TrackId id, const juce::String& newName)
     }
 }
 
-void TrackController::setTrackColour (TrackId id, juce::Colour c)
-{
-    if (auto* t = findTrack (owner.getEdit(), id))
-    {
-        if (t->getColour() != c)
-        {
-            owner.beginUndoStep ("Track Color");
-            t->setColour (c);
-        }
-    }
-}
-
 void TrackController::setTrackIcon (TrackId id, const juce::String& iconKey)
 {
     if (auto* t = findTrack (owner.getEdit(), id))
@@ -316,11 +301,6 @@ void TrackController::setTrackIcon (TrackId id, const juce::String& iconKey)
             t->state.setProperty (iconProp, iconKey, &owner.getEdit()->getUndoManager());
         }
     }
-}
-
-std::vector<juce::Colour> TrackController::getTrackColours()
-{
-    return { trackPalette.begin(), trackPalette.end() };
 }
 
 bool TrackController::canMoveTrack (TrackId id, int direction) const
