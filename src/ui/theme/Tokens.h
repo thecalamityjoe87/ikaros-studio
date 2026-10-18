@@ -106,6 +106,10 @@ namespace colour
     inline const juce::Colour textSoft       = palette::textSoft;
     inline const juce::Colour knobCap        = palette::knobCap;
     inline const juce::Colour thumb          { 0xffffffff };         // round slider thumbs (track volume)
+    // The round play button on a hovered library sound (light, so it reads as
+    // "click to hear" without using the accent).
+    inline const juce::Colour previewFill    = palette::text;
+    inline const juce::Colour previewIcon    = palette::background;
     inline const juce::Colour tileBg         { 0xff1c1f25 };   // library category tiles
     inline const juce::Colour trackHeaderBg  { 0xff1f232a };   // an unselected track header
     inline const juce::Colour border         { 0xff2f343e };
@@ -163,10 +167,6 @@ namespace colour
     // colour at these alphas over the lane; their headers are the full colour.
     inline constexpr float regionBodyAlpha         = 0.2f;
     inline constexpr float regionBodySelectedAlpha = 0.28f;
-
-    // The Plug-ins library tile isn't an instrument family (it leaves the
-    // library in a later phase).
-    inline const juce::Colour categoryPlugins   { 0xff6fd6d0 };
 
     // The EQ's four bands, low to high.
     inline const juce::Colour eqBands[] { family::audio, family::strings, family::drums, family::bass };
@@ -241,6 +241,12 @@ namespace size
     inline constexpr int minHitTarget      = 44;
     inline constexpr int panelPadding      = 14;    // standard inset from a panel's edges
     inline constexpr int scrollbarWidth    = 10;
+
+    // The library sidebar
+    inline constexpr int libraryTileHeight = 50;    // category tiles, icon over label, 4 to a row
+    inline constexpr int libraryRowHeight  = 36;    // a sound (or file, plug-in, pack) in the list
+    inline constexpr int libraryRowInset   = 12;    // text inside a row; the breadcrumb and count line up with it
+    inline constexpr int roundButton       = 24;    // a row's round preview or download button
 
     inline constexpr float radiusHair      = 2.0f;
     inline constexpr float radiusTiny      = 3.0f;

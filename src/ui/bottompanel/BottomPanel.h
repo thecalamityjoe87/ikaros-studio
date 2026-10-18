@@ -105,7 +105,7 @@ public:
     std::function<void (bool shouldCollapse)> onCollapseRequested;
 
     /** The Sound tab's Download button, on a track whose sound pack isn't
-        installed. The owner opens the More Sounds window. */
+        installed. The owner opens the Manage Sounds window. */
     std::function<void (const juce::String& packId)> onDownloadPackRequested;
 
     /** Where the owner puts the resize handle: the grip along the top edge,

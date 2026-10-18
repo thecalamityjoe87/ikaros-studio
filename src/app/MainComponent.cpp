@@ -5,7 +5,7 @@
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
-#include "ui/library/MoreSoundsDialog.h"
+#include "ui/library/ManageSoundsDialog.h"
 #include "ui/library/FreesoundSetupDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
@@ -53,8 +53,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     arrangement.onAddTrack = [this] { showNewTrackDialog(); };   // the "Add track" row under the tracks
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
-    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
-    library.onMoreSoundsRequested = [this] (const juce::String& category) { MoreSoundsDialog::show (*this, engine, {}, category); };
+    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { ManageSoundsDialog::show (*this, engine, packId); };
+    library.onManageSoundsRequested = [this] { ManageSoundsDialog::show (*this, engine); };
     library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
 
@@ -120,8 +120,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
             if (safeThis == nullptr || recovered)
                 return;   // a recovered session is open: no chooser
 
-            if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
-                MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+            if (ManageSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+                ManageSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
             else
                 showChooser();
         });
@@ -153,7 +153,7 @@ void MainComponent::resized()
     // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
-             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
+             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<ManageSoundsDialog*> (child) != nullptr
              || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr
              || dynamic_cast<PreferencesDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
@@ -399,8 +399,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
                                    CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
                                    CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleInspector,
-                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
-                                   juce::StandardApplicationCommandIDs::quit };
+                                   CommandIDs::toggleFullScreen, CommandIDs::manageSounds, CommandIDs::freesoundKey, CommandIDs::about,
+                                   CommandIDs::showPlugins, juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
 
@@ -694,8 +694,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress (juce::KeyPress::F11Key, 0);
            #endif
             break;
-        case CommandIDs::moreSounds:
-            info.setInfo ("More Sounds...", "Download more instruments and loops", "Sounds", 0);
+        case CommandIDs::manageSounds:
+            info.setInfo ("Manage Sounds...", "Download, update and remove sound packs", "Sounds", 0);
+            break;
+        case CommandIDs::showPlugins:
+            info.setInfo ("Plug-ins...", "Show plug-in instruments and effects in the library, and scan for new ones", "Mix", 0);
             break;
         case CommandIDs::freesoundKey:
             info.setInfo ("Freesound API Key...", "Set up or change your Freesound API key", "Sounds", 0);
@@ -875,7 +878,13 @@ bool MainComponent::perform (const InvocationInfo& info)
                 window->setFullScreen (! window->isFullScreen());
             break;
 
-        case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
+        case CommandIDs::manageSounds:      ManageSoundsDialog::show (*this, engine); break;
+
+        // Plug-ins have no library tile: this shows the library's plug-in list.
+        case CommandIDs::showPlugins:
+            setLibraryVisible (true);
+            library.showPlugins();
+            break;
         case CommandIDs::freesoundKey:    FreesoundSetupDialog::show (*this, engine); break;
         case CommandIDs::preferences:     showPreferences(); break;
         case CommandIDs::about:           showAbout(); break;
@@ -1173,7 +1182,7 @@ void MainComponent::requestQuit()
 
 void MainComponent::showPreferences (PreferencesDialog::Page page)
 {
-    PreferencesDialog::show (*this, engine, commands, page, [this] { MoreSoundsDialog::show (*this, engine); });
+    PreferencesDialog::show (*this, engine, commands, page, [this] { ManageSoundsDialog::show (*this, engine); });
 }
 
 // Some settings change something in this window the moment they change.

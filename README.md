@@ -12,9 +12,9 @@ Recordings line up with the music on their own: the app allows for the delay of 
 
 ## Sounds and plug-ins
 
-The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`.
+The library's sampled instruments and loops come in sound packs: plain folders with an `instrument.json` per instrument and a `loops.json` for loops (see `src/engine/SoundLibrary.h`). The app ships one, Ikaros Basics, which is made from scratch by `tools/generate_sounds.py`, so there are no third-party samples in the repo. To add more, drop a pack folder into `Documents/Ikaros Studio/Sounds`, or download one: packs that aren't installed are listed in their library category with a download button, and Sounds > Manage Sounds... (or the button at the bottom of the library) lists every pack, to download, update or remove.
 
-Plug-ins are found by a scan in the background at startup. Each plug-in is loaded in a separate helper process, so one that crashes or freezes is just skipped (and remembered) instead of taking the app down. The Plug-ins tile in the library shows what was found and can scan again.
+Plug-ins are found by a scan in the background at startup. Each plug-in is loaded in a separate helper process, so one that crashes or freezes is just skipped (and remembered) instead of taking the app down. Mix > Plug-ins... shows what was found in the library and can scan again; effects are added from a track's Plug-ins section in the inspector.
 
 ## Building
 

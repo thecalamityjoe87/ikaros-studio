@@ -9,24 +9,30 @@ namespace ikaros
 
 //==============================================================================
 /**
-    The sound library on the left: a search field, a grid of category tiles,
-    and the list for the chosen category.
+    The sound library on the left: a search field, a 4-column grid of
+    category tiles, a breadcrumb ("All sounds › Keyboards") with a count, and
+    the list for the chosen category.
 
       Sound categories   click a sound to use it on the selected track (on an
                          audio track, or with nothing selected, it makes a new
-                         instrument track)
-      Audio Files        click to preview, drag onto the timeline to make a
+                         instrument track). Hovering shows a round button that
+                         previews it. Packs from the pack index that aren't
+                         installed are listed too, with a download button.
+      All sounds         (the breadcrumb's root) every sound, grouped by category
+      Audio              click to preview, drag onto the timeline to make a
                          region. It browses folders on the computer.
       Loops              opens the loop browser, a page over the whole
                          sidebar (see LoopBrowser)
-      Plug-ins           third-party instruments (click to use) and effects
+      Plug-ins           no tile: Mix > Plug-ins... shows it (see showPlugins).
+                         Third-party instruments (click to use) and effects
                          (click to add to the selected track), with the scan's
                          progress and a button to scan again
 
-    Typing in the search field searches every category (in Audio Files, the
+    Typing in the search field searches every category (in Audio, the
     folder being shown).
 */
-class LibrarySidebar  : public juce::Component
+class LibrarySidebar  : public juce::Component,
+                        private juce::ChangeListener   // the pack store: index loaded, download progress
 {
 public:
     LibrarySidebar (AudioEngine&, Selection&);
@@ -39,9 +45,13 @@ public:
     /** ~30 Hz: scan progress and which file is previewing. */
     void update();
 
-    /** The "More Sounds..." button: the owner opens the More Sounds window,
-        with the category being browsed (empty for Audio Files and Plug-ins). */
-    std::function<void (const juce::String& category)> onMoreSoundsRequested;
+    /** Shows the plug-in list (Mix > Plug-ins...): third-party instruments
+        and effects, and the plug-in scan. */
+    void showPlugins();
+
+    /** The "Manage Sounds" button: the owner opens the Manage Sounds window
+        (installed packs, updates, removing, and everything to download). */
+    std::function<void()> onManageSoundsRequested;
 
     /** The loop browser needs an API key (or a new one): the owner opens the setup window. */
     std::function<void()> onFreesoundSetupRequested;
@@ -52,16 +62,17 @@ public:
 
 private:
     class CategoryTile;
+    class CrumbButton;
     class Row;
 
     // One line of the list.
     struct Item
     {
-        enum class Kind { sound, pluginInstrument, pluginEffect, file, folder, label };
+        enum class Kind { sound, pack, pluginInstrument, pluginEffect, file, folder, label };
 
         Kind kind = Kind::label;
-        juce::String id;           // sounds: SoundInfo::id; plug-ins: PluginInfo::id
-        juce::String name, detail;
+        juce::String id;           // sounds: SoundInfo::id; packs: StorePack::id; plug-ins: PluginInfo::id
+        juce::String name, detail; // packs: detail is the download size
         juce::File file;           // files and folders
     };
 
@@ -70,6 +81,7 @@ private:
 
     juce::TextEditor searchField;
     juce::OwnedArray<CategoryTile> tiles;   // OwnedArray deletes its objects when it's destroyed
+    std::unique_ptr<CrumbButton> allSoundsButton;   // the breadcrumb's "All sounds", when there's somewhere to go back from
     juce::Viewport listViewport;
     juce::Component listHolder;
     juce::OwnedArray<Row> rows;
@@ -83,22 +95,30 @@ private:
     // Plug-ins: scan status and the scan menu.
     IconButton scanButton { "Scan for plug-ins", std::nullopt, "Scan..." };
 
-    // Downloadable sound packs, at the bottom.
-    IconButton moreSoundsButton { "More sounds", Icon::download, "More Sounds..." };
+    // Sound packs (download, update, remove), at the bottom.
+    IconButton manageSoundsButton { "Manage sounds", Icon::package, "Manage Sounds" };
     juce::String scanText;
     int knownPluginCount = -1;
     int knownSoundCount = -1;   // sounds and loops, so a pack installed or removed updates the list
 
+    // A category name, "Audio Files", "Plug-ins", or empty for All sounds.
     juce::String selectedCategory { "Keyboards" };
-    juce::String heading, emptyText;
-    juce::Rectangle<int> headingArea, toolsArea;
+    juce::String crumbText, countText, emptyText;   // the breadcrumb's last part, "11 sounds"
+    juce::Rectangle<int> crumbArea, toolsArea;
     juce::File playingFile;
+    juce::String previewingSoundId;   // the sound whose preview is playing (see previewSound)
+    juce::File previewingSoundFile;   // the sample it's playing
+
+    // The not-installed packs the list shows, and their download states, so
+    // a store change that alters them rebuilds the list (others just repaint).
+    juce::String packSignature;
 
     // Drawn over everything else while it's open. Declared last, so it's on top.
     LoopBrowser loopBrowser;
 
     void openLoopBrowser();
     void selectCategory (const juce::String&);
+    void showAllSounds();
     void rebuildList();
     std::vector<Item> collectItems() const;
     std::vector<Item> listFolder (const juce::String& query) const;
@@ -107,6 +127,13 @@ private:
 
     void activate (const Item&);
     void useSound (const juce::String& soundId);
+    void previewSound (const juce::String& soundId);
+    bool canPreview (const juce::String& soundId) const;
+    void updatePreviewButtons();
+    void installPack (const juce::String& packId);
+    std::vector<StorePack> getPacksToOffer() const;
+    juce::String describePacksToOffer() const;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void showScanMenu();
     void chooseFolder();
     void updateScanText();

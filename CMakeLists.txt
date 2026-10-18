@@ -330,7 +330,8 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
-    src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
+    src/ui/library/PreviewButton.h          src/ui/library/PreviewButton.cpp
+    src/ui/library/ManageSoundsDialog.h       src/ui/library/ManageSoundsDialog.cpp
     src/ui/library/FreesoundSetupDialog.h   src/ui/library/FreesoundSetupDialog.cpp
     src/ui/library/LoopBrowser.h            src/ui/library/LoopBrowser.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp

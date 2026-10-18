@@ -72,12 +72,14 @@ namespace CommandIDs
         toggleInspector,
 
         toggleFullScreen,
-        moreSounds,
+        manageSounds,
         freesoundKey,
         about,
 
         exportSong,
         exportStems,
+
+        showPlugins,        // Mix > Plug-ins...: the library's plug-in list
     };
 }
 

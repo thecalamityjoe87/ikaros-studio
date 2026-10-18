@@ -103,10 +103,11 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::showMixerTab);
         add (CommandIDs::toggleAutomation);
+        add (CommandIDs::showPlugins);
     }
     else if (name == "Sounds")
     {
-        add (CommandIDs::moreSounds);
+        add (CommandIDs::manageSounds);
         m.addSeparator();
         add (CommandIDs::freesoundKey);
     }

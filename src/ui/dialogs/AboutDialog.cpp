@@ -149,7 +149,7 @@ void AboutDialog::fillReleaseNotes()
                               "folder show up in the library\n");
 
     addHeading (text, "Not yet");
-    addBody (text, bullet + "Downloadable sound packs: More Sounds has nothing to offer until they're hosted");
+    addBody (text, bullet + "Downloadable sound packs: Manage Sounds has nothing to offer until they're hosted");
 }
 
 void AboutDialog::fillAcknowledgements()

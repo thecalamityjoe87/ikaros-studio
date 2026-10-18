@@ -2,6 +2,7 @@
 #include "engine/AudioPreview.h"
 #include "engine/FreesoundStore.h"
 #include "engine/SoundLibrary.h"
+#include "ui/library/PreviewButton.h"
 #include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -14,7 +15,7 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int rowHeight = 34, rowGap = 2, actionWidth = 28, searchDelayMs = 600;
+    constexpr int rowGap = 2, actionWidth = 28, searchDelayMs = 600;
 
     struct TempoRange { const char* label; int min, max; };   // 0: no limit at that end
 
@@ -103,35 +104,71 @@ public:
         setMouseClickGrabsKeyboardFocus (false);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
 
+        if (item.kind != Item::Kind::more)
+        {
+            // The round preview button, the same as the sidebar's (see
+            // PreviewButton). It plays or stops the loop, like clicking the row.
+            previewButton = std::make_unique<PreviewButton> (i.name);
+            previewButton->onClick = [this] { owner.activate (item); };
+
+            // Leaving the preview button doesn't send the row a mouseExit,
+            // so the button tells the row whenever its own hover state changes.
+            previewButton->onStateChange = [this] { updatePreviewButton(); };
+            addChildComponent (*previewButton);
+            updatePreviewButton();
+        }
+
         onClick = [this]
         {
             if (dragged)
                 return;
 
-            if (hasAction() && getMouseXYRelative().x >= getWidth() - actionWidth - 10)
+            if (isOverAction())
                 owner.runAction (item);
             else
                 owner.activate (item);
         };
     }
 
-    int getPreferredHeight() const    { return rowHeight; }
+    int getPreferredHeight() const    { return size::libraryRowHeight; }
+
+    /** Shows the preview button while the row is hovered, or while its loop
+        plays (with a stop icon then). */
+    void updatePreviewButton()
+    {
+        if (previewButton == nullptr)
+            return;
+
+        previewButton->setState (owner.playingFile == item.file);
+        previewButton->updateVisibility (*this);
+        repaint();
+    }
+
+    void mouseEnter (const juce::MouseEvent& e) override    { juce::Button::mouseEnter (e); updatePreviewButton(); }
+    void mouseExit (const juce::MouseEvent& e) override     { juce::Button::mouseExit (e); updatePreviewButton(); }
+
+    void resized() override
+    {
+        if (previewButton != nullptr)
+            previewButton->setBounds (PreviewButton::getBoundsIn (getLocalBounds()));
+    }
 
     juce::String getTooltip() override
     {
         if (item.kind == Item::Kind::more)
             return "Show more loops";
 
-        if (hasAction() && getMouseXYRelative().x >= getWidth() - actionWidth - 10)
+        if (isOverAction())
             return item.removable ? "Remove this loop from your library" : "Add this loop to your library";
 
         return item.kind == Item::Kind::loop || item.added ? "Click to listen. Drag onto the timeline to use it."
                                                            : "Click to listen. Press + to add it to your library.";
     }
 
-    void paintButton (juce::Graphics& g, bool over, bool down) override
+    void paintButton (juce::Graphics& g, bool, bool down) override
     {
         auto r = getLocalBounds().toFloat();
+        const bool over = isMouseOver (true);   // true over the preview button too
 
         if (item.kind == Item::Kind::more)
         {
@@ -141,19 +178,12 @@ public:
             return;
         }
 
-        const bool playing = owner.playingFile == item.file;
-
-        if (playing)
-            g.setColour (colour::selectedBg);
-        else
-            g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
-
+        // Playing is shown by the preview button's stop icon, as in the
+        // sidebar, so the row itself only lights up under the mouse.
+        g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
         g.fillRoundedRectangle (r, size::radius);
 
-        auto content = getLocalBounds().reduced (10, 0);
-        icons::draw (g, playing ? Icon::stop : Icon::play, content.removeFromLeft (16).toFloat(),
-                     playing ? colour::accent : colour::textSecondary, 12.0f);
-        content.removeFromLeft (8);
+        auto content = getContentArea();
 
         // In your own loops only some rows have a bin, so it shows on hover and the details stay lined up.
         const bool busy = hasAction() && owner.engine.getFreesound().isBusy (item.id);
@@ -161,7 +191,7 @@ public:
         if (hasAction() && (over || busy || item.kind == Item::Kind::result))
         {
             auto zone = content.removeFromRight (actionWidth).toFloat();
-            const bool onAction = over && getMouseXYRelative().x >= getWidth() - actionWidth - 10;
+            const bool onAction = isOverAction();
 
             if (busy)
             {
@@ -231,7 +261,27 @@ private:
     LoopBrowser& owner;
     bool dragged = false;
 
+    std::unique_ptr<PreviewButton> previewButton;   // not on the "more" row
+
     bool hasAction() const    { return item.kind == Item::Kind::result || item.removable; }
+
+    // Where the name, details and + or bin go: inset like the sidebar's rows,
+    // and left of the preview button while it shows.
+    juce::Rectangle<int> getContentArea() const
+    {
+        auto content = getLocalBounds().reduced (size::libraryRowInset, 0);
+
+        if (previewButton != nullptr && previewButton->isVisible())
+            content.setRight (PreviewButton::getBoundsIn (getLocalBounds()).getX() - 8);
+
+        return content;
+    }
+
+    bool isOverAction() const
+    {
+        const auto zone = getContentArea().removeFromRight (actionWidth).expanded (5, 0);
+        return hasAction() && isMouseOver (true) && zone.contains (getMouseXYRelative());
+    }
 };
 
 //==============================================================================
@@ -387,7 +437,7 @@ void LoopBrowser::update()
         playingFile = playing;
 
         for (auto* row : rows)
-            row->repaint();
+            row->updatePreviewButton();
     }
 }
 
@@ -853,7 +903,7 @@ void LoopBrowser::resized()
     tempoButton.setBounds (r.removeFromTop (28));
     r.removeFromTop (12);
 
-    headingArea = r.removeFromTop (20).withTrimmedLeft (2);
+    headingArea = r.removeFromTop (20).withTrimmedLeft (size::libraryRowInset);   // lined up with the rows' text
 
     if (scope == Scope::freesound)
     {
@@ -863,7 +913,7 @@ void LoopBrowser::resized()
 
     r.removeFromTop (4);
     viewport.setBounds (r);
-    emptyArea = r.removeFromTop (88).withTrimmedLeft (2);
+    emptyArea = r.removeFromTop (88).withTrimmedLeft (size::libraryRowInset);
     setupButton.setBounds (r.withTrimmedTop (4).removeFromTop (34));
     layoutList();
 }

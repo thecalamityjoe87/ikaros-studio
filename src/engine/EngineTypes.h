@@ -303,7 +303,7 @@ struct SoundPackInfo
     bool bundled = false;          // installed with the app: always there, can't be removed
 };
 
-// A sound pack as the "More Sounds" window shows it: what the pack index
+// A sound pack as the "Manage Sounds" window shows it: what the pack index
 // offers (see PackStore), what's installed, or both.
 struct StorePack
 {

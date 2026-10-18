@@ -2,7 +2,7 @@
 #include <map>
 
 /*
-    The keyboard (piano), drums, bass (bass clef) and guitar icons are from
+    The keyboard (piano), drums, bass (bass clef), guitar and package icons are from
     Lucide 1.55.0 (https://lucide.dev), converted to plain SVG paths:
 
     ISC License
@@ -52,6 +52,10 @@ namespace
             // and a second guitar would be hard to tell apart.)
             case Icon::bass:      return "M19 11h.01 M19 6h.01 M5 8c0-4 4-4 4-4 6 0 6 6 6 6 0 7-10 11-10 11 "
                                          "M5 8a2 2 0 1 0 4 0a2 2 0 1 0-4 0z";
+            // Lucide "package": a box, for sound packs (Manage Sounds).
+            case Icon::package:   return "M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4"
+                                         "A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z M12 22V12 "
+                                         "M3.3 7l7.703 4.734a2 2 0 0 0 1.994 0L20.7 7 M7.5 4.27l9 5.15";
             case Icon::synths:    return "M5 20V4 M10 20V4 M15 20V4 M20 20V4 M3 8h4 M8 15h4 M13 10h4 M18 13h4";
             // Lucide "guitar": an acoustic guitar with its headstock.
             case Icon::guitar:    return "M11.9 12.1l4.514-4.514 M6 16l2 2 "

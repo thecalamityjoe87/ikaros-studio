@@ -15,7 +15,7 @@ using namespace tokens;
 namespace
 {
     constexpr int headerHeight = 44;     // under the grip: the switch, the track's name and the buttons
-    constexpr int tabWidth = 68;         // one segment of Sound | Editor | EQ | Mixer
+    constexpr int dividerGap = 14;       // either side of the header's divider
     constexpr int tabHeight = 30;
     constexpr int switchRowHeight = 40;  // the top of the inspector column
     constexpr int modeWidth = 62;        // one segment of the inspector's small Track | Master switch
@@ -913,16 +913,25 @@ void BottomPanel::resized()
 
     // The header row: Sound | Editor | EQ | Mixer on the left, a divider and
     // the selected track's name, then Inspector and hide on the right.
+    // The divider sits on the inspector column's edge (and so the track
+    // headers' edge above), and the switch's four segments share the room
+    // to its left.
     auto header = r.removeFromTop (headerHeight).reduced (padding, 0);
-    tabsArea = header.removeFromLeft (tabWidth * 4 + segmentInset * 2).withSizeKeepingCentre (tabWidth * 4 + segmentInset * 2, tabHeight);
-    auto t = tabsArea.reduced (segmentInset);
+    const int dividerX = TrackInspector::preferredWidth - 1;   // where the inspector column draws its edge
+    auto beforeDivider = header.removeFromLeft (dividerX - header.getX());
 
-    for (auto* b : { &soundTab, &editorTab, &eqTab, &mixerButton })
+    auto tabs = beforeDivider.withTrimmedRight (dividerGap);
+    tabsArea = tabs.withSizeKeepingCentre (tabs.getWidth(), tabHeight);
+    auto t = tabsArea.reduced (segmentInset);
+    const int tabWidth = t.getWidth() / 4;
+
+    for (auto* b : { &soundTab, &editorTab, &eqTab })
         b->setBounds (t.removeFromLeft (tabWidth));
 
-    header.removeFromLeft (14);
+    mixerButton.setBounds (t);   // the last segment takes any spare pixel
+
     headerDivider = header.removeFromLeft (1).withSizeKeepingCentre (1, 20);
-    header.removeFromLeft (14);
+    header.removeFromLeft (dividerGap);
 
     collapseButton.setBounds (header.removeFromRight (30).withSizeKeepingCentre (30, 30));
     header.removeFromRight (8);
