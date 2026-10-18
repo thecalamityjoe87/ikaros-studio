@@ -1,5 +1,6 @@
 #include "engine/TakeEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/FlexHelpers.h"
 #include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
 #include <set>
@@ -109,6 +110,11 @@ static void playWaveTake (te::WaveAudioClip& clip, int index)
     // (and again when Undo puts the old one back).
     clip.state.setProperty (te::IDs::source, next[te::IDs::source], undoManagerOf (clip));
     clip.setOffset (te::TimeDuration::fromSeconds (juce::jmax (0.0, offset)));
+
+    // Flex edits pin moments of one take's recording, so each take keeps its
+    // own: the new take plays with whatever Flex edits it had (none, the
+    // first time), and the old take's wait on it for when it's chosen again.
+    switchTakeWarp (clip, current >= 0 ? takes.getChild (current) : juce::ValueTree(), next);
 }
 
 // An audio clip's take list, made (with the clip's own file as its only
@@ -280,12 +286,14 @@ bool TakeEditor::flattenTakes (RegionId id)
 //==============================================================================
 
 // Regions whose audio can be kept as a take: plain recordings or files, not
-// looped, stretched, pitched or reversed (their take would sound different).
+// looped, stretched, pitched, reversed or flexed (their take would sound
+// different). A Flex track's region whose hits haven't been moved (it plays
+// its recording as it is) can.
 static bool canBecomeTake (te::WaveAudioClip& clip)
 {
     return ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getAutoPitch() && clip.getSpeedRatio() == 1.0
             && clip.getPitchChange() == 0.0f && clip.getTransposeSemiTones (false) == 0 && ! clip.getIsReversed()
-            && clip.getSourceFileReference().getFile().existsAsFile();
+            && ! usesFlex (clip) && clip.getSourceFileReference().getFile().existsAsFile();
 }
 
 static bool sameRange (te::Clip& a, te::Clip& b)

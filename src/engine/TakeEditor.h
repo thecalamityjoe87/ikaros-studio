@@ -33,6 +33,12 @@ struct TakeInfo
     projects (Ikaros sessions refer to plain files). MIDI takes are
     Tracktion's own: one MidiList per take.
 
+    Flex edits (see FlexEditor) belong to the take they were made on: each
+    take keeps its own markers, and choosing a take brings back its own. A
+    region that plays flexed can't be kept as a take when it's recorded
+    over, just as a stretched or reversed one can't (its take would sound
+    different).
+
     Every method runs on the message thread, and every change is one undo step.
 */
 class TakeEditor

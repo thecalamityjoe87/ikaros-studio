@@ -468,7 +468,18 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
         pianoRoll.setGrid (grid);
         audioEditor.setGrid (grid);
     };
-    regionInspector.onQuantize = [this] { pianoRoll.quantize(); };
+    regionInspector.onQuantize = [this]
+    {
+        if (editingAudio)
+            audioEditor.quantize();
+        else
+            pianoRoll.quantize();
+    };
+    regionInspector.onQuantizeFeelChanged = [this] (double strength, double swing)
+    {
+        pianoRoll.setQuantizeFeel (strength, swing);
+        audioEditor.setQuantizeFeel (strength, swing);
+    };
     addChildComponent (regionInspector);
 
     auto mixerColours = IconButton::raisedColours();

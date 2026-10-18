@@ -1,5 +1,6 @@
 #include "engine/SectionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/FlexHelpers.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -491,13 +492,15 @@ void SectionEditor::rearrange (const std::vector<Piece>& pieces)
             continue;
         }
 
-        // Copies first, while the original is still where they're copied from.
+        // Copies first, while the original is still where they're copied
+        // from. A flexed region keeps its hits on their beats where it lands
+        // (the tempo can differ there, see FlexHelpers.h).
         for (size_t i = 1; i < p.pieces.size(); ++i)
             if (auto copy = te::duplicateClip (*p.clip))
-                copy->setStart (beatToTime (edit, p.startBeat + p.pieces[i]->dest - p.pieces[i]->from), false, true);
+                moveKeepingFlex (*copy, [&] { copy->setStart (beatToTime (edit, p.startBeat + p.pieces[i]->dest - p.pieces[i]->from), false, true); });
 
         if (const double shift = p.pieces[0]->dest - p.pieces[0]->from; std::abs (shift) > tolerance)
-            p.clip->setStart (beatToTime (edit, p.startBeat + shift), false, true);   // keeps its length
+            moveKeepingFlex (*p.clip, [&] { p.clip->setStart (beatToTime (edit, p.startBeat + shift), false, true); });   // keeps its length
     }
 
     // 2. Automation, on every plug-in (track volume and pan included, and the

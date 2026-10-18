@@ -27,7 +27,7 @@ namespace
 }
 
 //==============================================================================
-// The "Audio" section: an audio region's gain, pitch and direction.
+// The "Audio" section: an audio region's gain, pitch, direction and Flex.
 class RegionInspector::AudioControls  : public juce::Component
 {
 public:
@@ -86,6 +86,30 @@ public:
                 owner.engine.getTracks().regions().setRegionReversed (owner.region->id, ! owner.region->reversed);
         };
         addAndMakeVisible (reverse);
+
+        // Flex belongs to the track (as in GarageBand), so this switches it
+        // for every region on the region's track. Amber while it's on, like
+        // the track header's Flex button.
+        flex.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
+        flex.setFont (fonts::uiSemiBold (12.0f));
+        flex.setCornerRadius (6.0f);
+        flex.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().flex().setFlexOn (owner.region->trackId, ! flexInfo.trackFlex);
+        };
+        addAndMakeVisible (flex);
+
+        resetFlex.setColours (raisedWithBorder());
+        resetFlex.setFont (fonts::ui (12.0f));
+        resetFlex.setCornerRadius (size::radiusSmall);
+        resetFlex.setTooltip ("Put every hit back where it was recorded");
+        resetFlex.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().flex().resetFlex (owner.region->id);
+        };
+        addAndMakeVisible (resetFlex);
     }
 
     /** Shows the region's settings (it's an audio region). */
@@ -101,12 +125,23 @@ public:
         pitchUp.setEnabled (r.transposeSemitones < RegionEditor::maxTransposeSemitones);
         reverse.setToggleState (r.reversed, juce::dontSendNotification);
         reverse.setText (r.reversed ? "Playing backwards" : "Play backwards");
+
+        // A region that can't be flexed (a loop that follows the tempo, a
+        // reversed region) says why rather than half working.
+        flexInfo = owner.engine.getTracks().flex().getFlex (r.id);
+        flex.setEnabled (flexInfo.available);
+        flex.setToggleState (flexInfo.on, juce::dontSendNotification);
+        flex.setText (flexInfo.trackFlex ? "Flex on" : "Flex off");
+        flex.setTooltip (! flexInfo.available ? flexInfo.unavailableReason
+                         : flexInfo.trackFlex ? juce::String ("Flex is on for this track: drag the hits in the Editor")
+                                              : juce::String ("Turn on Flex for this track, to move the hits in its recordings"));
+        resetFlex.setEnabled (flexInfo.on && flexInfo.hasEdits);
         repaint();
     }
 
     int getIdealHeight() const
     {
-        return padding / 2 + 3 * (rowHeight + rowGap) + (showsKeyNote() ? 22 : 0) + padding / 2;
+        return padding / 2 + 4 * (rowHeight + rowGap) + (showsKeyNote() ? 22 : 0) + padding / 2;
     }
 
     void paint (juce::Graphics& g) override
@@ -119,6 +154,7 @@ public:
         g.drawText ("Gain", gainRow, juce::Justification::centredLeft);
         g.drawText ("Pitch", pitchRow, juce::Justification::centredLeft);
         g.drawText ("Direction", reverseRow, juce::Justification::centredLeft);
+        g.drawText ("Flex", flexRow, juce::Justification::centredLeft);
 
         // The gain as it is now (it follows the slider during a drag).
         const auto db = gain.getValue();
@@ -177,6 +213,12 @@ public:
         reverseRow = row();
         reverse.setBounds (reverseRow.withTrimmedLeft (labelWidth).removeFromLeft (150).withSizeKeepingCentre (150, 26));
 
+        flexRow = row();
+        auto flexArea = flexRow.withTrimmedLeft (labelWidth);
+        flex.setBounds (flexArea.removeFromLeft (80).withSizeKeepingCentre (80, 26));
+        flexArea.removeFromLeft (6);
+        resetFlex.setBounds (flexArea.removeFromLeft (64).withSizeKeepingCentre (64, 26));
+
         keyNote = r.removeFromTop (22);
     }
 
@@ -188,8 +230,11 @@ private:
     IconButton pitchDown { "Pitch down", std::nullopt, "-" };
     IconButton pitchUp   { "Pitch up", std::nullopt, "+" };
     IconButton reverse   { "Reverse", std::nullopt, "Play backwards" };
+    IconButton flex      { "Flex", std::nullopt, "Flex off" };
+    IconButton resetFlex { "Reset Flex", std::nullopt, "Reset" };
+    FlexInfo flexInfo;   // the region's, as last shown
 
-    juce::Rectangle<int> gainRow, gainValue, pitchRow, pitchValue, pitchUnits, reverseRow, keyNote;
+    juce::Rectangle<int> gainRow, gainValue, pitchRow, pitchValue, pitchUnits, reverseRow, flexRow, keyNote;
 
     bool showsKeyNote() const   { return owner.region.has_value() && owner.region->followsKey; }
 
@@ -201,7 +246,7 @@ private:
 };
 
 //==============================================================================
-// The "Editing" section: the grid, and Quantize for a MIDI region.
+// The "Editing" section: the grid, and Quantize with its strength and swing.
 class RegionInspector::EditingControls  : public juce::Component
 {
 public:
@@ -216,37 +261,85 @@ public:
         }
 
         gridButton.onClick = [this] { owner.showGridMenu (gridButton); };
-        quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
         quantizeButton.onClick = [this] { if (owner.onQuantize) owner.onQuantize(); };
+
+        // Percentages; the editors get them as 0..1.
+        setUpPercent (strength, "Quantize strength", 100.0,
+                      "How far Quantize moves each note or hit towards the grid: 100% all the way, "
+                      "less keeps some of the feel. Double-click for 100%");
+        setUpPercent (swing, "Quantize swing", 0.0,
+                      "Makes every second grid line late, for a shuffle: 100% is a triplet feel. Double-click for none");
     }
 
-    void refresh (bool midi)
+    /** Shows the region's editing settings. */
+    void refresh (const RegionInfo& r)
     {
-        isMidi = midi;
+        isMidi = r.isMidi;
         gridButton.setText (gridName (owner.grid));
-        gridButton.setTooltip (midi ? "Where notes snap to when you draw, move or resize them"
-                                    : "Where the region's edges snap to when you trim them");
-        quantizeButton.setVisible (midi);
-        resized();
+        gridButton.setTooltip (isMidi ? "Where notes snap to when you draw, move or resize them, and what Quantize lines them up with"
+                                      : "Where the region's edges snap to when you trim them, and what Quantize lines its hits up with");
+
+        if (isMidi)
+        {
+            quantizeButton.setEnabled (true);
+            quantizeButton.setTooltip ("Line the selected notes (or all of them) up with the grid (Q)");
+        }
+        else
+        {
+            // Audio is quantized with Flex: a region that can't be flexed
+            // (a loop that follows the tempo, a reversed region) says why.
+            const auto flex = owner.engine.getTracks().flex().getFlex (r.id);
+            quantizeButton.setEnabled (flex.available);
+            quantizeButton.setTooltip (! flex.available ? flex.unavailableReason
+                                       : flex.trackFlex ? juce::String ("Line the hits in the selection (or all of them) up with the grid (Q)")
+                                                        : juce::String ("Line the hits in the selection (or all of them) up with the grid (Q). "
+                                                                        "This turns on Flex for the track"));
+        }
+
+        repaint();
     }
 
-    int getIdealHeight() const   { return padding / 2 + (isMidi ? 2 : 1) * (rowHeight + rowGap) + padding / 2; }
+    int getIdealHeight() const   { return padding / 2 + 4 * (rowHeight + rowGap) + padding / 2; }
 
     void paint (juce::Graphics& g) override
     {
         g.setFont (fonts::ui (13.0f));
         g.setColour (colour::textSecondary);
         g.drawText ("Grid", gridRow, juce::Justification::centredLeft);
+        g.drawText ("Strength", strengthRow, juce::Justification::centredLeft);
+        g.drawText ("Swing", swingRow, juce::Justification::centredLeft);
+
+        g.setColour (colour::text);
+        g.setFont (fonts::mono (12.0f));
+        g.drawText (juce::String (juce::roundToInt (strength.getValue())) + "%", strengthValue, juce::Justification::centredRight);
+        g.drawText (juce::String (juce::roundToInt (swing.getValue())) + "%", swingValue, juce::Justification::centredRight);
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (padding, padding / 2);
-        gridRow = r.removeFromTop (rowHeight);
+
+        auto row = [&r]
+        {
+            auto next = r.removeFromTop (rowHeight);
+            r.removeFromTop (rowGap);
+            return next;
+        };
+
+        gridRow = row();
         gridButton.setBounds (gridRow.withTrimmedLeft (labelWidth).removeFromLeft (110).withSizeKeepingCentre (110, 26));
-        r.removeFromTop (rowGap);
-        quantizeButton.setBounds (r.removeFromTop (rowHeight).withTrimmedLeft (labelWidth).removeFromLeft (110)
-                                    .withSizeKeepingCentre (110, 26));
+        quantizeButton.setBounds (row().withTrimmedLeft (labelWidth).removeFromLeft (110).withSizeKeepingCentre (110, 26));
+
+        auto sliderRow = [&] (juce::Slider& slider, juce::Rectangle<int>& label, juce::Rectangle<int>& value)
+        {
+            label = row();
+            auto area = label.withTrimmedLeft (labelWidth);
+            value = area.removeFromRight (44);
+            slider.setBounds (area.withTrimmedRight (6));
+        };
+
+        sliderRow (strength, strengthRow, strengthValue);
+        sliderRow (swing, swingRow, swingValue);
     }
 
 private:
@@ -255,7 +348,27 @@ private:
 
     IconButton gridButton     { "Grid", std::nullopt, "1/16" };
     IconButton quantizeButton { "Quantize", std::nullopt, "Quantize" };
-    juce::Rectangle<int> gridRow;
+    juce::Slider strength     { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider swing        { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Rectangle<int> gridRow, strengthRow, strengthValue, swingRow, swingValue;
+
+    void setUpPercent (juce::Slider& slider, const juce::String& title, double initial, const juce::String& tip)
+    {
+        slider.setTitle (title);
+        slider.setTooltip (tip);
+        slider.setRange (0.0, 100.0, 1.0);
+        slider.setValue (initial, juce::dontSendNotification);
+        slider.setDoubleClickReturnValue (true, initial);
+        slider.setColour (juce::Slider::trackColourId, colour::accent);
+        slider.onValueChange = [this]
+        {
+            if (owner.onQuantizeFeelChanged)
+                owner.onQuantizeFeelChanged (strength.getValue() / 100.0, swing.getValue() / 100.0);
+
+            repaint();
+        };
+        addAndMakeVisible (slider);
+    }
 };
 
 //==============================================================================
@@ -292,7 +405,9 @@ void RegionInspector::setRegion (std::optional<RegionInfo> r, juce::Colour track
     if (audio)
         audioControls->refresh (*region, trackColour);
 
-    editingControls->refresh (region.has_value() && region->isMidi);
+    if (region.has_value())
+        editingControls->refresh (*region);
+
     layoutSections();
     repaint();
 }
@@ -307,7 +422,9 @@ void RegionInspector::showGridMenu (juce::Component& target)
         menu.addItem (juce::PopupMenu::Item (name).setTicked (grid == value).setAction ([this, value]
         {
             grid = value;
-            editingControls->refresh (region.has_value() && region->isMidi);
+
+            if (region.has_value())
+                editingControls->refresh (*region);
 
             if (onGridChanged)
                 onGridChanged (grid);

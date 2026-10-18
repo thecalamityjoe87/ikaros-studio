@@ -55,7 +55,8 @@ TrackController::TrackController (AudioEngine& o)
       sendBuses (std::make_unique<SendBuses> (o)),
       eqController (std::make_unique<EqController> (o)),
       automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses)),
-      sectionEditor (std::make_unique<SectionEditor> (o))
+      sectionEditor (std::make_unique<SectionEditor> (o)),
+      flexEditor (std::make_unique<FlexEditor> (o))
 {
 }
 
@@ -67,6 +68,7 @@ void TrackController::sessionChanged()
     selectedTrack = 0;
     inputRouter->sessionChanged();    // held notes, armed and selected track
     regionEditor->sessionChanged();   // clipboard, waveform cache
+    flexEditor->sessionChanged();     // which files the hits were found in
 }
 
 //==============================================================================

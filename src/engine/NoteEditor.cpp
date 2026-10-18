@@ -101,11 +101,11 @@ void NoteEditor::deleteNotes (RegionId id, const std::vector<NoteId>& ids)
         clip->getSequence().removeNote (*n, &edit->getUndoManager());
 }
 
-void NoteEditor::quantiseNotes (RegionId id, const std::vector<NoteId>& ids, double gridBeats)
+void NoteEditor::quantiseNotes (RegionId id, const std::vector<NoteId>& ids, const QuantizeSettings& settings)
 {
     auto* clip = findMidiClip (owner.getEdit(), id);
 
-    if (clip == nullptr || gridBeats <= 0.0)
+    if (clip == nullptr)
         return;
 
     assignNoteIds (*clip);
@@ -115,6 +115,7 @@ void NoteEditor::quantiseNotes (RegionId id, const std::vector<NoteId>& ids, dou
     // own note positions are from that.
     const double regionStart = clip->getStartBeat().inBeats() - loopOffsetBeats (*clip);
     const auto offset = contentOffsetBeats (*clip);
+    const auto tempo = owner.getTempoMap();
     std::vector<NoteInfo> changes;
 
     for (auto* n : clip->getSequence().getNotes())
@@ -131,14 +132,17 @@ void NoteEditor::quantiseNotes (RegionId id, const std::vector<NoteId>& ids, dou
         // Snap on the song's timeline, so notes line up with the bars even
         // when the region doesn't start on a grid line.
         const double absolute = regionStart + note.startBeat;
-        double snapped = std::round (absolute / gridBeats) * gridBeats;
+        double target = quantize::gridLine (absolute, settings, tempo);
 
-        if (snapped < regionStart)
-            snapped += gridBeats;   // don't push a note out of the front of the region
+        // Don't push a note out of the front of the region: use the next line.
+        if (target < regionStart)
+            target = quantize::gridLineAtOrAfter (regionStart, settings, tempo);
 
-        if (std::abs (snapped - absolute) > 1.0e-6)
+        const double moved = absolute + juce::jlimit (0.0, 1.0, settings.strength) * (target - absolute);
+
+        if (std::abs (moved - absolute) > 1.0e-6)
         {
-            note.startBeat = snapped - regionStart;
+            note.startBeat = juce::jmax (0.0, moved - regionStart);
             changes.push_back (note);
         }
     }

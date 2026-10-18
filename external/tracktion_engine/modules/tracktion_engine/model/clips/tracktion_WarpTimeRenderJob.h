@@ -72,7 +72,10 @@ private:
     {
         auto tm = clip.getTimeStretchMode();
         proxyInfo = std::make_unique<AudioClipBase::ProxyRenderingInfo>();
-        proxyInfo->audioSegmentList  = AudioSegmentList::create (clip);
+        // Build the segments from the file being warped: the clip's own wave info
+        // (AudioSegmentList::create (clip)) is that of its current source, which by
+        // now is the file this job is about to write, so it reads as empty
+        proxyInfo->audioSegmentList  = AudioSegmentList::create (clip, clip.getWarpTimeManager(), source);
         proxyInfo->clipTime          = { {}, clip.getWarpTimeManager().getWarpEndMarkerTime() };
         proxyInfo->speedRatio        = 1.0;
         proxyInfo->mode              = (tm != TimeStretcher::disabled && tm != TimeStretcher::ara)

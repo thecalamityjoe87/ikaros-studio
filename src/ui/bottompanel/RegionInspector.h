@@ -18,12 +18,14 @@ class AudioEngine;
     GarageBand's region inspector. Grouped in collapsible sections, as in the
     track inspector:
 
-      Audio region   Gain, Pitch, Reverse (and whether it follows the key)
-      Editing        Grid (and Quantize, for a MIDI region)
+      Audio region   Gain, Pitch, Reverse (and whether it follows the key), Flex
+      Editing        Grid, Quantize, and Quantize's strength and swing
 
     The audio settings go straight to the session (RegionEditor), each as an
     undo step. The grid and Quantize belong to the editors, so they're
-    passed on through onGridChanged and onQuantize.
+    passed on through onGridChanged, onQuantize and onQuantizeFeelChanged.
+    (The grid, strength and swing are how you edit, not part of the song:
+    they aren't saved with the session, and changing them isn't an undo step.)
 */
 class RegionInspector  : public juce::Component
 {
@@ -38,8 +40,11 @@ public:
     /** The grid was changed: the owner passes it on to the editors. */
     std::function<void (EditorGrid)> onGridChanged;
 
-    /** Quantize was clicked (MIDI regions). */
+    /** Quantize was clicked: the editor showing the region quantizes it. */
     std::function<void()> onQuantize;
+
+    /** Quantize's strength or swing was changed (each 0..1, see QuantizeSettings). */
+    std::function<void (double strength, double swing)> onQuantizeFeelChanged;
 
     void paint (juce::Graphics&) override;
     void resized() override;

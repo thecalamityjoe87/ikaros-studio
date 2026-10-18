@@ -166,9 +166,9 @@ juce::Rectangle<float> PianoRoll::noteBounds (const NoteInfo& n) const
 double PianoRoll::gridBeats() const
 {
     // ikaros:: picks EditorGrid.h's gridBeats rather than this member function.
-    // As a step (a new note's length, say), a bar is as long as the one the
-    // region starts in.
-    return ikaros::gridBeats (grid, tempo.beatsPerBarAt (region.has_value() ? contentStartBeat() : 0.0));
+    // As a step (a new note's length, say), the grid is measured in the bar
+    // the region starts in (bars and beats can differ from bar to bar).
+    return ikaros::gridBeats (grid, tempo, region.has_value() ? contentStartBeat() : 0.0);
 }
 
 void PianoRoll::setGrid (EditorGrid newGrid)
@@ -180,6 +180,12 @@ void PianoRoll::setGrid (EditorGrid newGrid)
         lastNoteLength = gridBeats();
 
     repaint();
+}
+
+void PianoRoll::setQuantizeFeel (double strength, double swing)
+{
+    quantizeStrength = strength;
+    quantizeSwing = swing;
 }
 
 double PianoRoll::snapToGrid (double beat, bool roundDown) const
@@ -406,7 +412,7 @@ void PianoRoll::quantize()
         return;
 
     // With the grid off, quantize to 1/16 notes.
-    engine.getTracks().notes().quantiseNotes (region->id, selected, gridBeats() > 0.0 ? gridBeats() : 0.25);
+    engine.getTracks().notes().quantiseNotes (region->id, selected, quantizeSettingsFor (grid, quantizeStrength, quantizeSwing));
     rereadRegion();
 }
 

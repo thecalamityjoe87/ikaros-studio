@@ -1,8 +1,10 @@
 #include "engine/RegionEditor.h"
 #include "engine/AudioEngine.h"
+#include "engine/FlexHelpers.h"
 #include "engine/LoopKey.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TakeHelpers.h"
+#include "engine/TimeStretch.h"
 #include "engine/TrackHelpers.h"
 #include <algorithm>
 
@@ -50,10 +52,11 @@ static void findTrimLimits (te::Clip& clip, double& minStartBeat, double& maxEnd
 
     if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
-        // The recording begins at the clip's content start and lasts as long as the file.
+        // The recording begins at the clip's content start and lasts as long
+        // as the file (or, flexed, as it's been stretched to).
         auto pos = clip.getPosition();
         auto contentStart = pos.time.getStart() - pos.offset;
-        auto sourceLength = wave->getSourceLength();
+        auto sourceLength = usesFlex (clip) ? contentLengthOf (*wave) : wave->getSourceLength();
 
         minStartBeat = juce::jmax (0.0, timeToBeat (clip.edit, contentStart));
         maxEndBeat = sourceLength > te::TimeDuration() ? timeToBeat (clip.edit, contentStart + sourceLength)
@@ -336,11 +339,18 @@ void RegionEditor::moveRegions (const std::vector<RegionPlacement>& placements)
 
     for (auto& m : moves)
     {
-        if (m.clip->getClipTrack() != m.track)
-            m.clip->moveTo (*m.track);
+        // A flexed region keeps its hits on their beats, even where the
+        // tempo is different (see FlexHelpers.h), and follows the Flex of
+        // the track it lands on.
+        moveKeepingFlex (*m.clip, [&]
+        {
+            if (m.clip->getClipTrack() != m.track)
+                m.clip->moveTo (*m.track);
 
-        // false, true = keep the content's offset and the region's length.
-        m.clip->setStart (m.start, false, true);
+            // false, true = keep the content's offset and the region's length.
+            m.clip->setStart (m.start, false, true);
+        });
+
         moved.push_back (m.clip);
     }
 
@@ -441,7 +451,7 @@ bool RegionEditor::loopRegion (RegionId id, double newEndBeat)
         if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); wave != nullptr && ! wave->canLoop())
         {
             auto& loopInfo = wave->getLoopInfo();
-            const auto seconds = wave->getSourceLength().inSeconds();
+            const auto seconds = (usesFlex (*wave) ? contentLengthOf (*wave) : wave->getSourceLength()).inSeconds();
             loopInfo.setNumBeats (seconds * edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart()));
 
             if (loopInfo.getNumerator() <= 0 || loopInfo.getDenominator() <= 0)
@@ -458,7 +468,18 @@ bool RegionEditor::loopRegion (RegionId id, double newEndBeat)
         // range is in the clip's own content time, starting at its offset.
         // The offset then goes back to 0: the region starts at the loop's start.
         auto pos = clip->getPosition();
-        clip->setLoopRange ({ te::TimePosition() + pos.offset, pos.getLength() });
+
+        if (usesFlex (*clip))
+        {
+            // setLoopRange clamps to the length of the stretched copy of the
+            // recording, which isn't known while it's being made.
+            clip->state.setProperty (te::IDs::loopStart, pos.offset.inSeconds(), &edit->getUndoManager());
+            clip->state.setProperty (te::IDs::loopLength, pos.getLength().inSeconds(), &edit->getUndoManager());
+        }
+        else
+        {
+            clip->setLoopRange ({ te::TimePosition() + pos.offset, pos.getLength() });
+        }
 
         pos.offset = {};
         clip->setPosition (pos);
@@ -531,7 +552,7 @@ std::vector<RegionId> RegionEditor::duplicateRegions (const std::vector<RegionId
     {
         if (auto copy = te::duplicateClip (*clip))
         {
-            copy->setStart (beatToTime (*edit, clip->getStartBeat().inBeats() + shift), false, true);
+            moveKeepingFlex (*copy, [&] { copy->setStart (beatToTime (*edit, clip->getStartBeat().inBeats() + shift), false, true); });
             copies.push_back (copy.get());
         }
     }
@@ -616,6 +637,10 @@ void RegionEditor::setRegionReversed (RegionId id, bool reversed)
     // reversed copy of the file on a background thread. Until that's ready
     // the region is silent.
     clip->setIsReversed (reversed);
+
+    // Played backwards, a region can't use Flex (see whyClipCantFlex); its
+    // markers wait for it to play forwards again.
+    applyTrackFlex (*clip);
 }
 
 void RegionEditor::setRegionTranspose (RegionId id, int semitones)
@@ -635,16 +660,14 @@ void RegionEditor::setRegionTranspose (RegionId id, int semitones)
     }
     else
     {
-        // Pitch shifting needs a time stretcher (as for loops: see importAudioFiles).
-        if (clip->getTimeStretchMode() == te::TimeStretcher::disabled)
-            clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
-
+        // Pitch shifting needs a time stretcher (see TimeStretch.h).
+        ensureStretcher (*clip);
         clip->setPitchChange ((float) semitones);
     }
 }
 
 bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int numColumns,
-                                std::vector<WaveformRange>& columns)
+                                std::vector<WaveformRange>& columns, const std::vector<FlexMarker>* flexPreview)
 {
     columns.clear();
     auto* edit = owner.getEdit();
@@ -655,7 +678,8 @@ bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int
         return false;
 
     // A reversed region's waveform comes from the original file, turned round
-    // below (Tracktion's reversed copy may not be made yet).
+    // below (Tracktion's reversed copy may not be made yet). So does a
+    // flexed one's, warped below (likewise its stretched copy).
     auto& engine = owner.getTeEngine();
     const auto file = clip->getOriginalFile();
     const auto overview = waveforms.getOverview (file, engine.getAudioFileFormatManager().readFormatManager);
@@ -672,6 +696,22 @@ bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int
     const double offsetSeconds = pos.getOffset().inSeconds();
     const double speed = clip->getSpeedRatio();
 
+    // Flex: where each moment of the content comes from in the recording.
+    // The preview's markers are on the timeline, in beats.
+    std::vector<WarpPoint> warp;
+
+    if (flexPreview != nullptr)
+    {
+        const auto contentStart = contentStartOf (*clip);
+
+        for (auto& m : *flexPreview)
+            warp.push_back ({ m.sourceSeconds, (beatToTime (*edit, m.beat) - contentStart).inSeconds() });
+    }
+    else if (usesFlex (*clip))
+    {
+        warp = getWarpPoints (*clip);
+    }
+
     // Library loops (auto-tempo) are stretched to the session's tempo, so
     // they're measured in beats of their own recording.
     const bool beatBased = clip->getAutoTempo();
@@ -682,27 +722,28 @@ bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int
     // x wrapped into 0..length: the same place in every repeat of a loop.
     auto wrap = [] (double x, double length) { return x - std::floor (x / length) * length; };
 
-    // Where a beat on the timeline falls in the file, in seconds. Mirrors
-    // what Tracktion's AudioClipBase::clipTimeToSourceFileTime does, but
-    // carries on past the region's edges (in both directions).
-    auto secondsAt = [&] (double beat)
+    // Where a beat on the timeline falls in the region's content, in
+    // seconds. Mirrors what Tracktion's AudioClipBase::clipTimeToSourceFileTime
+    // does, but carries on past the region's edges (in both directions).
+    auto contentAt = [&] (double beat)
     {
-        double seconds = 0.0;
-
         if (beatBased && fileBeatsPerSecond > 0.0)
         {
             const double fileBeat = canLoop ? clip->getLoopStartBeats().inBeats() + wrap (beat - startBeat + loopOffsetBeats (*clip), loopLength)
                                             : beat - clip->getContentStartBeat().inBeats();
-            seconds = fileBeat / fileBeatsPerSecond;
-        }
-        else
-        {
-            const double t = (beatToTime (*edit, beat) - pos.getStart()).inSeconds();
-            seconds = (canLoop ? clip->getLoopStart().inSeconds() + wrap (t + offsetSeconds, loopLength)
-                               : t + offsetSeconds) * speed;
+            return fileBeat / fileBeatsPerSecond;
         }
 
-        // The reversed copy's first second is the original's last.
+        const double t = (beatToTime (*edit, beat) - pos.getStart()).inSeconds();
+        return (canLoop ? clip->getLoopStart().inSeconds() + wrap (t + offsetSeconds, loopLength)
+                        : t + offsetSeconds) * speed;
+    };
+
+    // ...and where that is in the file: through the flex markers, and the
+    // reversed copy's first second is the original's last.
+    auto fileAt = [&] (double contentSeconds)
+    {
+        const double seconds = warp.empty() ? contentSeconds : flexmap::toSource (warp, contentSeconds);
         return reversed ? fileLength - seconds : seconds;
     };
 
@@ -711,16 +752,17 @@ bool RegionEditor::getWaveform (RegionId id, double fromBeat, double toBeat, int
 
     for (int i = 0; i < numColumns; ++i)
     {
-        // How much of the file one column covers, around the file position
+        // How much of the content one column covers, around the content
         // under its middle (simpler than its two edges, which can be a
         // loop apart).
         const double from = fromBeat + i * beatsPerColumn;
         const double secondsWide = beatBased && fileBeatsPerSecond > 0.0
                                      ? beatsPerColumn / fileBeatsPerSecond
                                      : (beatToTime (*edit, from + beatsPerColumn) - beatToTime (*edit, from)).inSeconds() * speed;
-        const double middle = secondsAt (from + beatsPerColumn * 0.5);
+        const double middle = contentAt (from + beatsPerColumn * 0.5);
+        const double a = fileAt (middle - secondsWide * 0.5), b = fileAt (middle + secondsWide * 0.5);
 
-        auto range = overview->getRange (middle - secondsWide * 0.5, middle + secondsWide * 0.5);
+        auto range = overview->getRange (juce::jmin (a, b), juce::jmax (a, b));
         columns.push_back ({ juce::jlimit (-1.0f, 1.0f, range.min * gain), juce::jlimit (-1.0f, 1.0f, range.max * gain) });
     }
 
@@ -803,7 +845,9 @@ std::vector<RegionId> RegionEditor::pasteRegions (TrackId targetId, double beat)
 
         if (auto* clip = te::insertClipCopy (*track, te::ClipCopy::fromClipboardState (state, false)))
         {
-            clip->setStart (beatToTime (*edit, juce::jmax (0.0, beat) + copied.beatOffset), false, true);
+            // A copy of a flexed region brings its markers; it's flexed if
+            // its new track has Flex on.
+            moveKeepingFlex (*clip, [&] { clip->setStart (beatToTime (*edit, juce::jmax (0.0, beat) + copied.beatOffset), false, true); });
             pasted.push_back (clip);
         }
     }
@@ -871,21 +915,22 @@ std::vector<RegionId> RegionEditor::importAudioFiles (TrackId trackId, const juc
         // ClipPosition = { time range on the timeline, offset into the file }.
         if (auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file, { { start, start + length }, {} }, false))
         {
+            // Following the tempo or the key needs a time stretcher (pitch
+            // shifting too, even at the loop's own tempo): see TimeStretch.h.
+            if (loopBpm > 0.0 || hasKey)
+                useStretcher (*clip, loop->unpitched);
+
             if (loopBpm > 0.0)
             {
                 clip->getLoopInfo().setBpm (loopBpm, clip->getAudioFile().getInfo());
-                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 clip->setAutoTempo (true);
             }
 
             if (hasKey)
-            {
-                // Pitch shifting needs a time stretcher, even at the loop's own tempo.
-                clip->setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
                 setLoopKey (*clip, loop->keyRoot, loop->keyMinor);
-            }
 
             ensureEdgeFades (*clip);
+            applyTrackFlex (*clip);   // a recording on a Flex track is flexed
             added.push_back (clip.get());
             start = start + length;
         }

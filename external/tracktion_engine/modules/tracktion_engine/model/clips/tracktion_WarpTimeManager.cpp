@@ -18,7 +18,18 @@ inline HashCode hashDouble (double d) noexcept
     return v.asInt;
 }
 
-HashCode WarpMarker::getHash() const noexcept    { return hashDouble (sourceTime.inSeconds()) ^ hashDouble (warpTime.inSeconds()); }
+// Combines hashes in order (unsigned maths: signed overflow is undefined).
+// XOR alone made a marker whose source and warp times are equal hash to 0,
+// and let the last marker's warp time cancel the warp end time, so
+// different marker lists shared a proxy file.
+inline HashCode combineHash (HashCode seed, HashCode value) noexcept
+{
+    auto s = (uint64_t) seed;
+    s ^= (uint64_t) value + 0x9e3779b97f4a7c15ull + (s << 6) + (s >> 2);
+    return (HashCode) s;
+}
+
+HashCode WarpMarker::getHash() const noexcept    { return combineHash (hashDouble (sourceTime.inSeconds()), hashDouble (warpTime.inSeconds())); }
 
 template <typename FloatingPointType>
 struct Differentiator
@@ -530,9 +541,9 @@ HashCode WarpTimeManager::getHash() const
     HashCode h = 0;
 
     for (auto wm : markers->objects)
-        h ^= wm->getHash();
+        h = combineHash (h, wm->getHash());
 
-    h ^= hashDouble (getWarpEndMarkerTime().inSeconds());
+    h = combineHash (h, hashDouble (getWarpEndMarkerTime().inSeconds()));
 
     return h;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/FlexMap.h"
 #include "engine/WaveformCache.h"
 #include <juce_data_structures/juce_data_structures.h>
 #include <functional>
@@ -102,10 +103,15 @@ public:
         the region it carries on: the rest of the recording, or the loop
         repeating (silence past the recording's ends).
 
+        A flexed region's waveform is drawn as it's warped. flexPreview, if
+        given, is the region's markers during a drag (FlexEditor::previewMove),
+        drawn instead of the ones in the session.
+
         The editor zooms right in, so this reads the whole recording in
         detail, on a background thread. Until that's done it returns false
         (and leaves `columns` empty): ask again later. */
-    bool getWaveform (RegionId, double fromBeat, double toBeat, int numColumns, std::vector<WaveformRange>& columns);
+    bool getWaveform (RegionId, double fromBeat, double toBeat, int numColumns, std::vector<WaveformRange>& columns,
+                      const std::vector<FlexMarker>* flexPreview = nullptr);
 
     /** Region clipboard. Pasting puts the earliest copied region at `beat` on
         `track`, keeping the regions' spacing and track layout. A region whose
