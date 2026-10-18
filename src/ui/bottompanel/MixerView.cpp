@@ -167,7 +167,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (selected ? colour::selectedRow : colour::cardBg);
+        g.setColour (selected ? colour::selectedBg : colour::cardBg);
         g.fillRoundedRectangle (r, size::radiusCard);
 
         // Coloured top edge, as in the design (inset 3px shadow).
@@ -177,6 +177,16 @@ public:
         g.reduceClipRegion (shape);
         g.setColour (colour);
         g.fillRect (r.removeFromTop (3.0f));
+
+        // The selected strip's outline, drawn over the top edge. It's inset
+        // by half its width: a stroke is centred on the edge, and the half
+        // outside would be clipped away.
+        if (selected)
+        {
+            constexpr float width = 1.5f;
+            g.setColour (colour::selectedOutline);
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (width * 0.5f), size::radiusCard - width * 0.5f, width);
+        }
 
         auto area = getLocalBounds().reduced (10);
         g.setColour (colour::text);

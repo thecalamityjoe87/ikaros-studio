@@ -10,6 +10,20 @@ namespace ikaros
 using namespace tokens;
 using namespace arrangement;
 
+namespace
+{
+    /** The outline for one of this lane's regions: white on the selected
+        track, fainter on the regions left out while some are picked. */
+    RegionComponent::Outline outlineFor (const Selection& selection, bool trackSelected, RegionId region)
+    {
+        if (! trackSelected)
+            return RegionComponent::Outline::normal;
+
+        return selection.hasRegions() && ! selection.isSelected (region) ? RegionComponent::Outline::selectedTrackFaint
+                                                                         : RegionComponent::Outline::selectedTrack;
+    }
+}
+
 ArrangementView::Lane::Lane (ArrangementView& o, TrackId id) : owner (o), trackId (id)
 {
     setTitle ("Track lane");
@@ -48,14 +62,14 @@ void ArrangementView::Lane::updateTrack (const TrackInfo& t, bool isSelected)
 
     // The regions keep what they show; only the colour and selection may differ.
     for (auto& [id, comp] : regions)
-        comp->update (comp->getInfo(), colour, owner.selection.isSelected (id));
+        comp->update (comp->getInfo(), colour, owner.selection.isSelected (id), outlineFor (owner.selection, selected, id));
 }
 
 void ArrangementView::Lane::updateRegion (const RegionInfo& info)
 {
     if (auto* comp = findRegion (info.id))
     {
-        comp->update (info, colour, owner.selection.isSelected (info.id));
+        comp->update (info, colour, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         resized();   // it may have moved or changed length
     }
 }
@@ -112,7 +126,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             };
         }
 
-        comp->update (info, colour, owner.selection.isSelected (info.id));
+        comp->update (info, colour, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         next[info.id] = std::move (comp);
     }
 
@@ -161,7 +175,7 @@ void ArrangementView::Lane::paint (juce::Graphics& g)
     auto r = getLocalBounds();
 
     if (selected)
-        g.fillAll (colour::accent.withAlpha (0.05f));
+        g.fillAll (colour::tintLight.withAlpha (colour::selectedLaneTint));
 
     // Beat lines (faint), when zoomed in enough for them to be useful...
     auto& geo = owner.geometry;

@@ -844,30 +844,19 @@ void BottomPanel::paint (juce::Graphics& g)
         g.drawText (note, r, juce::Justification::centredLeft, true);
     };
 
+    // The selected track: a dot in its colour, then its name. (The same
+    // track the headers, lane and regions highlight; see Selection.)
+    auto drawTrack = [&] (const TrackInfo& t, const juce::String& note)
+    {
+        g.setColour (t.colour);
+        g.fillEllipse (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat());
+        r.removeFromLeft (8);
+        drawTitle (t.name, note);
+    };
+
     if (! collapsed && mixerShown)
     {
         // The full mixer has the whole panel: no name to show.
-    }
-    else if (! collapsed && showsRegionInspector())
-    {
-        // Region mode: the region in the Editor, in its track's colour.
-        if (editorRegion.has_value())
-        {
-            if (track.has_value())
-            {
-                g.setColour (track->colour);
-                g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), size::radiusTiny);
-                r.removeFromLeft (8);
-            }
-
-            drawTitle (editorRegion->name, editorRegion->isMidi ? "MIDI region" : "Audio region");
-        }
-        else
-        {
-            g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (textSize::lg));
-            g.drawText ("No region selected", r, juce::Justification::centredLeft);
-        }
     }
     else if (showsMaster())
     {
@@ -875,19 +864,11 @@ void BottomPanel::paint (juce::Graphics& g)
     }
     else if (track.has_value())
     {
-        g.setColour (track->colour);
-        g.fillRoundedRectangle (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat(), size::radiusTiny);
-        r.removeFromLeft (8);
-
-        g.setColour (colour::text);
-        g.setFont (fonts::uiBold (textSize::lg));
-        auto nameWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), track->name));
-        g.drawText (track->name, r.removeFromLeft (nameWidth + 2), juce::Justification::centredLeft);
-        r.removeFromLeft (8);
-
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (textSize::lg));
-        g.drawText (track->soundName, r, juce::Justification::centredLeft, true);
+        // In Region mode, the note names the region in the Editor.
+        if (! collapsed && showsRegionInspector())
+            drawTrack (*track, editorRegion.has_value() ? editorRegion->name : juce::String ("No region selected"));
+        else
+            drawTrack (*track, track->soundName);
     }
     else
     {

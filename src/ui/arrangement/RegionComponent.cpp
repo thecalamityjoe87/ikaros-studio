@@ -38,17 +38,18 @@ RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
     addChildComponent (nameEditor);
 }
 
-void RegionComponent::update (const RegionInfo& r, juce::Colour c, bool isSelected)
+void RegionComponent::update (const RegionInfo& r, juce::Colour c, bool isSelected, Outline newOutline)
 {
     // Drawing thousands of notes is far slower than comparing them, so skip
     // the repaint when nothing this region shows has changed (e.g. another
     // track's knob was turned).
-    if (r == info && c == colour && isSelected == selected)
+    if (r == info && c == colour && isSelected == selected && newOutline == outline)
         return;
 
     info = r;
     colour = c;
     selected = isSelected;
+    outline = newOutline;
     setTitle (r.name + " region");
     repaint();
 }
@@ -293,10 +294,25 @@ void RegionComponent::paint (juce::Graphics& g)
         }
     }
 
-    g.setColour (selected ? colour : colour.withAlpha (0.4f));
-    g.strokePath (shape, juce::PathStrokeType (selected ? 2.0f : 1.0f));
+    if (outline == Outline::normal)
+    {
+        g.setColour (colour.withAlpha (0.4f));
+        g.strokePath (shape, juce::PathStrokeType (1.0f));
+    }
+    else
+    {
+        // A stroke is centred on the path, and the component clips whatever
+        // falls outside its bounds, so the path is inset by half the width
+        // to keep the whole 1.5px inside.
+        constexpr float width = 1.5f;
+        juce::Path inset;
+        inset.addRoundedRectangle (getLocalBounds().toFloat().reduced (width * 0.5f), corner - width * 0.5f);
 
-    if (hasKeyboardFocus (false))
+        g.setColour (colour::selectedOutline.withAlpha (outline == Outline::selectedTrack ? 1.0f : 0.35f));
+        g.strokePath (inset, juce::PathStrokeType (width));
+    }
+
+    if (showFocusRing && hasKeyboardFocus (false))
         IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat(), corner);
 }
 

@@ -378,12 +378,20 @@ void TrackHeader::finishRenaming (bool keepNewName)
 void TrackHeader::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds();
-    g.fillAll (selected ? colour::selectedRow : colour::sidebarBg);
+    g.fillAll (selected ? colour::selectedBg : colour::sidebarBg);
 
     g.setColour (colour::divider);
     g.fillRect (r.removeFromBottom (1));
 
-    // 3px colour edge on the left.
+    // The selected track also gets a subtle 1px outline just inside its
+    // edges (drawRect draws inside the rectangle it's given).
+    if (selected)
+    {
+        g.setColour (colour::selectedInset);
+        g.drawRect (r, 1);
+    }
+
+    // 3px colour edge on the left (over the outline's left side).
     g.setColour (info.colour);
     g.fillRect (r.removeFromLeft (3));
 
@@ -395,7 +403,7 @@ void TrackHeader::paint (juce::Graphics& g)
                  iconArea.toFloat(), info.colour, 22.0f);
 
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
-    g.setFont (fonts::uiBold (textSize::lg));
+    g.setFont (selected ? fonts::uiBold (textSize::lg) : fonts::uiSemiBold (textSize::lg));
     g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
     g.setColour (colour::textSecondary);

@@ -31,7 +31,12 @@ public:
 
     RegionComponent (const RegionInfo&, juce::Colour trackColour);
 
-    void update (const RegionInfo&, juce::Colour trackColour, bool isSelected);
+    /** How the outline is drawn. The selected track's regions get a white
+        outline; while some of its regions are picked, the others get a faint
+        one, so it's still clear which regions the edits will act on. */
+    enum class Outline { normal, selectedTrack, selectedTrackFaint };
+
+    void update (const RegionInfo&, juce::Colour trackColour, bool isSelected, Outline);
     const RegionInfo& getInfo() const noexcept   { return info; }
 
     Zone getZoneAt (juce::Point<int>) const;
@@ -77,13 +82,22 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     bool keyPressed (const juce::KeyPress&) override;
-    void focusGained (FocusChangeType) override     { repaint(); }
+    void focusGained (FocusChangeType cause) override
+    {
+        // Only show the focus ring when focus came from the keyboard (Tab):
+        // a click already shows the region as selected.
+        showFocusRing = cause != focusChangedByMouseClick;
+        repaint();
+    }
+
     void focusLost (FocusChangeType) override       { repaint(); }
 
 private:
     RegionInfo info;
     juce::Colour colour;
     bool selected = false;
+    Outline outline = Outline::normal;
+    bool showFocusRing = false;
     std::optional<juce::Range<double>> trimPreview;
     bool loopPreview = false;
     bool hoveringLoopCorner = false;

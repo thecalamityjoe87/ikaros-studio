@@ -74,6 +74,13 @@ namespace colour
     inline const juce::Colour raised         { 0xff22262e };   // raised buttons
     inline const juce::Colour controlFill    { 0xff2a2f38 };   // slider tracks, inactive pills
     inline const juce::Colour selectedRow    { 0xff242831 };
+
+    // The selected track, wherever it shows (header, lane, regions, mixer
+    // strip). Deliberately neutral: the accent only ever means "on".
+    inline const juce::Colour selectedBg      = palette::selectedBg;
+    inline const juce::Colour selectedOutline = palette::selectedOutline;
+    inline const juce::Colour selectedInset   = palette::selectedInset;
+    inline constexpr float selectedLaneTint   = 0.045f;   // alpha of tintLight over the selected lane
     inline const juce::Colour tileBg         { 0xff1c1f25 };   // library category tiles
     inline const juce::Colour trackHeaderBg  { 0xff1f232a };   // an unselected track header
     inline const juce::Colour border         { 0xff2f343e };
