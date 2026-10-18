@@ -43,6 +43,9 @@ namespace palette
     inline const juce::Colour selectedInset   { 0xff4a5260 };   // 1px inset outline on the selected track header
     inline const juce::Colour neutralActive   { 0xff323844 };   // "pressed" fill for non-accent toggles, tabs, segments
     inline const juce::Colour field           { 0xff1c2027 };   // clickable fields in the transport readout
+    inline const juce::Colour outline         { 0xff424958 };   // dashed "add" outlines, the unarmed record-arm ring
+    inline const juce::Colour textSoft        { 0xffc4c9d1 };   // text on a dashed "add" button
+    inline const juce::Colour knobCap         { 0xff14171c };   // the centre of a small knob
 }
 
 // Instrument family colours: tracks, regions, library categories and the
@@ -90,6 +93,19 @@ namespace colour
     inline const juce::Colour selectedOutline = palette::selectedOutline;
     inline const juce::Colour selectedInset   = palette::selectedInset;
     inline constexpr float selectedLaneTint   = 0.045f;   // alpha of tintLight over the selected lane
+    // The track headers column (and the TRACKS / SECTIONS bars above it).
+    inline const juce::Colour trackColumnBg  = palette::panel;
+    inline const juce::Colour trackRowLine   = palette::lineSoft;    // between track headers
+    inline constexpr float trackTileAlpha    = 0.16f;                // a track's icon tile: its colour at this alpha
+
+    // Small square buttons in panels (a track's Mute, Solo, Monitor, Automation).
+    inline const juce::Colour buttonFill     = palette::button;
+    inline const juce::Colour buttonBorder   = palette::buttonBorder;
+    inline const juce::Colour buttonIcon     = palette::textMuted;
+    inline const juce::Colour outline        = palette::outline;     // dashed "add" outlines, the unarmed record-arm ring
+    inline const juce::Colour textSoft       = palette::textSoft;
+    inline const juce::Colour knobCap        = palette::knobCap;
+    inline const juce::Colour thumb          { 0xffffffff };         // round slider thumbs (track volume)
     inline const juce::Colour tileBg         { 0xff1c1f25 };   // library category tiles
     inline const juce::Colour trackHeaderBg  { 0xff1f232a };   // an unselected track header
     inline const juce::Colour border         { 0xff2f343e };
@@ -236,7 +252,12 @@ namespace size
     inline constexpr int sidebarWidth      = 264;   // 250–280 in the spec
     inline constexpr int rulerHeight       = 30;
     inline constexpr int trackHeaderWidth  = 320;   // also the width of the track inspector below, so they line up
-    inline constexpr int trackRowHeight    = 100;   // grows while the track's automation picker shows (see ArrangementLayout.h)
+    // Track rows: View > Compact Tracks (the default) or Tall Tracks. Rows
+    // grow when zoomed in, and while the track's automation picker shows
+    // (see ArrangementLayout.h).
+    inline constexpr int trackRowCompact   = 84;
+    inline constexpr int trackRowTall      = 100;
+    inline constexpr int addTrackHeight    = 40;    // the dashed "Add track" button under the track headers
     inline constexpr int bottomPanelHeight = 290;
     inline constexpr int minHitTarget      = 44;
     inline constexpr int panelPadding      = 14;    // standard inset from a panel's edges
@@ -246,6 +267,7 @@ namespace size
     inline constexpr float radiusTiny      = 3.0f;
     inline constexpr float radiusXs        = 4.0f;
     inline constexpr float radiusSmall     = 5.0f;
+    inline constexpr float radiusMedium    = 6.0f;   // track icon tiles, the "Add track" button
     inline constexpr float radius          = 8.0f;
     inline constexpr float radiusLarge     = 10.0f;
     inline constexpr float radiusCard      = 12.0f;

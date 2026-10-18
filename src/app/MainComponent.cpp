@@ -46,6 +46,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     arrangement.onTempoLaneToggled = [this] { commands.commandStatusChanged(); };
+    arrangement.onAddTrack = [this] { showNewTrackDialog(); };   // the "Add track" row under the tracks
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
@@ -380,7 +381,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
-                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane, CommandIDs::toggleDetails,
+                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
+                                   CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleDetails,
                                    CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
@@ -641,6 +643,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
+        case CommandIDs::compactTracks:
+            info.setInfo ("Compact Tracks", "Show more tracks at once", "View", 0);
+            info.setTicked (! arrangement.areTracksTall());
+            break;
+        case CommandIDs::tallTracks:
+            info.setInfo ("Tall Tracks", "Give each track more room", "View", 0);
+            info.setTicked (arrangement.areTracksTall());
+            break;
         case CommandIDs::toggleTempoLane:
             info.setInfo ("Show Tempo Lane", "Show the tempo and time-signature changes under the ruler", "View", 0);
             info.setTicked (arrangement.isTempoLaneShown());
@@ -829,6 +839,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
         case CommandIDs::toggleTempoLane: arrangement.setTempoLaneShown (! arrangement.isTempoLaneShown()); break;
+        case CommandIDs::compactTracks:   arrangement.setTracksTall (false); break;
+        case CommandIDs::tallTracks:      arrangement.setTracksTall (true); break;
         case CommandIDs::toggleAutomation:
         {
             auto& automation = engine.getTracks().automation();

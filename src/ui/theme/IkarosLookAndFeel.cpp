@@ -59,6 +59,11 @@ IkarosLookAndFeel::IkarosLookAndFeel()
     setColour (juce::TooltipWindow::textColourId, colour::text);
     setColour (juce::TooltipWindow::outlineColourId, colour::border);
 
+    // The value bubble a slider shows while it's dragged (see
+    // Slider::setPopupDisplayEnabled). Its text uses the tooltip's colour.
+    setColour (juce::BubbleComponent::backgroundColourId, colour::raised);
+    setColour (juce::BubbleComponent::outlineColourId, colour::border);
+
     setColour (juce::ComboBox::backgroundColourId, colour::raised);
     setColour (juce::ComboBox::outlineColourId, colour::border);
     setColour (juce::ComboBox::textColourId, colour::text);
@@ -179,7 +184,11 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
     else
     {
         // Track header volume: thin track, filled in trackColourId, round thumb.
-        auto track = bounds.withSizeKeepingCentre (bounds.getWidth(), 4.0f);
+        // JUCE hands us the thumb's travel, which is inset by the thumb's
+        // radius at each end; the track reaches past it to the slider's
+        // edges, as far as the thumb itself goes.
+        auto track = bounds.expanded ((float) getSliderThumbRadius (s), 0.0f);
+        track = track.withSizeKeepingCentre (track.getWidth(), 4.0f);
         g.setColour (colour::controlFill);
         g.fillRoundedRectangle (track, size::radiusHair);
 
@@ -198,6 +207,15 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
 void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
                                           float pos, float startAngle, float endAngle, juce::Slider& s)
 {
+    // A small knob (e.g. a track header's pan knob) has its own proportions,
+    // so its ring and needle stay visible at that size. Set with
+    // slider.getProperties().set ("compact", true).
+    if ((bool) s.getProperties()["compact"])
+    {
+        drawCompactKnob (g, juce::Rectangle<int> (x, y, w, h).toFloat(), pos, startAngle, endAngle, s);
+        return;
+    }
+
     // Arc-style knob: grey track arc, coloured value arc, round cap and a needle.
     auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (4.0f);
     auto size = juce::jmin (bounds.getWidth(), bounds.getHeight());
@@ -255,6 +273,68 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
 
     if (s.hasKeyboardFocus (false))
         drawFocusRing (g, juce::Rectangle<float> (size, size).withCentre (centre).expanded (3.0f), size * 0.5f);
+}
+
+void IkarosLookAndFeel::drawCompactKnob (juce::Graphics& g, juce::Rectangle<float> area, float pos,
+                                         float startAngle, float endAngle, juce::Slider& s)
+{
+    // The Smart Controls knob, scaled down: a grey ring with the value arc
+    // along it, a dark cap inside and a white needle.
+    const auto size = juce::jmin (area.getWidth(), area.getHeight());
+    const auto centre = area.getCentre();
+    const auto arcWidth = juce::jmax (2.0f, size * 0.11f);
+    const auto radius = (size - arcWidth) * 0.5f - 0.5f;   // the ring's centre line, inside the bounds
+    const auto valueAngle = startAngle + pos * (endAngle - startAngle);
+    const juce::PathStrokeType stroke (arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+    // The ring is a shade lighter than the big knobs' so it still shows on
+    // a selected track's lighter background.
+    juce::Path ring;
+    ring.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
+    g.setColour (colour::borderStrong);
+    g.strokePath (ring, stroke);
+
+    // Bipolar (pan): the arc grows out from 12 o'clock; at the centre there's none.
+    const bool bipolar = s.getProperties()["bipolar"];
+    const auto arcStart = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
+
+    if (std::abs (valueAngle - arcStart) > 0.02f)
+    {
+        juce::Path value;
+        value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
+                             juce::jmin (arcStart, valueAngle), juce::jmax (arcStart, valueAngle), true);
+        g.setColour (s.findColour (knobArcColourId));
+        g.strokePath (value, stroke);
+    }
+
+    // The cap sits just inside the ring, with a small gap.
+    const auto capRadius = radius - arcWidth * 0.5f - juce::jmax (1.5f, size * 0.07f);
+    const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
+    g.setColour (colour::knobCap);
+    g.fillEllipse (cap);
+    g.setColour (colour::buttonBorder);
+    g.drawEllipse (cap, 1.0f);
+
+    g.setColour ((bool) s.getProperties()["automated"] ? colour::automated : colour::thumb);
+    g.drawLine ({ centre.getPointOnCircumference (capRadius * 0.2f, valueAngle),
+                  centre.getPointOnCircumference (capRadius * 0.75f, valueAngle) }, juce::jmax (1.6f, size * 0.07f));
+
+    if (s.hasKeyboardFocus (false))
+        drawFocusRing (g, juce::Rectangle<float> (size, size).withCentre (centre).expanded (2.0f), size * 0.5f);
+}
+
+int IkarosLookAndFeel::getSliderThumbRadius (juce::Slider& s)
+{
+    // How far the thumb's centre stays from a slider's ends. Our horizontal
+    // thumbs are 12px round, so 6 lets them reach the slider's edges, and
+    // the slider's bounds are where it visibly starts and ends (JUCE's
+    // default is up to 12, which leaves a gap). Vertical faders keep it.
+    return s.isHorizontal() ? 6 : juce::LookAndFeel_V4::getSliderThumbRadius (s);
+}
+
+juce::Font IkarosLookAndFeel::getSliderPopupFont (juce::Slider&)
+{
+    return fonts::mono (textSize::xs);
 }
 
 //==============================================================================

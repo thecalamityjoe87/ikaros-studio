@@ -124,6 +124,9 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::toggleTempoLane);
         m.addSeparator();
+        add (CommandIDs::compactTracks);
+        add (CommandIDs::tallTracks);
+        m.addSeparator();
         add (CommandIDs::showSoundTab);
         add (CommandIDs::showEditorTab);
         add (CommandIDs::showEqTab);

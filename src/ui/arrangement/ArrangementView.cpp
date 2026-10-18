@@ -66,11 +66,14 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     timeScrollBar.addListener (this);
     addAndMakeVisible (timeScrollBar);
 
-    // Snap and zoom live above the track headers, next to "TRACKS".
+    // Snap and zoom live above the track headers, next to "TRACKS", styled
+    // like the headers' small buttons.
     auto snapColours = IconButton::raisedColours();
-    snapColours.border = colour::border;
+    snapColours.background = colour::buttonFill;
+    snapColours.border = colour::buttonBorder;
+    snapColours.borderOn = colour::accent;
     snapButton.setColours (snapColours);
-    snapButton.setFont (fonts::ui (textSize::sm));
+    snapButton.setFont (fonts::ui (textSize::xs));
     snapButton.setCornerRadius (size::radiusSmall);
     snapButton.setTooltip ("Snap to grid: where moved regions and edges land");
     snapButton.onClick = [this] { showSnapMenu(); };
@@ -78,7 +81,7 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
 
     // Show Automation: every track's automation at once (amber while it's on).
     auto automationColours = snapColours;   // like the snap button, amber when on
-    automationColours.foreground = colour::textSecondary;
+    automationColours.foreground = colour::buttonIcon;
     automationColours.backgroundOn = colour::accent;
     automationColours.foregroundOn = colour::textOnAccent;
     automationButton.setColours (automationColours);
@@ -110,6 +113,8 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     addAndMakeVisible (*playhead);   // added last so it's drawn on top
 
     applySnapPreference();
+    tracksTall = engine.getPreferences().get (settings::trackHeight) == settings::TrackHeight::tall;
+    geometry.rowHeight = getBaseRowHeight();
     setTempoLaneShown (engine.getPreferences().get (settings::tempoLaneShown));
     refresh();
 }
@@ -223,8 +228,8 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     // header's controls need it).
     const int oldRowHeight = geometry.rowHeight;
     const double growth = std::sqrt (geometry.pixelsPerBeat / startPixelsPerBeat);
-    geometry.rowHeight = juce::jlimit (size::trackRowHeight, maxRowHeight,
-                                       juce::roundToInt (size::trackRowHeight * growth));
+    geometry.rowHeight = juce::jlimit (getBaseRowHeight(), maxRowHeight,
+                                       juce::roundToInt (getBaseRowHeight() * growth));
 
     if (geometry.rowHeight != oldRowHeight)
     {
@@ -235,6 +240,22 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     }
 
     timelineChanged();
+}
+
+int ArrangementView::getBaseRowHeight() const noexcept
+{
+    return tracksTall ? size::trackRowTall : size::trackRowCompact;
+}
+
+void ArrangementView::setTracksTall (bool shouldBeTall)
+{
+    tracksTall = shouldBeTall;
+    engine.getPreferences().set (settings::trackHeight, shouldBeTall ? settings::TrackHeight::tall
+                                                                     : settings::TrackHeight::compact);
+
+    // setZoom works out the row height (from this and the zoom) and lays
+    // the rows out again. Anchored at the left edge: nothing scrolls.
+    setZoom (geometry.pixelsPerBeat, 0.0f);
 }
 
 float ArrangementView::getZoomAnchorX (float fallbackX) const
@@ -465,7 +486,7 @@ void ArrangementView::paint (juce::Graphics& g)
 
     // The corner under the track headers, beside the scroll bar.
     auto corner = getLocalBounds().removeFromBottom (scrollBarHeight).withWidth (headerWidth);
-    g.setColour (colour::sidebarBg);
+    g.setColour (colour::trackColumnBg);
     g.fillRect (corner.withTrimmedRight (1));
     g.setColour (colour::divider);
     g.fillRect (corner.removeFromRight (1));
@@ -487,12 +508,23 @@ void ArrangementView::resized()
 
     sectionStrip->setBounds (r.removeFromTop (sectionStripHeight));
 
-    // Controls in the ruler's header part: "TRACKS" | snap | automation | tempo lane | zoom.
-    snapButton.setBounds (66, top.getY() + 4, 78, top.getHeight() - 9);
-    automationButton.setBounds (150, top.getY() + 4, 28, top.getHeight() - 9);
-    tempoLaneButton.setBounds (182, top.getY() + 4, 28, top.getHeight() - 9);
-    zoomIconArea = { 216, top.getY() + 8, 14, 14 };
-    zoomSlider.setBounds (232, top.getY() + 4, headerWidth - 232 - 10, top.getHeight() - 9);
+    // The tracks bar, in the ruler's header part: "TRACKS" | snap |
+    // automation | tempo lane | zoom. It has the column's padding, so the
+    // zoom slider ends where the track headers' controls do.
+    {
+        auto bar = juce::Rectangle<int> (columnPadding, top.getY(), columnRight - columnPadding, top.getHeight() - 1)
+                       .withSizeKeepingCentre (columnRight - columnPadding, 22);
+        bar.removeFromLeft (columnLabelWidth ("TRACKS") + 12);
+        snapButton.setBounds (bar.removeFromLeft (72));
+        bar.removeFromLeft (8);
+        automationButton.setBounds (bar.removeFromLeft (24));
+        bar.removeFromLeft (8);
+        tempoLaneButton.setBounds (bar.removeFromLeft (24));
+        bar.removeFromLeft (12);
+        zoomIconArea = bar.removeFromLeft (14).withSizeKeepingCentre (14, 14);
+        bar.removeFromLeft (6);
+        zoomSlider.setBounds (bar);
+    }
 
     timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
     viewport.setBounds (r);

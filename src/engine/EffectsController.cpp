@@ -741,8 +741,10 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
 
     if (nameIsAutomatic)
     {
-        t->setName (name);
-        t->state.setProperty (autoNameProp, name, um);
+        // A second track with the same sound gets "Solo Violin 2", and so on.
+        const auto trackName = uniqueTrackName (*edit, name, t);
+        t->setName (trackName);
+        t->state.setProperty (autoNameProp, trackName, um);
     }
 
     return true;

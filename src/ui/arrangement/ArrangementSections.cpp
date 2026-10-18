@@ -30,10 +30,11 @@ ArrangementView::SectionStrip::SectionStrip (ArrangementView& o) : owner (o)
     setWantsKeyboardFocus (true);   // for Delete on a clicked section
 
     auto colours = IconButton::raisedColours();
-    colours.border = colour::border;
+    colours.background = colour::buttonFill;
+    colours.border = colour::buttonBorder;
     addButton.setColours (colours);
-    addButton.setCornerRadius (size::radiusSmall);
-    addButton.setIconSize (13.0f);
+    addButton.setCornerRadius (size::radiusXs);
+    addButton.setIconSize (12.0f);
     addButton.setTooltip ("Add a section after the last one");
     addButton.onClick = [this] { addSectionAfterLast(); };
     addAndMakeVisible (addButton);
@@ -59,7 +60,8 @@ void ArrangementView::SectionStrip::sync()
 
 void ArrangementView::SectionStrip::resized()
 {
-    addButton.setBounds (headerWidth - 34, 3, 24, getHeight() - 7);
+    // Right-aligned with the track headers' controls below it.
+    addButton.setBounds (juce::Rectangle<int> (columnRight - 22, 0, 22, getHeight() - 1).withSizeKeepingCentre (22, 18));
 }
 
 //==============================================================================
@@ -133,11 +135,13 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
+    g.setColour (colour::trackColumnBg);
+    g.fillRect (label);
     g.setColour (colour::divider);
     g.fillRect (label.removeFromRight (1));
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (textSize::xs).withExtraKerningFactor (0.1f));
-    g.drawText ("SECTIONS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
+    g.setFont (columnLabelFont());
+    g.drawText ("SECTIONS", label.withTrimmedLeft (columnPadding), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
     juce::Graphics::ScopedSaveState save (g);

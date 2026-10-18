@@ -59,6 +59,7 @@ private:
     void updateAutomation (const TrackInfo&);
     std::vector<TrackId> order;
     DropZone dropZone;
+    AddTrackButton addTrackButton;   // under the last track header
 };
 
 } // namespace ikaros

@@ -49,7 +49,7 @@ void MeterSlider::paint (juce::Graphics& g)
     g.fillEllipse (thumb.expanded (1.5f));
     // In the "automated" colour while automation moves it (see setAutomatedLook).
     const bool automated = getProperties()["automated"];
-    g.setColour (! isEnabled() ? colour::textSecondary : automated ? colour::automated : colour::text);
+    g.setColour (! isEnabled() ? colour::textSecondary : automated ? colour::automated : colour::thumb);
     g.fillEllipse (thumb);
 
     if (hasKeyboardFocus (false))

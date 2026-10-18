@@ -24,6 +24,7 @@ public:
         juce::Colour border = juce::Colours::transparentBlack;
         std::optional<juce::Colour> hoverBackground;   // e.g. red for a window's close button
         std::optional<juce::Colour> hoverForeground;
+        std::optional<juce::Colour> borderOn;          // the border when on (unset: the same as off)
     };
 
     IconButton (const juce::String& accessibleName, std::optional<Icon> icon = std::nullopt,

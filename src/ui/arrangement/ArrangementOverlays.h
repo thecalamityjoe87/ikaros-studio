@@ -20,6 +20,19 @@ public:
 };
 
 //==============================================================================
+// The dashed "+ Add track" button under the last track header. It does what
+// the toolbar's New Track button used to: opens the New Track window.
+// (A juce::Button gives us clicks, keyboard focus, Space/Return and the
+// screen-reader role for free; only the drawing is ours.)
+class ArrangementView::AddTrackButton  : public juce::Button
+{
+public:
+    AddTrackButton();
+
+    void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
+};
+
+//==============================================================================
 // The playhead: amber line with a rounded head, drawn over the ruler and lanes.
 // The part over the ruler can be dragged; clicks anywhere else pass through
 // to the ruler and lanes underneath (see hitTest).

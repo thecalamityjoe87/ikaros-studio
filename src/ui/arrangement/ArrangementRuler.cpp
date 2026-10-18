@@ -39,11 +39,13 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
+    g.setColour (colour::trackColumnBg);
+    g.fillRect (label);
     g.setColour (colour::divider);
     g.fillRect (label.removeFromRight (1));
     g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (textSize::xs).withExtraKerningFactor (0.1f));
-    g.drawText ("TRACKS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
+    g.setFont (columnLabelFont());
+    g.drawText ("TRACKS", label.withTrimmedLeft (columnPadding), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
     juce::Graphics::ScopedSaveState save (g);

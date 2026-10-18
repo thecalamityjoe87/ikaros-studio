@@ -69,6 +69,8 @@ namespace settings
 
     // Appearance
     inline constexpr IntSetting  interfaceScale      { "interfaceScale", 100 };       // percent
+    namespace TrackHeight { enum { compact, tall }; }
+    inline constexpr IntSetting  trackHeight         { "trackHeight", TrackHeight::compact };   // View > Compact/Tall Tracks
 }
 
 //==============================================================================

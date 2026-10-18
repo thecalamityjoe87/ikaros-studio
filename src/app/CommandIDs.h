@@ -67,6 +67,8 @@ namespace CommandIDs
         showMixerTab,
         toggleAutomation,
         toggleTempoLane,
+        compactTracks,
+        tallTracks,
         toggleDetails,
 
         toggleFullScreen,

@@ -265,7 +265,15 @@ TrackId TrackController::duplicateTrack (TrackId id, bool withRegions)
             clip->removeFromParent();
     }
 
-    copy->setName (source->getName() + " copy");
+    // "Solo Violin" → "Solo Violin 2". If the app named the source (after
+    // its sound), the copy's name is the app's too, so picking a different
+    // sound for it renames it.
+    const auto newName = uniqueTrackName (*edit, source->getName(), copy);
+    copy->setName (newName);
+
+    if (source->state.getProperty (autoNameProp).toString() == source->getName())
+        copy->state.setProperty (autoNameProp, newName, &edit->getUndoManager());
+
     return copy->itemID.getRawID();
 }
 
@@ -407,6 +415,11 @@ float TrackController::getMasterVolumeDb() const
 float TrackController::getFaderPositionForDb (float db)
 {
     return te::decibelsToVolumeFaderPosition (db);
+}
+
+float TrackController::getDbForFaderPosition (float position)
+{
+    return te::volumeFaderPositionToDB (position);
 }
 
 void TrackController::setMasterVolume (float pos)

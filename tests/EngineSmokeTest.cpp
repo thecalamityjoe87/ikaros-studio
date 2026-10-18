@@ -3641,6 +3641,21 @@ int main (int argc, char* argv[])
                      && copiedRegions.front().id != sourceRegions.front().id, "duplicate track copies its regions");
             check (tracks.regions().getRegions (t2).size() == sourceRegions.size(), "and leaves the original's alone");
 
+            const auto sourceName = tracks.getTrack (t2)->name;
+            check (tracks.getTrack (settingsCopy)->name == sourceName + " 2" && tracks.getTrack (fullCopy)->name == sourceName + " 3",
+                   "duplicates are numbered (Soft Piano 2, Soft Piano 3)");
+
+            // A new track given a sound that another track is named after.
+            auto sameSound = tracks.addInstrumentTrack();
+            tracks.effects().setSound (sameSound, tracks.effects().getSoundId (t2), false);
+            pumpMessages();
+            check (tracks.getTrack (sameSound)->name == sourceName + " 4", "so is a new track with the same sound");
+            tracks.effects().setSound (sameSound, "synth:Warm Pad");
+            pumpMessages();
+            check (tracks.getTrack (sameSound)->name == "Warm Pad", "and it's renamed when its sound changes");
+            tracks.deleteTrack (sameSound);
+            pumpMessages();
+
             tracks.renameTrack (fullCopy, "  Lead  ");
             pumpMessages();
             check (tracks.getTrack (fullCopy)->name == "Lead", "tracks can be renamed");

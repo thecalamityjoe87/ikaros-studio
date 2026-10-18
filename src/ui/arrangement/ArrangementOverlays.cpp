@@ -34,6 +34,50 @@ void ArrangementView::DropZone::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+// AddTrackButton
+ArrangementView::AddTrackButton::AddTrackButton() : juce::Button ("Add track")
+{
+    setTitle ("Add track");
+    setTooltip ("Add a new track");
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);   // half a pixel in, so the 1px outline is crisp
+
+    // A faint fill on hover, a little more while pressed.
+    if (isMouseOver || isButtonDown)
+    {
+        g.setColour (colour::tintLight.withAlpha (isButtonDown ? 0.07f : 0.04f));
+        g.fillRoundedRectangle (r, size::radiusMedium);
+    }
+
+    juce::Path outline, dashed;
+    outline.addRoundedRectangle (r, size::radiusMedium);
+    const float dashes[] = { 4.0f, 3.0f };
+    juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
+    g.setColour (isMouseOver ? colour::textSecondary : colour::outline);
+    g.fillPath (dashed);
+
+    // "+" and the label, centred together.
+    const auto font = fonts::uiSemiBold (textSize::sm);
+    const juce::String text ("Add track");
+    const float iconSize = 13.0f, gap = 8.0f;
+    const float groupWidth = iconSize + gap + juce::GlyphArrangement::getStringWidth (font, text);
+    auto group = r.withSizeKeepingCentre (groupWidth, r.getHeight());
+
+    icons::draw (g, Icon::plus, group.removeFromLeft (iconSize), colour::textSoft, iconSize, 2.2f);
+    group.removeFromLeft (gap);
+    g.setColour (colour::textSoft);
+    g.setFont (font);
+    g.drawText (text, group, juce::Justification::centredLeft, false);
+
+    if (hasKeyboardFocus (false))
+        IkarosLookAndFeel::drawFocusRing (g, r, size::radiusMedium);
+}
+
+//==============================================================================
 // Playhead
 ArrangementView::Playhead::Playhead (ArrangementView& o) : owner (o)
 {

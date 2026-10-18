@@ -3,6 +3,7 @@
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/widgets/Decibels.h"
 #include "ui/dialogs/MonitoringWarning.h"
 #include <map>
 #include <tuple>
@@ -14,7 +15,28 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int panSize = 46;
+    // The header's layout (see the picture in TrackHeader.h).
+    constexpr int edgeWidth = 3;          // the track-colour edge on the left
+    constexpr int topPadding = 10;
+    constexpr int tileSize = 32;          // the icon tile
+    constexpr int tileGap = 10;           // between the tile and the rows beside it
+    constexpr int topRowHeight = 24;      // name, Flex, arm
+    constexpr int nameHeight = 20;        // the name sits at the top of that row...
+    constexpr int soundRowY = 31;         // ...right above sound · dB (measured from the top)
+    constexpr int soundRowHeight = 14;
+    constexpr int bottomRowY = 51;        // the buttons, volume and pan
+    constexpr int bottomRowHeight = 22;
+    constexpr int smallButtonWidth = 26;  // Mute, Solo, Monitor, Automation
+    constexpr int smallButtonGap = 4;
+    constexpr int roundSize = 28;         // the arm button, and the pan knob under it (one column)
+    constexpr int flexWidth = 38, flexHeight = 22;   // as tall as the Monitor button beside it
+
+    // The text a slider's value bubble shows while it's dragged.
+    juce::String panText (double pan)
+    {
+        const int amount = juce::roundToInt (std::abs (pan) * 100.0);
+        return amount == 0 ? juce::String ("C") : (pan < 0.0 ? "L " : "R ") + juce::String (amount);
+    }
 }
 
 TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
@@ -22,23 +44,37 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
 {
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
-    auto setupToggle = [this] (IconButton& b, juce::Colour onColour)
+    // The small square buttons: grey with a muted icon, filled when on.
+    // (borderOn = the fill colour: no grey ring around an "on" button.)
+    auto setupToggle = [this] (IconButton& b, juce::Colour onColour, juce::Colour onIconColour)
     {
-        b.setColours ({ colour::controlFill, colour::text, onColour, colour::textOnAccent });
+        b.setColours ({ colour::buttonFill, colour::buttonIcon, onColour, onIconColour, colour::buttonBorder,
+                        std::nullopt, std::nullopt, onColour });
         b.setCornerRadius (size::radiusSmall);
-        b.setFont (fonts::uiBold (textSize::xs));
+        b.setIconSize (14.0f);
         addAndMakeVisible (b);
     };
 
-    setupToggle (muteButton, colour::accent);   // a muted track's Mute is "on"
-    setupToggle (soloButton, colour::solo);
-    muteButton.setIconSize (14.0f);
-    soloButton.setIconSize (14.0f);
+    setupToggle (muteButton, colour::accent, colour::textOnAccent);   // a muted track's Mute is "on"
+    setupToggle (soloButton, colour::solo, colour::textOnAccent);
+    setupToggle (automationButton, colour::accent, colour::textOnAccent);   // while the track's automation shows
+    setupToggle (monitorButton, colour::effectOn, colour::textOnAccent);    // same green as the Recording inspector's
+    monitorButton.setVisible (false);   // audio tracks only (see update)
 
-    // Record-arm: grey dot when off, white dot on red when armed.
-    armButton.setColours ({ colour::controlFill, colour::textSecondary, colour::record, colour::textOnColour });
-    armButton.setCornerRadius (size::radiusSmall);
-    armButton.setIconSize (12.0f);
+    muteButton.setTooltip ("Mute");
+    soloButton.setTooltip ("Solo");
+    monitorButton.setTooltip ("Input monitoring");
+    automationButton.setTooltip ("Automation");
+    armButton.setTooltip ("Record arm");
+    flexButton.setTooltip ("Flex Time");
+
+    // Record-arm: a round button, an outlined ring with a grey dot when off,
+    // filled red with a white dot when armed. Half its size as the corner
+    // radius makes the rounded rectangle a circle.
+    armButton.setColours ({ juce::Colours::transparentBlack, colour::buttonIcon, colour::record, colour::textOnColour,
+                            colour::outline, std::nullopt, std::nullopt, colour::record });
+    armButton.setCornerRadius (roundSize * 0.5f);
+    armButton.setIconSize (11.0f);
     armButton.onClick = [this]
     {
         selection.selectTrack (info.id);
@@ -46,17 +82,12 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     };
     addAndMakeVisible (armButton);
 
-    // Monitor (audio tracks): hear the input live. Same green as the
-    // Recording inspector's Monitoring button.
-    monitorButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
-    monitorButton.setCornerRadius (size::radiusSmall);
-    monitorButton.setIconSize (14.0f);
     monitorButton.onClick = [this] { setMonitoringWithWarning (engine, info.id, ! info.monitoring, this); };
-    addChildComponent (monitorButton);
 
-    // Flex (audio tracks): amber while it's on, like the automation button.
-    flexButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
-    flexButton.setCornerRadius (size::radiusSmall);
+    // Flex (audio tracks): amber while it's on.
+    flexButton.setColours ({ colour::buttonFill, colour::buttonIcon, colour::accent, colour::textOnAccent, colour::buttonBorder,
+                             std::nullopt, std::nullopt, colour::accent });
+    flexButton.setCornerRadius (size::radiusXs);
     flexButton.setFont (fonts::uiSemiBold (textSize::xs));
     flexButton.onClick = [this]
     {
@@ -68,16 +99,12 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     clipLight.onClear = [this] { engine.getTracks().inputs().clearClipIndicator (info.id); };
     addChildComponent (clipLight);
 
-    // Automation: opens the lane under the track (amber while it's open).
-    automationButton.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
-    automationButton.setCornerRadius (size::radiusSmall);
-    automationButton.setIconSize (15.0f);
+    // Automation: opens the lane under the track.
     automationButton.onClick = [this]
     {
         selection.selectTrack (info.id);
         engine.getTracks().automation().setLaneShown (info.id, ! info.automationShown);
     };
-    addAndMakeVisible (automationButton);
 
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };
     soloButton.onClick = [this] { engine.getTracks().setSolo (info.id, ! info.solo); };
@@ -87,14 +114,18 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     // One undo step per drag: start a transaction when the mouse goes down.
     volume.onDragStart = [this] { engine.beginUndoStep ("Volume"); selection.selectTrack (info.id); };
     volume.onValueChange = [this] { engine.getTracks().setVolume (info.id, (float) volume.getValue()); };
+    // What the value bubble shows while it's dragged (see parentHierarchyChanged).
+    volume.textFromValueFunction = [] (double v) { return decibelText (TrackController::getDbForFaderPosition ((float) v)); };
     addAndMakeVisible (volume);
 
-    // Pan: a small knob, centre at 12 o'clock, like the Mixer's. Double-click centres it.
+    // Pan: a small knob, centre at 12 o'clock. Double-click centres it.
     pan.setRange (-1.0, 1.0);
     pan.setDoubleClickReturnValue (true, 0.0);
     pan.getProperties().set ("bipolar", true);   // read by IkarosLookAndFeel::drawRotarySlider
+    pan.getProperties().set ("compact", true);   // the small knob style
     pan.onDragStart = [this] { engine.beginUndoStep ("Pan"); selection.selectTrack (info.id); };
     pan.onValueChange = [this] { engine.getTracks().setPan (info.id, (float) pan.getValue()); };
+    pan.textFromValueFunction = [] (double v) { return panText (v); };
     addAndMakeVisible (pan);
 
     // Automated, they move with the automation, and a grab only moves them
@@ -106,7 +137,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
 
     // The rename field: hidden until startRenaming(). Return keeps the new
     // name, Escape cancels, clicking elsewhere keeps it.
-    nameEditor.setFont (fonts::uiBold (textSize::lg));
+    nameEditor.setFont (fonts::uiBold (textSize::md));
     nameEditor.setIndents (4, 2);
     nameEditor.setJustification (juce::Justification::centredLeft);
     nameEditor.setTitle ("Track name");
@@ -118,22 +149,29 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     update (t, false);
 }
 
+void TrackHeader::parentHierarchyChanged()
+{
+    // While volume or pan is dragged, a bubble beside it shows the value.
+    // JUCE puts the bubble inside the component given here (the window's
+    // top-level component), or else in a window of its own, which some Linux
+    // window managers draw badly. The header only knows its window once it's
+    // been added to one, which is why this is done here and not in the
+    // constructor.
+    auto* top = getTopLevelComponent();
+    const bool inWindow = top != this;
+    volume.setPopupDisplayEnabled (inWindow, false, inWindow ? top : nullptr);
+    pan.setPopupDisplayEnabled (inWindow, false, inWindow ? top : nullptr);
+}
+
 void TrackHeader::updateAccessibleNames()
 {
-    muteButton.setTitle ("Mute " + info.name);
-    muteButton.setTooltip ("Mute " + info.name);
-    soloButton.setTitle ("Solo " + info.name);
-    soloButton.setTooltip ("Solo " + info.name);
+    // The tooltips are short ("Mute"); what a screen reader says names the track.
+    muteButton.setTitle ((info.muted ? "Unmute " : "Mute ") + info.name);
+    soloButton.setTitle ((info.solo ? "Unsolo " : "Solo ") + info.name);
     armButton.setTitle ((info.armed ? "Disarm " : "Arm ") + info.name + " for recording");
-    armButton.setTooltip (info.armed ? "Armed: Record records here" : "Arm for recording");
     automationButton.setTitle ((info.automationShown ? "Hide automation for " : "Show automation for ") + info.name);
-    automationButton.setTooltip (info.automationShown ? "Hide automation" : "Show automation: draw how volume, pan and other settings change over time");
     monitorButton.setTitle ((info.monitoring ? "Stop monitoring " : "Monitor ") + info.name);
-    monitorButton.setTooltip (info.monitoring ? "Monitoring: you hear the input live"
-                                              : "Monitor: hear the input live (use headphones to avoid feedback)");
     flexButton.setTitle ((flexOn ? "Turn off Flex for " : "Turn on Flex for ") + info.name);
-    flexButton.setTooltip (flexOn ? "Flex is on: drag the hits in this track's recordings in the Editor"
-                                  : "Flex: move the hits in this track's recordings, stretching the audio in between");
     pan.setTitle (info.name + " pan");
     volume.setTitle (info.name + " volume");
     setTitle (info.name + " track");
@@ -145,8 +183,8 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     // buttons and knobs redraw themselves when their own values change.
     // (std::tie bundles references to the members, so the two sets compare
     // in one go.)
-    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.colour, i.muted, i.silencedBySolo,
-                                                            i.automationShown, i.automationTarget); };
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.volumeDb, i.icon, i.soundIcon, i.category, i.colour,
+                                                            i.muted, i.silencedBySolo, i.automationShown, i.automationTarget); };
     bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
 
     if (t.automationShown)
@@ -163,6 +201,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     selected = isSelected;
 
     muteButton.setToggleState (t.muted, juce::dontSendNotification);
+    muteButton.setIcon (t.muted ? Icon::mute : Icon::speaker);
     soloButton.setToggleState (t.solo, juce::dontSendNotification);
     armButton.setToggleState (t.armed, juce::dontSendNotification);
     automationButton.setToggleState (t.automationShown, juce::dontSendNotification);
@@ -173,7 +212,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     if (! volume.isMouseButtonDown())
         volume.setValue (t.volume, juce::dontSendNotification);
 
-    volume.setTooltip (juce::String (t.volumeDb, 1) + " dB");
+    volume.setTooltip ("Volume: " + decibelText (t.volumeDb) + " (double-click for 0 dB)");
 
     if (! pan.isMouseButtonDown())
         pan.setValue (t.pan, juce::dontSendNotification);
@@ -377,45 +416,66 @@ void TrackHeader::finishRenaming (bool keepNewName)
 
 void TrackHeader::paint (juce::Graphics& g)
 {
+    // Unselected headers are see-through: the column's background shows.
     auto r = getLocalBounds();
-    g.fillAll (selected ? colour::selectedBg : colour::sidebarBg);
 
-    g.setColour (colour::divider);
+    g.setColour (colour::trackRowLine);
     g.fillRect (r.removeFromBottom (1));
 
-    // The selected track also gets a subtle 1px outline just inside its
-    // edges (drawRect draws inside the rectangle it's given).
     if (selected)
     {
+        // The selected track: a lighter background and a subtle 1px outline
+        // just inside its edges (drawRect draws inside the rectangle it's given).
+        g.setColour (colour::selectedBg);
+        g.fillRect (r);
         g.setColour (colour::selectedInset);
         g.drawRect (r, 1);
     }
 
-    // 3px colour edge on the left (over the outline's left side).
+    // The colour edge on the left (over the outline's left side).
     g.setColour (info.colour);
-    g.fillRect (r.removeFromLeft (3));
+    g.fillRect (r.removeFromLeft (edgeWidth));
 
-    // Icon tile
-    g.setColour (selected ? colour::controlFill : colour::trackHeaderBg);
-    g.fillRoundedRectangle (iconArea.toFloat(), size::radiusLarge);
-    // The icon the user picked, or else the one the sound suggests, or else the category's.
+    // Icon tile: tinted with the track colour. The icon the user picked, or
+    // else the one the sound suggests, or else the category's.
+    g.setColour (info.colour.withAlpha (colour::trackTileAlpha));
+    g.fillRoundedRectangle (iconArea.toFloat(), size::radiusMedium);
     icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
-                 iconArea.toFloat(), info.colour, 22.0f);
+                 iconArea.toFloat(), info.colour, 18.0f);
 
+    // The name, cut short with "..." if it doesn't fit.
     g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
-    g.setFont (selected ? fonts::uiBold (textSize::lg) : fonts::uiSemiBold (textSize::lg));
+    g.setFont (selected ? fonts::uiBold (textSize::md) : fonts::uiSemiBold (textSize::md));
     g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (textSize::sm));
-    g.drawText (info.soundName, soundArea, juce::Justification::centredLeft, true);
+    // "Sound name · −3.0 dB": the sound gives way (with "...") if there
+    // isn't room, the volume always shows.
+    {
+        const auto nameFont = fonts::ui (textSize::xs);
+        const auto dbFont = fonts::mono (textSize::xs);
+        const auto db = decibelText (info.volumeDb);
+        const juce::String separator (juce::String::fromUTF8 (" \xc2\xb7 "));   // " · "
+
+        auto row = soundArea.toFloat();
+        const float dbWidth = juce::GlyphArrangement::getStringWidth (dbFont, db);
+        const float separatorWidth = juce::GlyphArrangement::getStringWidth (nameFont, separator);
+        const float soundWidth = juce::jmin (juce::GlyphArrangement::getStringWidth (nameFont, info.soundName) + 1.0f,
+                                             row.getWidth() - dbWidth - separatorWidth);
+
+        g.setColour (colour::textSecondary);
+        g.setFont (nameFont);
+        g.drawText (info.soundName, row.removeFromLeft (juce::jmax (0.0f, soundWidth)), juce::Justification::centredLeft, true);
+        g.drawText (separator, row.removeFromLeft (separatorWidth), juce::Justification::centredLeft, false);
+        g.setFont (dbFont);
+        g.drawText (db, row, juce::Justification::centredLeft, false);
+    }
 
     if (info.automationShown)
     {
         // The automation picker: the setting's name (amber if it has
         // automation, like its control) and a chevron.
         const auto pill = pickerArea.toFloat();
-        g.setColour (colour::controlFill);
+        g.setColour (colour::buttonFill);
         g.fillRoundedRectangle (pill, size::radiusSmall);
         auto text = pill.reduced (8.0f, 0.0f);
         icons::draw (g, Icon::chevronDown, text.removeFromRight (12.0f), colour::textSecondary, 12.0f);
@@ -432,57 +492,68 @@ void TrackHeader::paint (juce::Graphics& g)
 
 void TrackHeader::resized()
 {
-    // Laid out from the top: when zooming makes the row taller, the
-    // controls stay together and the lane gets the extra room.
-    auto r = getLocalBounds().withTrimmedBottom (1).withTrimmedLeft (3).reduced (12, 6);
+    // Laid out from the top: when zooming (or Tall Tracks) makes the row
+    // taller, the controls stay together and the lane gets the extra room.
+    // Left and right edges have the column's padding, so the tile lines up
+    // with "TRACKS" above and the arm button and pan knob with the zoom slider.
+    const int padding = size::panelPadding;
+    const int right = getWidth() - padding;
 
-    iconArea = r.removeFromLeft (44).removeFromTop (44);
-    r.removeFromLeft (12);
+    iconArea = { padding, topPadding, tileSize, tileSize };
+    const int left = iconArea.getRight() + tileGap;   // the three rows start here
 
-    auto top = r.removeFromTop (26);
+    // Top row: name ... [Flex] [~] (arm). Flex and Monitor are audio tracks
+    // only; they sit up here so the volume slider below is as long on
+    // every track.
+    auto top = juce::Rectangle<int> (left, topPadding, right - left, topRowHeight);
+    armButton.setBounds (top.removeFromRight (roundSize).withSizeKeepingCentre (roundSize, roundSize));
+    top.removeFromRight (8);
 
-    for (auto* b : { &armButton, &monitorButton, &soloButton, &muteButton, &automationButton })
+    if (monitorButton.isVisible())
     {
-        if (b->isVisible())
-        {
-            b->setBounds (top.removeFromRight (26));
-            top.removeFromRight (5);
-        }
+        monitorButton.setBounds (top.removeFromRight (smallButtonWidth).withSizeKeepingCentre (smallButtonWidth, bottomRowHeight));
+        top.removeFromRight (smallButtonGap);
     }
-
-    nameArea = top;
-    nameEditor.setBounds (nameArea.expanded (2, 0));
-
-    r.removeFromTop (4);
-    soundArea = r.removeFromTop (18).withTrimmedRight (panSize);
 
     if (flexButton.isVisible())
     {
-        flexButton.setBounds (soundArea.removeFromRight (40));
-        soundArea.removeFromRight (6);
+        flexButton.setBounds (top.removeFromRight (flexWidth).withSizeKeepingCentre (flexWidth, flexHeight));
+        top.removeFromRight (8);
     }
-    r.removeFromTop (6);
 
-    // Pan knob at the end of the volume slider's row, centred on it. Its
-    // bounds are taller than the row: the knob is drawn inset, and the extra
-    // space is empty.
-    auto volumeRow = r.removeFromTop (22);
-    const auto volumeAndPan = volumeRow;
-    pan.setBounds (volumeRow.removeFromRight (panSize).withSizeKeepingCentre (panSize, panSize));
-    volumeRow.removeFromRight (6);
+    // The name and the sound line under it read as one block beside the
+    // icon tile, so the name sits high in its row.
+    nameArea = top.withHeight (nameHeight);
+    nameEditor.setBounds (nameArea.expanded (2, 0));
+
+    // Middle row: sound · dB. It stops short of the pan knob, which is
+    // taller than the bottom row and reaches up beside it.
+    soundArea = { left, soundRowY, right - left - roundSize - 8, soundRowHeight };
+
+    // Bottom row: [M][S][⟋] ─── volume ───  (pan)
+    auto bottom = juce::Rectangle<int> (left, bottomRowY, right - left, bottomRowHeight);
+    const auto bottomRow = bottom;
+
+    for (auto* b : { &muteButton, &soloButton, &automationButton })
+    {
+        b->setBounds (bottom.removeFromLeft (smallButtonWidth));
+        bottom.removeFromLeft (smallButtonGap);
+    }
+
+    // The pan knob is the same size as the arm button above it, with the
+    // same right edge, so the two sit in one column.
+    pan.setBounds (bottom.removeFromRight (roundSize).withSizeKeepingCentre (roundSize, roundSize));
+    bottom.removeFromRight (16);
 
     if (clipLight.isVisible())
-    {
-        clipLight.setBounds (volumeRow.removeFromRight (8).withSizeKeepingCentre (8, 8));
-        volumeRow.removeFromRight (5);
-    }
+        clipLight.setBounds (juce::Rectangle<int> (bottom.getRight() + 4, bottom.getY(), 8, bottom.getHeight()).withSizeKeepingCentre (8, 8));
 
-    volume.setBounds (volumeRow);
+    bottom.removeFromLeft (12 - smallButtonGap);
+    volume.setBounds (bottom);
 
-    // Under them, as wide as both: the automation picker (while it shows).
-    // The pan knob reaches a little below its row, hence the bigger gap.
-    r.removeFromTop (10);
-    pickerArea = r.removeFromTop (18).withX (volumeAndPan.getX()).withWidth (volumeAndPan.getWidth());
+    // Under the bottom row, as wide as the rows: the automation picker
+    // (while it shows).
+    pickerArea = bottomRow.withY (bottomRow.getBottom() + 4).withHeight (18);
 }
 
 } // namespace ikaros

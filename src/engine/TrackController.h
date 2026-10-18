@@ -117,6 +117,10 @@ public:
         "double-click to reset". Faders use Tracktion's curve, not dB. */
     static float getFaderPositionForDb (float db);
 
+    /** The other way round: the level in dB a fader position gives (for
+        showing a fader's value while it's dragged). */
+    static float getDbForFaderPosition (float position);
+
     StereoLevel getTrackLevel (TrackId);
 
     /** The "Show details" box: plugin, output and inputs. */

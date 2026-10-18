@@ -22,9 +22,9 @@ namespace ikaros
         │ TEMPO                     │ tempo lane (when shown) ▔▔╲▁▁ │  44px
         │ SECTIONS              [+] │ [Intro   ][Verse      ][Cho.. │  24px
         ├───────────────────────────┼───────────────────────────────┤
-        │ TrackHeader               │ lane  [region] [region]       │ 100px
-        │ TrackHeader               │ lane                          │ (118 w/ automation)
-        │                           │ ┌ drop zone ┐                 │
+        │ TrackHeader               │ lane  [region] [region]       │ 84px (Tall: 100)
+        │ TrackHeader               │ lane                          │ (+18 w/ automation)
+        │ ┌╌╌╌╌╌ + Add track ╌╌╌╌╌┐ │ ┌ drop zone ┐                 │
         │                           │ ◀═══════ scroll bar ═══════▶  │  12px
         └───────────────────────────┴───────────────────────────────┘
     Headers + lanes scroll vertically together inside a Viewport. Time
@@ -98,6 +98,11 @@ public:
     void setTempoLaneShown (bool);
     bool isTempoLaneShown() const noexcept       { return tempoLaneShown; }
 
+    /** View > Compact Tracks (84px rows, the default) or Tall Tracks (100px).
+        Saved in the Preferences. */
+    void setTracksTall (bool);
+    bool areTracksTall() const noexcept          { return tracksTall; }
+
     void zoomIn();
     void zoomOut();
 
@@ -114,6 +119,7 @@ public:
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
     std::function<void()> onTempoLaneToggled;                     // the same, for Show Tempo Lane
+    std::function<void()> onAddTrack;                             // the "Add track" row under the tracks
 
     //==============================================================================
     void paint (juce::Graphics&) override;
@@ -148,7 +154,7 @@ public:
         double pixelsPerBeat = 20.0;
         TempoMap tempo;                // where the bars are (they can differ in length)
         double scrollBeats = 0.0;      // the beat at the left edge of the lanes
-        int rowHeight = tokens::size::trackRowHeight;   // track height: grows when zoomed in (see setZoom)
+        int rowHeight = tokens::size::trackRowCompact;   // track height: grows when zoomed in (see setZoom)
 
         float beatToX (double beat) const          { return (float) ((beat - scrollBeats) * pixelsPerBeat); }
         double xToBeat (float x) const             { return x / pixelsPerBeat + scrollBeats; }
@@ -161,6 +167,7 @@ private:
     class SectionStrip;
     class Lane;
     class DropZone;
+    class AddTrackButton;
     class Playhead;
     class Overlay;
     class Content;
@@ -176,6 +183,7 @@ private:
     std::unique_ptr<Ruler> ruler;
     std::unique_ptr<TempoLane> tempoLane;
     bool tempoLaneShown = false;
+    bool tracksTall = false;
     std::unique_ptr<SectionStrip> sectionStrip;
     std::unique_ptr<Content> content;
     std::unique_ptr<Overlay> overlay;
@@ -201,6 +209,7 @@ private:
     double getVisibleBeats() const;
     double getTotalBeats() const;
     void setZoom (double pixelsPerBeat, float anchorX);
+    int getBaseRowHeight() const noexcept;   // a track's height when not zoomed in: compact or tall
     float getZoomAnchorX (float fallbackX) const;   // where a zoom should stay put, in lane x
     void scrollToBeat (double beat);
     void timelineChanged();

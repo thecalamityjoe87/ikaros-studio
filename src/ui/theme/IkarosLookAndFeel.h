@@ -42,6 +42,10 @@ public:
                            float sliderPosProportional, float rotaryStartAngle,
                            float rotaryEndAngle, juce::Slider&) override;
 
+    // The value bubble shown while a slider is dragged (setPopupDisplayEnabled)
+    juce::Font getSliderPopupFont (juce::Slider&) override;
+    int getSliderThumbRadius (juce::Slider&) override;
+
     // Menu bar (Linux/Windows; macOS uses the native one)
     void drawMenuBarBackground (juce::Graphics&, int width, int height, bool isMouseOverBar,
                                 juce::MenuBarComponent&) override;
@@ -77,6 +81,11 @@ public:
     /** Colour ID for a knob's value arc (set per-slider to the track colour).
         Rotary sliders with the property "bipolar" = true draw the arc from the centre. */
     static constexpr int knobArcColourId = 0x7f00001;
+
+private:
+    // drawRotarySlider for knobs with the property "compact" = true.
+    void drawCompactKnob (juce::Graphics&, juce::Rectangle<float> area, float sliderPos,
+                          float startAngle, float endAngle, juce::Slider&);
 };
 
 } // namespace ikaros

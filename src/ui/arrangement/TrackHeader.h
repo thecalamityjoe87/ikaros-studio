@@ -10,13 +10,22 @@ namespace ikaros
 
 //==============================================================================
 /**
-    One row in the track headers column (320 × 118): colour edge, icon tile,
-    name, Mute/Solo/(Monitor)/Arm, the sound name, a volume slider (with the
-    track's level meter in it) and a pan knob, and next to Mute a button that shows the track's automation.
-    While it shows, a picker under the volume row says which setting's
-    automation is drawn over the track's lane. The Monitor button only shows on audio tracks: instrument tracks
-    always play what you play. Audio tracks also have a Flex button, at the
-    end of the sound row: Flex Time, for dragging the hits in their recordings.
+    One row in the track headers column (320 × 84, or 100 with Tall Tracks):
+
+        ▌┌──┐ Track name                  [Flex][~] (●)
+        ▌└──┘ Sound name · −3.0 dB
+        ▌     [M][S][⟋] ───────○──────────────  (◔)
+
+    A 3px edge in the track colour, an icon tile, then three rows: the name
+    with Flex and Monitor (audio tracks only: instrument tracks always play
+    what you play) and the record-arm button; the sound (or the input, for
+    audio tracks) and the volume in dB; and Mute, Solo, Automation, the
+    volume slider (with the track's level meter in it) and the pan knob.
+    The pan knob sits right under the arm button, in one column.
+    Flex is Flex Time, for dragging the hits in a track's recordings.
+
+    While the track's automation shows, a picker under the bottom row says
+    which setting's automation is drawn over the track's lane.
 
     Right-click shows the track menu (via onShowMenu); double-click the name
     to rename the track; click the icon tile to pick a different icon.
@@ -50,6 +59,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void parentHierarchyChanged() override;
 
 private:
     AudioEngine& engine;
@@ -57,12 +67,12 @@ private:
     TrackInfo info;
     bool selected = false;
 
-    IconButton muteButton { "Mute", Icon::mute };
+    IconButton muteButton { "Mute", Icon::speaker };             // a crossed-out speaker while muted
     IconButton soloButton { "Solo", Icon::headphones };          // headphones = solo, as in GarageBand
-    IconButton monitorButton { "Monitor input", Icon::waveform };
-    IconButton armButton  { "Arm for recording", Icon::record };
-    IconButton automationButton { "Show automation", Icon::automation };
-    IconButton flexButton { "Flex", std::nullopt, "Flex" };   // audio tracks only
+    IconButton monitorButton { "Input monitoring", Icon::waveform };
+    IconButton armButton  { "Record arm", Icon::record };
+    IconButton automationButton { "Automation", Icon::automation };
+    IconButton flexButton { "Flex Time", std::nullopt, "Flex" };   // audio tracks only
     bool flexOn = false;
     MeterSlider volume;   // the track's level and volume in one, like the master's
     ClipLight clipLight;  // armed audio tracks: the input has clipped

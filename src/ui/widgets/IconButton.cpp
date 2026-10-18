@@ -70,7 +70,7 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
     auto bg = on ? colours.backgroundOn : colours.background;
     auto fg = on ? colours.foregroundOn : colours.foreground;
 
-    auto border = colours.border;
+    auto border = on ? colours.borderOn.value_or (colours.border) : colours.border;
 
     if (! isEnabled())
     {
