@@ -2,6 +2,7 @@
 
 #include "engine/AudioEngine.h"
 #include "ui/widgets/IconButton.h"
+#include "ui/theme/Family.h"
 
 namespace ikaros
 {
@@ -28,7 +29,7 @@ public:
     explicit EqView (AudioEngine&);
 
     /** Which EQ to show: a track's, or the master's (masterTrackId). 0 = none. */
-    void setTarget (TrackId, juce::Colour);
+    void setTarget (TrackId, tokens::Family);
 
     /** Re-reads the settings from the engine (model changed). */
     void refresh();
@@ -46,7 +47,7 @@ public:
 private:
     AudioEngine& engine;
     TrackId target = 0;
-    juce::Colour colour;
+    tokens::Family family = tokens::Family::master;   // the curve's colour, looked up when painting
     EqSettings settings;
     std::vector<float> curve;      // dB at each column of the graph
 

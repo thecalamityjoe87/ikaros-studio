@@ -2,6 +2,7 @@
 
 #include "ui/state/Selection.h"
 #include "ui/widgets/IconButton.h"
+#include "ui/theme/Family.h"
 
 namespace ikaros
 {
@@ -59,7 +60,7 @@ private:
     bool masterMode = false;
     std::optional<PluginSlot> instrument;
     std::vector<PluginSlot> chain;
-    juce::Colour trackColour;
+    tokens::Family family = tokens::Family::master;   // the target track's (colour looked up when painting)
 
     juce::OwnedArray<EffectRow> rows;
     std::unique_ptr<AddRow> addRow;

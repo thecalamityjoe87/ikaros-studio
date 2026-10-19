@@ -28,17 +28,22 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
     // Neutral while stopped, amber while playing. The button never toggles
     // itself on click; update() sets its toggle state from the transport.
-    auto playColours = IconButton::accentColours();
-    playColours.background = colour::neutralActive;
-    playColours.foreground = colour::text;
-    playColours.backgroundOn = colour::accent;
-    playButton.setColours (playColours);
+    playButton.setColours ([]
+    {
+        auto c = IconButton::accentColours();
+        c.background = theme().neutralActive;
+        c.foreground = theme().text;
+        c.backgroundOn = theme().accent;
+        c.border = theme().raisedBorder;
+        c.borderOn = theme().accentBorder;
+        return c;
+    });
     playButton.setCornerRadius (size::radiusLarge);
     playButton.setIconSize (20.0f);
     addAndMakeVisible (playButton);
 
     // Red dot normally; lit red with a white dot while recording.
-    recordButton.setColours ({ colour::raised, colour::record, colour::record, colour::textOnColour });
+    recordButton.setColours ([] { return IconButton::Colours { theme().raised, theme().record, theme().record, theme().textOnColour }; });
     recordButton.setIconSize (16.0f);
     recordButton.setTooltip ("Record (R)");
 
@@ -115,9 +120,9 @@ void TransportBar::update()
 void TransportBar::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (colour::wellBg);
+    g.setColour (theme().transportWell);
     g.fillRoundedRectangle (r, size::radiusPill);
-    g.setColour (colour::borderSoft);
+    g.setColour (theme().transportWellBorder);
     g.drawRoundedRectangle (r, size::radiusPill, 1.0f);
 }
 

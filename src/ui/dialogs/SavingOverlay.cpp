@@ -84,13 +84,13 @@ void SavingOverlay::paint (juce::Graphics& g)
     if (! progressBar.isVisible())
         return;
 
-    g.fillAll (colour::scrimLight);
-    g.setColour (colour::cardBg);
+    g.fillAll (theme().scrimLight);
+    g.setColour (theme().cardBg);
     g.fillRoundedRectangle (card.toFloat(), size::radiusLarge);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (card.toFloat().reduced (0.5f), size::radiusLarge, 1.0f);
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::xl));
     g.drawText ("Saving \"" + job->bundle.getFileNameWithoutExtension() + "\"...",
                 card.reduced (20, 16).removeFromTop (24), juce::Justification::centredLeft, true);

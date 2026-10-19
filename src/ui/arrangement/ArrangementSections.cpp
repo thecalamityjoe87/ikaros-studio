@@ -29,10 +29,13 @@ ArrangementView::SectionStrip::SectionStrip (ArrangementView& o) : owner (o)
                 "its music (hold Alt to copy). Right-click a section to rename, recolor or delete it.");
     setWantsKeyboardFocus (true);   // for Delete on a clicked section
 
-    auto colours = IconButton::raisedColours();
-    colours.background = colour::buttonFill;
-    colours.border = colour::buttonBorder;
-    addButton.setColours (colours);
+    addButton.setColours ([]
+    {
+        auto c = IconButton::raisedColours();
+        c.background = theme().buttonFill;
+        c.border = theme().buttonBorder;
+        return c;
+    });
     addButton.setCornerRadius (size::radiusXs);
     addButton.setIconSize (12.0f);
     addButton.setTooltip ("Add a section after the last one");
@@ -132,16 +135,16 @@ ArrangementView::SectionStrip::Hit ArrangementView::SectionStrip::findHit (juce:
 void ArrangementView::SectionStrip::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds();
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().sectionsStripBg);
+    g.setColour (theme().divider);
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
-    g.setColour (colour::trackColumnBg);
+    g.setColour (theme().sectionsRowBg);
     g.fillRect (label);
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (label.removeFromRight (1));
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (columnLabelFont());
     g.drawText ("SECTIONS", label.withTrimmedLeft (columnPadding), juce::Justification::centredLeft);
 
@@ -149,11 +152,11 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
     juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (r);
     g.setOrigin (r.getX(), 0);
-    g.setColour (colour::windowBg);
+    g.setColour (theme().sectionsStripBg);
     g.fillRect (r.withX (0));
 
     auto& geo = owner.geometry;
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     forEachVisibleBar (geo, r.getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
 
     auto drawBlock = [&] (const SectionInfo& s, juce::Rectangle<float> box, float alpha, bool lit)
@@ -166,7 +169,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
         // A stripe down the left edge, like a flag at the bar where it starts.
         g.fillRect (box.getX() + 1.0f, box.getY() + 1.0f, 3.0f, box.getHeight() - 2.0f);
 
-        g.setColour (colour::text.withMultipliedAlpha (alpha));
+        g.setColour (theme().text.withMultipliedAlpha (alpha));
         g.setFont (lit ? fonts::uiSemiBold (textSize::sm) : fonts::ui (textSize::sm));
         g.drawFittedText (s.name, box.withTrimmedLeft (9.0f).withTrimmedRight (4.0f).toNearestInt(),
                           juce::Justification::centredLeft, 1, 1.0f);
@@ -187,7 +190,7 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
         {
             const auto box = blockBounds (s);
             const float x = edgeKind == Hit::Kind::startEdge ? box.getX() : box.getRight();
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight() - 1.0f);
         }
     }
@@ -198,14 +201,14 @@ void ArrangementView::SectionStrip::paint (juce::Graphics& g)
         auto ghost = drag->section;
         ghost.endBeat = drag->ghostStart + ghost.lengthBeats();
         ghost.startBeat = drag->ghostStart;
-        g.setColour (colour::windowBg);   // so the blocks under it don't show through
+        g.setColour (theme().sectionsStripBg);   // so the blocks under it don't show through
         g.fillRoundedRectangle (blockBounds (ghost), size::radiusXs);
         drawBlock (ghost, blockBounds (ghost), 0.85f, true);
 
         if (drag->target.has_value())
         {
             const float x = beatToLaneX (*drag->target);
-            g.setColour (colour::highlight);
+            g.setColour (theme().highlight);
             g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight() - 1.0f);
 
             juce::Path arrow;

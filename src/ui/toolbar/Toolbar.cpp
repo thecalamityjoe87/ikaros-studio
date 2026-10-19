@@ -23,17 +23,14 @@ namespace
 Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
     : engine (e), commands (cm), transport (e)
 {
-    auto raisedWithBorder = IconButton::raisedColours();
-    raisedWithBorder.border = colour::border;
-
     for (auto* b : { &libraryButton, &undoButton, &redoButton })
     {
-        b->setColours (raisedWithBorder);
+        b->setColours (IconButton::borderedColours);
         addAndMakeVisible (b);
     }
 
     // Showing the library isn't an "on" state in the accent sense: neutral fill.
-    libraryButton.setColours (IconButton::neutralToggleColours());
+    libraryButton.setColours (IconButton::neutralToggleColours);
 
     // invokeDirectly runs the command synchronously, same as picking it from a menu.
     libraryButton.onClick  = [this] { commands.invokeDirectly (CommandIDs::toggleLibrary, true); };
@@ -112,22 +109,22 @@ void Toolbar::update (bool libraryVisible)
 
 void Toolbar::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::toolbarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().toolbarBg);
+    g.setColour (theme().toolbarBorder);
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
-    icons::draw (g, Icon::speaker, speakerArea.toFloat(), colour::textSecondary, 18.0f);
+    icons::draw (g, Icon::speaker, speakerArea.toFloat(), theme().textSecondary, 18.0f);
 
     // "Master" on the left and the dB readout on the right, in one row.
     const auto labelRow = masterArea.withHeight (masterLabelHeight);
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::xs));
     g.drawText ("Master", labelRow, juce::Justification::centredLeft);
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::mono (textSize::xs));
     g.drawText (masterDbText, labelRow, juce::Justification::centredRight);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     auto s = statsArea;
     g.drawText (statsLine1, s.removeFromTop (s.getHeight() / 2), juce::Justification::bottomRight);
     g.drawText (statsLine2, s, juce::Justification::topRight);
@@ -136,9 +133,9 @@ void Toolbar::paint (juce::Graphics& g)
     if (realtimeBadge)
     {
         const auto badge = getRealtimeBadgeArea().toFloat();
-        g.setColour (colour::meterGreen.withAlpha (0.18f));
+        g.setColour (theme().realtimeBadgeBg);
         g.fillRoundedRectangle (badge, size::radiusTiny);
-        g.setColour (colour::meterGreen);
+        g.setColour (theme().realtimeBadgeText);
         g.setFont (fonts::mono (textSize::xs));
         g.drawText ("RT", badge, juce::Justification::centred);
     }

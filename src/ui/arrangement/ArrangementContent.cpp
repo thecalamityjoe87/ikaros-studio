@@ -188,10 +188,12 @@ int ArrangementView::Content::getIdealHeight() const
 
 void ArrangementView::Content::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
-    g.setColour (colour::trackColumnBg);
+    // The lanes are part of the arrangement (dark in both themes); the
+    // track headers column on the left is chrome.
+    g.fillAll (theme().arrangement.laneBg);
+    g.setColour (theme().trackColumnBg);
     g.fillRect (0, 0, headerWidth - 1, getHeight());
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (headerWidth - 1, 0, 1, getHeight());
 }
 

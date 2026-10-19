@@ -33,7 +33,7 @@ public:
     explicit RegionInspector (AudioEngine&);
     ~RegionInspector() override;   // defined in the .cpp, where the sections' contents are complete types
 
-    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour);
+    void setRegion (std::optional<RegionInfo>, tokens::Family);
 
     EditorGrid getGrid() const noexcept     { return grid; }
 

@@ -85,9 +85,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     addChildComponent (progressBar);
     addChildComponent (revealButton);
 
-    auto cancelColours = IconButton::raisedColours();
-    cancelColours.border = colour::border;
-    cancelButton.setColours (cancelColours);
+    cancelButton.setColours (IconButton::borderedColours);
     cancelButton.onClick = [this]
     {
         if (stage == Stage::exporting)
@@ -97,7 +95,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     };
     addAndMakeVisible (cancelButton);
 
-    revealButton.setColours (cancelColours);
+    revealButton.setColours (IconButton::borderedColours);
     revealButton.onClick = [this]
     {
         // Stems: open their folder. One file: show it in its folder.
@@ -105,7 +103,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
             (stemsToggle.getToggleState() ? result.files[0].getParentDirectory() : result.files[0]).revealToUser();
     };
 
-    exportButton.setColours (IconButton::primaryColours());
+    exportButton.setColours (IconButton::primaryColours);
     exportButton.onClick = [this]
     {
         if (stage == Stage::done)
@@ -336,16 +334,16 @@ int ExportDialog::getMessageHeight() const
 void ExportDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the dialog.
-    g.fillAll (colour::scrim);
+    g.fillAll (theme().scrim);
 
-    shadow::dialog.drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (padX, padY);
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::title));
     const auto title = stage == Stage::exporting ? "Exporting..."
                      : stage == Stage::done      ? (result.ok ? "Export finished" : "Export failed")
@@ -353,7 +351,7 @@ void ExportDialog::paint (juce::Graphics& g)
     g.drawText (title, r.removeFromTop (titleHeight), juce::Justification::centredLeft);
 
     r.removeFromTop (6);
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (message, r.removeFromTop (getMessageHeight()), juce::Justification::topLeft, 2, 1.0f);
 

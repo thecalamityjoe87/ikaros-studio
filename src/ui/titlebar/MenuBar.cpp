@@ -137,9 +137,9 @@ void MenuBar::mouseDoubleClick (const juce::MouseEvent&)
 //==============================================================================
 void MenuBar::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::menuBarBg);
+    g.fillAll (theme().titleBarBg);
 
-    g.setColour (colour::divider);
+    g.setColour (theme().titleBarBorder);
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
     // Centred branding: [logo] Ikaros Studio · Session name [dot]
@@ -177,7 +177,7 @@ void MenuBar::paint (juce::Graphics& g)
                      source.getX(), source.getY(), source.getWidth(), source.getHeight());
 
         const float tileRadius = logoSize * 52.0f / 224.0f;   // the SVG tile's rx, scaled
-        g.setColour (colour::logoOutline);
+        g.setColour (theme().logoOutline);
         g.drawRoundedRectangle (tile.reduced (0.5f), tileRadius, 1.0f);
         take (logoGap);
     }
@@ -186,11 +186,11 @@ void MenuBar::paint (juce::Graphics& g)
         take (logoSize + logoGap);
     }
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (appFont);
     g.drawText (appText, take (appWidth), juce::Justification::centredLeft, true);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (nameFont);
     g.drawText (separator, take (separatorWidth), juce::Justification::centredLeft, true);
     g.drawText (sessionName, take (nameWidth), juce::Justification::centredLeft, true);

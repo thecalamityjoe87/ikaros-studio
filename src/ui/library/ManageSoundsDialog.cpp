@@ -190,8 +190,7 @@ public:
         mainButton.onClick = [this] { if (onMain) onMain(); };
         addChildComponent (mainButton);
 
-        greyColours.border = colour::border;
-        removeButton.setColours (greyColours);
+        removeButton.setColours (IconButton::borderedColours);
         removeButton.setFont (fonts::uiSemiBold (textSize::md));
         removeButton.onClick = [this] { if (onRemove) onRemove(); };
         addChildComponent (removeButton);
@@ -212,7 +211,7 @@ public:
 
         mainButton.setVisible (v.mainAction.isNotEmpty());
         mainButton.setText (v.mainAction);
-        mainButton.setColours (v.mainIsCancel ? greyColours : IconButton::primaryColours());
+        mainButton.setColours (v.mainIsCancel ? IconButton::borderedColours : IconButton::primaryColours);
         mainButton.setTitle (v.mainAction + " " + v.title);
 
         removeButton.setVisible (v.canRemove);
@@ -232,7 +231,7 @@ public:
             auto r = getLocalBounds().withTrimmedTop (10).withTrimmedLeft (2);
             const auto headingFont = fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f);
             const auto title = view.title.toUpperCase();
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (headingFont);
             g.drawText (title, r.removeFromLeft (juce::roundToInt (juce::GlyphArrangement::getStringWidth (headingFont, title)) + 12),
                         juce::Justification::centredLeft, false);
@@ -246,38 +245,38 @@ public:
             // "Bass   4 packs": a category inside Available to download.
             auto r = getLocalBounds().withTrimmedTop (8).withTrimmedLeft (2);
             const auto font = fonts::uiSemiBold (textSize::md);
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.setFont (font);
             g.drawText (view.title, r.removeFromLeft (juce::roundToInt (juce::GlyphArrangement::getStringWidth (font, view.title)) + 10),
                         juce::Justification::centredLeft, false);
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::ui (textSize::sm));
             g.drawText (view.facts, r, juce::Justification::centredLeft, true);
             return;
         }
 
         auto card = getLocalBounds().reduced (0, 4).toFloat();
-        g.setColour (view.highlighted ? colour::selectedRow : colour::cardBg);
+        g.setColour (view.highlighted ? theme().selectedRow : theme().cardBg);
         g.fillRoundedRectangle (card, size::radiusLarge);
 
         if (view.highlighted)
         {
-            g.setColour (colour::selectedBorder);
+            g.setColour (theme().selectedBorder);
             g.drawRoundedRectangle (card.reduced (0.5f), size::radiusLarge, 1.0f);
         }
 
         // Left: name, facts, then the description (or why a download failed).
         auto text = contentArea().withTrimmedRight (actionsWidth + 16);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiBold (textSize::xl));
         g.drawText (view.title, text.removeFromTop (20), juce::Justification::centredLeft, true);
 
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::sm));
         g.drawText (view.facts, text.removeFromTop (18), juce::Justification::centredLeft, true);
 
         text.removeFromTop (4);
-        g.setColour (view.error.isNotEmpty() ? colour::record : colour::textSecondary);
+        g.setColour (view.error.isNotEmpty() ? theme().record : theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (view.error.isNotEmpty() ? view.error : view.description, text,
                           juce::Justification::topLeft, 2, 1.0f);
@@ -291,20 +290,20 @@ public:
         {
             case RowView::Status::progress:
             {
-                g.setColour (colour::textSecondary);
+                g.setColour (theme().textSecondary);
                 g.setFont (fonts::ui (textSize::sm));
                 g.drawText (view.statusText, status.removeFromTop (16), juce::Justification::centredRight);
 
                 auto bar = status.withSizeKeepingCentre (status.getWidth(), 6).toFloat();
-                g.setColour (colour::controlFill);
+                g.setColour (theme().controlFill);
                 g.fillRoundedRectangle (bar, size::radiusTiny);
-                g.setColour (colour::highlight);
+                g.setColour (theme().highlight);
                 g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, view.progress)), size::radiusTiny);
                 break;
             }
 
             case RowView::Status::text:
-                g.setColour (colour::textSecondary);
+                g.setColour (theme().textSecondary);
                 g.setFont (fonts::ui (textSize::md));
                 g.drawText (view.statusText, status, juce::Justification::centredRight);
                 break;
@@ -337,7 +336,6 @@ private:
     RowView view;
     IconButton mainButton { "Download", std::nullopt, "Download" };
     IconButton removeButton { "Remove", std::nullopt, "Remove" };
-    IconButton::Colours greyColours = IconButton::raisedColours();
     static constexpr int actionsWidth = 200, buttonWidth = 96, buttonHeight = 28, statusHeight = 22;
 
     // Inside the row's card, where the text, state and buttons go.
@@ -351,7 +349,7 @@ private:
         const float textWidth = juce::GlyphArrangement::getStringWidth (font, word);
         const float tickSize = 16.0f, gap = 6.0f;
 
-        g.setColour (colour::effectOn);
+        g.setColour (theme().effectOn);
         g.setFont (font);
         g.drawText (word, area, juce::Justification::centredRight);
 
@@ -363,7 +361,7 @@ private:
         tick.startNewSubPath (circle.getX() + tickSize * 0.28f, circle.getCentreY());
         tick.lineTo (circle.getX() + tickSize * 0.44f, circle.getY() + tickSize * 0.66f);
         tick.lineTo (circle.getX() + tickSize * 0.72f, circle.getY() + tickSize * 0.34f);
-        g.setColour (colour::textOnAccent);
+        g.setColour (theme().textOnAccent);
         g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 };
@@ -403,16 +401,14 @@ ManageSoundsDialog::ManageSoundsDialog (AudioEngine& e, bool isWelcome, const ju
     listViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (listViewport);
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
 
-    retryButton.setColours (grey);
+    retryButton.setColours (IconButton::borderedColours);
     retryButton.onClick = [this] { engine.getPackStore().refreshIndex(); };
     addChildComponent (retryButton);
 
     // Welcome: "Not Now" says no for now (asked again next time only if the
     // offer never got shown, e.g. offline).
-    notNowButton.setColours (grey);
+    notNowButton.setColours (IconButton::borderedColours);
     notNowButton.onClick = [this]
     {
         if (engine.getPackStore().getIndexStatus() == PackStore::IndexStatus::loaded)
@@ -422,7 +418,7 @@ ManageSoundsDialog::ManageSoundsDialog (AudioEngine& e, bool isWelcome, const ju
     };
     addChildComponent (notNowButton);
 
-    doneButton.setColours (IconButton::primaryColours());
+    doneButton.setColours (IconButton::primaryColours);
     doneButton.onClick = [this]
     {
         // Welcome, before choosing: the big button downloads the starter sounds.
@@ -451,7 +447,7 @@ ManageSoundsDialog::ManageSoundsDialog (AudioEngine& e, bool isWelcome, const ju
             auto* chip = filterChips.add (new IconButton (group.isEmpty() ? juce::String ("Show all packs")
                                                                           : "Show " + group + " packs",
                                                           std::nullopt, label));
-            chip->setColours (IconButton::neutralToggleColours());
+            chip->setColours (IconButton::neutralToggleColours);
             chip->setCornerRadius (size::radiusPill);
             chip->setFont (fonts::uiSemiBold (textSize::sm));
             chip->onClick = [this, group] { setFilter (group); };
@@ -789,16 +785,16 @@ void ManageSoundsDialog::mouseDown (const juce::MouseEvent& e)
 
 void ManageSoundsDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::scrim);
+    g.fillAll (theme().scrim);
 
-    shadow::dialog.drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::title));
     g.drawText (welcome ? juce::String ("Welcome to Ikaros Studio") : juce::String ("Manage Sounds"),
                 r.removeFromTop (26), juce::Justification::centredLeft);
@@ -808,13 +804,13 @@ void ManageSoundsDialog::paint (juce::Graphics& g)
                                                      "each pack appears in the library as soon as it's installed."
                                                    : "Start with the starter sounds: real instruments and loops to play and build "
                                                      "songs with. You can download more any time from Manage Sounds.";
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (subtitle, r.removeFromTop (welcome ? 40 : 22), juce::Justification::topLeft, 2, 1.0f);
 
     if (statusText.isNotEmpty())
     {
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.drawFittedText (statusText, statusArea, juce::Justification::centredLeft, 3, 1.0f);
     }
 }

@@ -65,14 +65,25 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
 
     timeScrollBar.setAutoHide (false);
     timeScrollBar.addListener (this);
+
+    // Both scrollbars sit on the dark arrangement, so they use its colour in
+    // either theme (read by IkarosLookAndFeel::drawScrollbar).
+    timeScrollBar.getProperties().set ("arrangement", true);
+    viewport.getVerticalScrollBar().getProperties().set ("arrangement", true);
     addAndMakeVisible (timeScrollBar);
 
     // Snap lives above the track headers, next to "TRACKS", styled like the
     // headers' small buttons. (Zoom is in the bottom strip: see resized.)
-    auto snapColours = IconButton::raisedColours();
-    snapColours.background = colour::buttonFill;
-    snapColours.border = colour::buttonBorder;
-    snapColours.borderOn = colour::accent;
+    // Colours are given as functions the buttons call when they paint (see
+    // IconButton::ColourScheme), so they follow the theme.
+    auto snapColours = []
+    {
+        auto c = IconButton::raisedColours();
+        c.background = theme().buttonFill;
+        c.border = theme().buttonBorder;
+        c.borderOn = theme().accent;
+        return c;
+    };
     snapButton.setColours (snapColours);
     snapButton.setFont (fonts::ui (textSize::xs));
     snapButton.setCornerRadius (size::radiusSmall);
@@ -81,10 +92,14 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     addAndMakeVisible (snapButton);
 
     // Show Automation: every track's automation at once (amber while it's on).
-    auto automationColours = snapColours;   // like the snap button, amber when on
-    automationColours.foreground = colour::buttonIcon;
-    automationColours.backgroundOn = colour::accent;
-    automationColours.foregroundOn = colour::textOnAccent;
+    auto automationColours = [snapColours]   // like the snap button, amber when on
+    {
+        auto c = snapColours();
+        c.foreground = theme().buttonIcon;
+        c.backgroundOn = theme().accent;
+        c.foregroundOn = theme().textOnAccent;
+        return c;
+    };
     automationButton.setColours (automationColours);
     automationButton.setCornerRadius (size::radiusSmall);
     automationButton.setIconSize (16.0f);
@@ -108,9 +123,12 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     // row under the last track, but it stays in view however many tracks
     // there are. (The Sections row's button below it is a flag, so this is
     // the only "+" there.)
-    auto newTrackColours = snapColours;
-    newTrackColours.foreground = colour::buttonIcon;
-    newTrackButton.setColours (newTrackColours);
+    newTrackButton.setColours ([snapColours]
+    {
+        auto c = snapColours();
+        c.foreground = theme().buttonIcon;
+        return c;
+    });
     newTrackButton.setCornerRadius (size::radiusSmall);
     newTrackButton.setIconSize (14.0f);
     newTrackButton.setTooltip ("Add track");
@@ -123,7 +141,8 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     // outline and the lines between them, like the app's segmented controls.
     for (auto* b : { &zoomOutButton, &zoomResetButton, &zoomInButton })
     {
-        b->setColours ({ juce::Colours::transparentBlack, colour::buttonIcon, juce::Colours::transparentBlack, colour::buttonIcon });
+        b->setColours ([] { return IconButton::Colours { juce::Colours::transparentBlack, theme().buttonIcon,
+                                                         juce::Colours::transparentBlack, theme().buttonIcon }; });
         b->setCornerRadius (size::radiusSmall);
         b->setIconSize (13.0f);
         addAndMakeVisible (b);
@@ -523,24 +542,24 @@ void ArrangementView::updateTransport()
 
 void ArrangementView::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
+    g.fillAll (theme().arrangement.laneBg);   // under the lanes: the scrollbar strip
 
     // The bottom strip: a line along its top, and under the track headers
     // the column's background (the zoom slider sits there), with its divider.
     auto strip = getLocalBounds().removeFromBottom (bottomBarHeight);
     auto corner = strip.withWidth (headerWidth);
-    g.setColour (colour::trackColumnBg);
+    g.setColour (theme().trackColumnBg);
     g.fillRect (corner.withTrimmedRight (1));
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (corner.removeFromRight (1));
-    g.setColour (colour::trackRowLine);
+    g.setColour (theme().trackRowLine);
     g.fillRect (strip.removeFromTop (1));
 
     // The zoom buttons: one outline around all three, a line between each.
     const auto group = zoomButtonsArea.toFloat();
-    g.setColour (colour::buttonFill);
+    g.setColour (theme().buttonFill);
     g.fillRoundedRectangle (group, size::radiusSmall);
-    g.setColour (colour::buttonBorder);
+    g.setColour (theme().buttonBorder);
     g.drawRoundedRectangle (group.reduced (0.5f), size::radiusSmall, 1.0f);
 
     for (auto* b : { &zoomResetButton, &zoomInButton })
@@ -549,7 +568,7 @@ void ArrangementView::paint (juce::Graphics& g)
 
 void ArrangementView::paintOverChildren (juce::Graphics& g)
 {
-    icons::draw (g, Icon::search, zoomIconArea.toFloat(), colour::textSecondary, 13.0f, 1.6f);
+    icons::draw (g, Icon::search, zoomIconArea.toFloat(), theme().textSecondary, 13.0f, 1.6f);
 }
 
 void ArrangementView::resized()

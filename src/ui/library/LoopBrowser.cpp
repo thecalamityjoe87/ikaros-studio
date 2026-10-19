@@ -173,7 +173,7 @@ public:
 
         if (item.kind == Item::Kind::more)
         {
-            g.setColour (over ? colour::text : colour::textSecondary);
+            g.setColour (over ? theme().text : theme().textSecondary);
             g.setFont (fonts::uiSemiBold (textSize::md));
             g.drawText (item.name, getLocalBounds(), juce::Justification::centred);
             return;
@@ -181,7 +181,7 @@ public:
 
         // Playing is shown by the preview button's stop icon, as in the
         // sidebar, so the row itself only lights up under the mouse.
-        g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
+        g.setColour (over ? (down ? theme().rowPressed : theme().rowHover) : juce::Colours::transparentBlack);
         g.fillRoundedRectangle (r, size::radius);
 
         auto content = getContentArea();
@@ -196,28 +196,28 @@ public:
 
             if (busy)
             {
-                g.setColour (colour::textSecondary);
+                g.setColour (theme().textSecondary);
                 g.setFont (fonts::ui (textSize::lg));
                 g.drawText ("...", zone.toNearestInt(), juce::Justification::centredRight);
             }
             else if (item.removable)
             {
-                icons::draw (g, Icon::trash, zone.removeFromRight (15.0f), onAction ? colour::record : colour::textSecondary, 15.0f);
+                icons::draw (g, Icon::trash, zone.removeFromRight (15.0f), onAction ? theme().record : theme().textSecondary, 15.0f);
             }
             else
             {
-                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? colour::text : colour::textSecondary, 14.0f);
+                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? theme().text : theme().textSecondary, 14.0f);
             }
         }
 
         g.setFont (fonts::ui (textSize::sm));
         auto detailWidth = juce::jmin (content.getWidth() / 2,
                                        (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), item.detail)) + 4);
-        g.setColour (item.added ? colour::effectOn : colour::textSecondary);
+        g.setColour (item.added ? theme().effectOn : theme().textSecondary);
         g.drawText (item.detail, content.removeFromRight (detailWidth), juce::Justification::centredRight, true);
 
         g.setFont (fonts::ui (textSize::lg));
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.drawText (item.name, content.withTrimmedRight (6), juce::Justification::centredLeft, true);
 
         if (hasKeyboardFocus (false))
@@ -294,11 +294,9 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
     // Tabs and filter chips are choices, not "on" states: neutral when chosen.
-    auto grey = IconButton::neutralToggleColours();
-
     for (auto* b : { &backButton, &mineTab, &freesoundTab, &tempoButton })
     {
-        b->setColours (grey);
+        b->setColours (IconButton::neutralToggleColours);
         b->setCornerRadius (6.0f);
         b->setFont (fonts::uiSemiBold (textSize::sm));
         b->setIconSize (14.0f);
@@ -309,7 +307,7 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     {
         const char* name = filterGroups()[(size_t) i].name;
         auto* tab = filterTabs.add (new IconButton (name, std::nullopt, name));
-        tab->setColours (grey);
+        tab->setColours (IconButton::neutralToggleColours);
         tab->setCornerRadius (6.0f);
         tab->setFont (fonts::uiSemiBold (textSize::xs));
         tab->setTooltip (juce::String ("Choose a ") + juce::String (name).toLowerCase() + " to narrow the loops. Click again to fold it away.");
@@ -326,14 +324,14 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
 
     buildChips();
 
-    clearButton.setColours (grey);
+    clearButton.setColours (IconButton::neutralToggleColours);
     clearButton.setCornerRadius (6.0f);
     clearButton.setIconSize (12.0f);
     clearButton.setTooltip ("Clear all filters: instrument, genre, mood, tempo and search");
     clearButton.onClick = [this] { clearFilters(); };
     addAndMakeVisible (clearButton);
 
-    setupButton.setColours (IconButton::primaryColours());
+    setupButton.setColours (IconButton::primaryColours);
     setupButton.setFont (fonts::uiSemiBold (textSize::md));
     addChildComponent (setupButton);
 
@@ -460,7 +458,7 @@ void LoopBrowser::setScope (Scope s)
     freesoundTab.setToggleState (scope == Scope::freesound, juce::dontSendNotification);
     searchField.setText (scope == Scope::mine ? mineQuery : freesoundQuery, false);
     searchField.setTextToShowWhenEmpty (scope == Scope::mine ? "Search your loops" : "Search Freesound loops",
-                                        colour::textSecondary);
+                                        theme().textSecondary);
 
     if (scope == Scope::freesound && freesoundNeedsSearch())
         searchFreesound();   // the most downloaded, to start with
@@ -531,14 +529,13 @@ void LoopBrowser::buildChips()
         return;
 
     // Tabs and filter chips are choices, not "on" states: neutral when chosen.
-    auto grey = IconButton::neutralToggleColours();
     auto& options = filterGroups()[(size_t) filterTab].options;
 
     for (int i = 0; i < (int) options.size(); ++i)
     {
         const char* label = options[(size_t) i].label;
         auto* chip = chips.add (new IconButton (label, std::nullopt, label));
-        chip->setColours (grey);
+        chip->setColours (IconButton::neutralToggleColours);
         chip->setCornerRadius (6.0f);
         chip->setFont (fonts::ui (textSize::sm));
         chip->setToggleState (chosen[filterTab] == i, juce::dontSendNotification);
@@ -821,16 +818,16 @@ void LoopBrowser::paintOverChildren (juce::Graphics& g)
 {
     // Magnifier inside the search field (its left indent leaves room).
     icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (34).toFloat().translated (2.0f, 0.0f),
-                 searchField.isEnabled() ? colour::textSecondary : colour::borderStrong, 15.0f, 1.8f);
+                 searchField.isEnabled() ? theme().textSecondary : theme().borderStrong, 15.0f, 1.8f);
 }
 
 void LoopBrowser::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().librarySidebarBg);
+    g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText (heading, headingArea, juce::Justification::centredLeft, true);
 
@@ -842,7 +839,7 @@ void LoopBrowser::paint (juce::Graphics& g)
 
     if (scope == Scope::freesound)
     {
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::xs));
         g.drawFittedText ("Loops from freesound.org, shared under CC0 or CC BY. Each one is credited to its author.",
                           footerArea, juce::Justification::centredLeft, 3, 1.0f);

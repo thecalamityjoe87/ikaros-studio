@@ -8,18 +8,16 @@ namespace ikaros
 
 using namespace tokens;
 
-PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour accent)
+PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, Family family)
     : engine (e), trackId (t), pluginId (p)
 {
-    powerButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
+    powerButton.setColours (IconButton::powerColours);
     powerButton.setCornerRadius (6.0f);
     powerButton.setIconSize (14.0f);
     powerButton.onClick = [this] { engine.getTracks().effects().setEffectEnabled (trackId, pluginId, ! slot.enabled); };
     addAndMakeVisible (powerButton);
 
-    auto doneColours = IconButton::raisedColours();
-    doneColours.border = colour::border;
-    doneButton.setColours (doneColours);
+    doneButton.setColours (IconButton::borderedColours);
     doneButton.setFont (fonts::uiSemiBold (textSize::md));
     doneButton.setTooltip ("Close the effect settings");
     doneButton.onClick = [this] { if (onClose) onClose(); };
@@ -30,7 +28,7 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, juce::Colour 
     for (int i = 0; i < (int) params.size(); ++i)
     {
         auto* knob = knobs.add (new Knob (params[(size_t) i].name));
-        knob->setArcColour (accent);
+        knob->setArcFamily (family);
         knob->onDragStart = [this, knob] { engine.beginUndoStep (slot.name + " " + knob->getName()); };
         knob->onValueChange = [this, i] (float v)
         {
@@ -105,13 +103,13 @@ void PluginEditor::paint (juce::Graphics& g)
 {
     auto header = getLocalBounds().removeFromTop (headerHeight).withTrimmedLeft (padding + 32);
 
-    g.setColour (slot.enabled ? colour::text : colour::textSecondary);
+    g.setColour (slot.enabled ? theme().text : theme().textSecondary);
     g.setFont (fonts::uiBold (textSize::xl));
     g.drawText (slot.name + (slot.enabled ? "" : " (off)"), header, juce::Justification::centredLeft, true);
 
     if (knobs.isEmpty())
     {
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
         g.drawText ("This effect has no settings.", getLocalBounds().withTrimmedTop (headerHeight).reduced (padding),
                     juce::Justification::topLeft);

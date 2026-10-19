@@ -45,7 +45,7 @@ public:
 private:
     ArrangementView& owner;
     const TrackId trackId;
-    juce::Colour colour;
+    tokens::Family family = tokens::Family::loops;   // the track's, for its regions
     bool selected = false, isAudio = false, showFocusRing = false;
     double recordStart = 0.0, recordEnd = 0.0;
     std::map<RegionId, std::unique_ptr<RegionComponent>> regions;

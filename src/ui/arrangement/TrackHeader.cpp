@@ -48,19 +48,25 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
 
     // The small square buttons: grey with a muted icon, filled when on.
     // (borderOn = the fill colour: no grey ring around an "on" button.)
-    auto setupToggle = [this] (IconButton& b, juce::Colour onColour, juce::Colour onIconColour)
+    // onColour is a function, called when the button paints, so it picks up
+    // the current theme's colour.
+    auto setupToggle = [this] (IconButton& b, juce::Colour (*onColour)())
     {
-        b.setColours ({ colour::buttonFill, colour::buttonIcon, onColour, onIconColour, colour::buttonBorder,
-                        std::nullopt, std::nullopt, onColour });
+        b.setColours ([onColour]
+        {
+            return IconButton::Colours { theme().buttonFill, theme().buttonIcon, onColour(), theme().textOnAccent,
+                                         theme().buttonBorder, std::nullopt, std::nullopt, onColour() };
+        });
         b.setCornerRadius (size::radiusSmall);
         b.setIconSize (14.0f);
         addAndMakeVisible (b);
     };
 
-    setupToggle (muteButton, colour::accent, colour::textOnAccent);   // a muted track's Mute is "on"
-    setupToggle (soloButton, colour::solo, colour::textOnAccent);
-    setupToggle (automationButton, colour::accent, colour::textOnAccent);   // while the track's automation shows
-    setupToggle (monitorButton, colour::effectOn, colour::textOnAccent);    // same green as the Recording inspector's
+    // A lambda with no captures converts to a plain function pointer.
+    setupToggle (muteButton, [] { return theme().accent; });         // a muted track's Mute is "on"
+    setupToggle (soloButton, [] { return theme().solo; });
+    setupToggle (automationButton, [] { return theme().accent; });   // while the track's automation shows
+    setupToggle (monitorButton, [] { return theme().effectOn; });    // same green as the Recording inspector's
     monitorButton.setVisible (false);   // audio tracks only (see update)
 
     muteButton.setTooltip ("Mute");
@@ -74,8 +80,11 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     // small buttons beside it, and a grey dot. Armed, it fills red with a
     // white dot and keeps the border. Half its size as the corner radius
     // makes the rounded rectangle a circle.
-    armButton.setColours ({ colour::buttonFill, colour::buttonIcon, colour::record, colour::textOnColour,
-                            colour::buttonBorder });
+    armButton.setColours ([]
+    {
+        return IconButton::Colours { theme().buttonFill, theme().buttonIcon, theme().record, theme().textOnColour,
+                                     theme().armBorder };
+    });
     armButton.setCornerRadius (armSize * 0.5f);
     armButton.setIconSize (10.0f);
     armButton.onClick = [this]
@@ -88,8 +97,11 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     monitorButton.onClick = [this] { setMonitoringWithWarning (engine, info.id, ! info.monitoring, this); };
 
     // Flex (audio tracks): amber while it's on.
-    flexButton.setColours ({ colour::buttonFill, colour::buttonIcon, colour::accent, colour::textOnAccent, colour::buttonBorder,
-                             std::nullopt, std::nullopt, colour::accent });
+    flexButton.setColours ([]
+    {
+        return IconButton::Colours { theme().buttonFill, theme().buttonIcon, theme().accent, theme().textOnAccent,
+                                     theme().buttonBorder, std::nullopt, std::nullopt, theme().accent };
+    });
     flexButton.setCornerRadius (size::radiusXs);
     flexButton.setFont (fonts::uiSemiBold (textSize::xs));
     flexButton.onClick = [this]
@@ -112,6 +124,7 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     muteButton.onClick = [this] { engine.getTracks().setMute (info.id, ! info.muted); };
     soloButton.onClick = [this] { engine.getTracks().setSolo (info.id, ! info.solo); };
 
+    volume.setStyle (MeterSlider::Style::trackHeader);
     volume.setVelocityModeParameters (1.0, 1, 0.0, false);
     volume.setDoubleClickReturnValue (true, TrackController::getFaderPositionForDb (0.0f));
     // One undo step per drag: start a transaction when the mouse goes down.
@@ -223,7 +236,7 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     const int panAmount = juce::roundToInt (std::abs (t.pan) * 100.0f);
     pan.setTooltip ("Pan: " + (panAmount == 0 ? juce::String ("center") : (t.pan < 0.0f ? "left " : "right ") + juce::String (panAmount))
                     + " (double-click to center)");
-    pan.setColour (IkarosLookAndFeel::knobArcColourId, colour::forTrack (t));
+    IkarosLookAndFeel::setFamilyColour (pan, colour::familyOf (t), IkarosLookAndFeel::FamilyShade::ink);
 
     const bool wasAudio = monitorButton.isVisible();
     const bool hadClipLight = clipLight.isVisible();
@@ -301,7 +314,7 @@ juce::PopupMenu TrackHeader::createIconMenu (AudioEngine& engine, TrackId id)
     const auto current = track->icon;
 
     menu.addItem (juce::PopupMenu::Item ("Automatic (follows the sound)")
-                      .setImage (icons::createDrawable (icons::forCategory (track->category), colour::textSecondary))
+                      .setImage (icons::createDrawable (icons::forCategory (track->category), theme().textSecondary))
                       .setTicked (current.isEmpty())
                       .setAction ([&engine, id] { engine.getTracks().setTrackIcon (id, {}); }));
     menu.addSeparator();
@@ -334,7 +347,7 @@ void TrackHeader::showAutomationMenu()
 
         // Settings with automation stand out, in the same colour as their controls.
         if (a.automated)
-            item.setColour (colour::automated);
+            item.setColour (theme().automated);
 
         item.setAction ([&eng, id, targetId = a.id] { eng.getTracks().automation().setLaneTarget (id, targetId); });
         return item;
@@ -422,16 +435,16 @@ void TrackHeader::paint (juce::Graphics& g)
     // Unselected headers are see-through: the column's background shows.
     auto r = getLocalBounds();
 
-    g.setColour (colour::trackRowLine);
+    g.setColour (theme().trackRowLine);
     g.fillRect (r.removeFromBottom (1));
 
     if (selected)
     {
         // The selected track: a lighter background and a subtle 1px outline
         // just inside its edges (drawRect draws inside the rectangle it's given).
-        g.setColour (colour::selectedBg);
+        g.setColour (theme().selectedBg);
         g.fillRect (r);
-        g.setColour (colour::selectedInset);
+        g.setColour (theme().selectedInset);
         g.drawRect (r, 1);
     }
 
@@ -440,15 +453,16 @@ void TrackHeader::paint (juce::Graphics& g)
     g.setColour (trackColour);
     g.fillRect (r.removeFromLeft (edgeWidth));
 
-    // Icon tile: tinted with the track colour. The icon the user picked, or
-    // else the one the sound suggests, or else the category's.
-    g.setColour (trackColour.withAlpha (colour::trackTileAlpha));
+    // Icon tile: tinted with the track colour, the icon in its ink shade
+    // (deeper in light mode, so it reads on the pale tile). The icon the
+    // user picked, or else the one the sound suggests, or else the category's.
+    g.setColour (trackColour.withAlpha (theme().trackTileAlpha));
     g.fillRoundedRectangle (iconArea.toFloat(), size::radiusMedium);
     icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
-                 iconArea.toFloat(), trackColour, 18.0f);
+                 iconArea.toFloat(), theme().ink (colour::familyOf (info)), 18.0f);
 
     // The name, cut short with "..." if it doesn't fit.
-    g.setColour (info.silencedBySolo || info.muted ? colour::textSecondary : colour::text);
+    g.setColour (info.silencedBySolo || info.muted ? theme().textSecondary : theme().text);
     g.setFont (selected ? fonts::uiBold (textSize::md) : fonts::uiSemiBold (textSize::md));
     g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
@@ -466,7 +480,7 @@ void TrackHeader::paint (juce::Graphics& g)
         const float soundWidth = juce::jmin (juce::GlyphArrangement::getStringWidth (nameFont, info.soundName) + 1.0f,
                                              row.getWidth() - dbWidth - separatorWidth);
 
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (nameFont);
         g.drawText (info.soundName, row.removeFromLeft (juce::jmax (0.0f, soundWidth)), juce::Justification::centredLeft, true);
         g.drawText (separator, row.removeFromLeft (separatorWidth), juce::Justification::centredLeft, false);
@@ -479,16 +493,16 @@ void TrackHeader::paint (juce::Graphics& g)
         // The automation picker: the setting's name (amber if it has
         // automation, like its control) and a chevron.
         const auto pill = pickerArea.toFloat();
-        g.setColour (colour::buttonFill);
+        g.setColour (theme().buttonFill);
         g.fillRoundedRectangle (pill, size::radiusSmall);
         auto text = pill.reduced (8.0f, 0.0f);
-        icons::draw (g, Icon::chevronDown, text.removeFromRight (12.0f), colour::textSecondary, 12.0f);
+        icons::draw (g, Icon::chevronDown, text.removeFromRight (12.0f), theme().textSecondary, 12.0f);
 
         // A dot in the curve's colour, so it's clear which curve this is.
         g.setColour (getAutomationColour (info.automationTarget));
         g.fillEllipse (text.removeFromLeft (8.0f).withSizeKeepingCentre (8.0f, 8.0f));
         text.removeFromLeft (6.0f);
-        g.setColour (automationTargetAutomated ? colour::automated : colour::text);
+        g.setColour (automationTargetAutomated ? theme().automated : theme().text);
         g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (automationName, text, juce::Justification::centredLeft, true);
     }

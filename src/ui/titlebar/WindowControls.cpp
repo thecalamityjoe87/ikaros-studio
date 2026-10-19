@@ -8,18 +8,27 @@ using namespace tokens;
 
 WindowControls::WindowControls()
 {
-    auto normal = IconButton::Colours { juce::Colours::transparentBlack, colour::textMenu,
-                                        juce::Colours::transparentBlack, colour::textMenu };
-    normal.hoverBackground = colour::raised;
-    normal.hoverForeground = colour::text;
+    // Functions the buttons call when they paint (see IconButton::ColourScheme).
+    auto normal = []
+    {
+        IconButton::Colours c { juce::Colours::transparentBlack, theme().textMenu,
+                                juce::Colours::transparentBlack, theme().textMenu };
+        c.hoverBackground = theme().raised;
+        c.hoverForeground = theme().text;
+        return c;
+    };
 
-    auto close = normal;
-    close.hoverBackground = colour::record.darker (0.15f);
-    close.hoverForeground = colour::textOnColour;
+    auto close = [normal]
+    {
+        auto c = normal();
+        c.hoverBackground = theme().record.darker (0.15f);
+        c.hoverForeground = theme().textOnColour;
+        return c;
+    };
 
     for (auto* b : { &minimiseButton, &maximiseButton, &closeButton })
     {
-        b->setColours (b == &closeButton ? close : normal);
+        b->setColours (b == &closeButton ? IconButton::ColourScheme (close) : IconButton::ColourScheme (normal));
         b->setCornerRadius (0.0f);
         b->setIconSize (16.0f);
         addAndMakeVisible (b);

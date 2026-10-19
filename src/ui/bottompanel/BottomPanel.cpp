@@ -53,9 +53,7 @@ public:
 
         addAndMakeVisible (keyboard);
 
-        auto colours = IconButton::raisedColours();
-        colours.border = colour::border;
-        openWindowButton.setColours (colours);
+        openWindowButton.setColours (IconButton::borderedColours);
         openWindowButton.setFont (fonts::uiSemiBold (textSize::md));
         openWindowButton.setIconSize (16.0f);
         openWindowButton.onClick = [this]
@@ -65,7 +63,7 @@ public:
         };
         addChildComponent (openWindowButton);
 
-        downloadButton.setColours (IconButton::primaryColours());
+        downloadButton.setColours (IconButton::primaryColours);
         downloadButton.setFont (fonts::uiSemiBold (textSize::md));
         downloadButton.onClick = [this]
         {
@@ -82,7 +80,7 @@ public:
     {
         auto id = selection.getTrack();
         auto& tc = engine.getTracks();
-        auto arc = track.has_value() ? colour::forTrack (*track) : colour::master;   // the Smart Controls follow the selected track's family
+        auto arc = track.has_value() ? colour::familyOf (*track) : Family::master;   // the Smart Controls follow the selected track's family
 
         // Audio tracks have no synth: no knobs or keyboard, just a pointer
         // to where their settings are.
@@ -118,7 +116,7 @@ public:
         {
             knobs[i]->setName (controls[(size_t) i].name);
             knobs[i]->setValue (controls[(size_t) i].value, controls[(size_t) i].valueText);
-            knobs[i]->setArcColour (arc);
+            knobs[i]->setArcFamily (arc);
             knobs[i]->setEnabled (track.has_value());
             setAutomatedLook (knobs[i]->getSlider(), automated.contains (automationTargets::soundControl (i)));
         }
@@ -163,15 +161,15 @@ public:
             return;
 
         auto area = keyboard.getBounds().toFloat();
-        g.setColour (colour::toolbarBg.withAlpha (0.82f));
+        g.setColour (theme().bottomPanelBg.withAlpha (0.82f));
         g.fillRoundedRectangle (area, size::radius);
 
         const auto dots = juce::String ("...").substring (0, 1 + (loadingTicks / 10) % 3);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiSemiBold (textSize::xl));
         g.drawText ("Loading " + (soundName.isNotEmpty() ? soundName : juce::String ("sound")) + dots,
                     area.removeFromTop (area.getHeight() * 0.55f), juce::Justification::centredBottom);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
         g.drawText ("Big sounds can take a little while. You can play as soon as this goes away.",
                     area, juce::Justification::centredTop);
@@ -179,20 +177,24 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        for (auto* k : knobs)
+            if (k->isVisible())
+                Knob::drawShadow (g, *k);
+
         if (! isAudioTrack && ! hasKnobs)
         {
             auto r = cardArea;
-            g.setColour (colour::cardBg);
+            g.setColour (theme().cardBg);
             g.fillRoundedRectangle (r.toFloat(), size::radiusCard);
 
             auto text = r.reduced (20, 16);
             const auto name = ! instrument.has_value() ? juce::String ("No instrument")
                             : instrument->isThirdParty ? instrument->name
                                                        : soundName;   // e.g. "Soft Piano" rather than "Sampler"
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.setFont (fonts::uiBold (textSize::xl));
             g.drawText (name, text.removeFromTop (24), juce::Justification::centredLeft, true);
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::ui (textSize::md));
 
             juce::String message;
@@ -221,14 +223,14 @@ public:
 
         if (isAudioTrack)
         {
-            g.setColour (colour::cardBg);
+            g.setColour (theme().cardBg);
             g.fillRoundedRectangle (cardArea.toFloat(), size::radiusCard);
 
             auto text = cardArea.reduced (20, 16);
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.setFont (fonts::uiBold (textSize::xl));
             g.drawText ("Audio track", text.removeFromTop (24), juce::Justification::centredLeft);
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::ui (textSize::md));
             g.drawFittedText ("Choose the input and monitoring under Recording on the left, and shape the sound "
                               "with Plug-ins. Press R or the Record button to record.",
@@ -318,7 +320,7 @@ public:
     explicit MasterPage (AudioEngine& e) : engine (e)
     {
         volume.setName ("Volume");
-        volume.setArcColour (colour::master);
+        volume.setArcFamily (Family::master);
         volume.onDragStart = [this] { engine.beginUndoStep ("Master Volume"); };
         volume.onValueChange = [this] (float v)
         {
@@ -340,14 +342,16 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (colour::cardBg);
+        Knob::drawShadow (g, volume);
+
+        g.setColour (theme().cardBg);
         g.fillRoundedRectangle (cardArea.toFloat(), size::radiusCard);
 
         auto text = cardArea.reduced (20, 16);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiBold (textSize::xl));
         g.drawText ("Master", text.removeFromTop (24), juce::Justification::centredLeft);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Everything you hear, mixed together. Effects under Plug-ins on the left work on the "
                           "whole mix, and the EQ tab shapes its tone.",
@@ -409,7 +413,6 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     // paint), and the chosen segment is a rounded pill inside it, like the
     // rest of the app's buttons. Chosen segments are neutral
     // (neutralActive), never the accent.
-    auto tabColours = IconButton::segmentColours();
 
     int index = 0;
 
@@ -427,7 +430,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
 
     for (auto* b : { &soundTab, &editorTab, &eqTab, &mixerButton })
     {
-        b->setColours (tabColours);
+        b->setColours (IconButton::segmentColours);
         b->setCornerRadius (segmentRadius);
         b->setFont (fonts::uiBold (textSize::md));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
@@ -437,7 +440,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     // Track | Master: the same look, smaller, a radio group of its own.
     for (auto* b : { &trackModeButton, &masterModeButton, &regionModeButton })
     {
-        b->setColours (tabColours);
+        b->setColours (IconButton::segmentColours);
         b->setCornerRadius (smallSegmentRadius);
         b->setFont (fonts::uiSemiBold (textSize::sm));
         b->setRadioGroupId (2);
@@ -484,7 +487,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addChildComponent (regionInspector);
 
     // Inspector: a neutral toggle (neutralActive while the column shows).
-    inspectorButton.setColours (IconButton::neutralToggleColours());
+    inspectorButton.setColours (IconButton::neutralToggleColours);
     inspectorButton.setFont (fonts::ui (textSize::md));
     inspectorButton.setTooltip ("Show or hide the inspector");
     inspectorButton.setToggleState (inspectorVisible, juce::dontSendNotification);
@@ -496,7 +499,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addAndMakeVisible (inspectorButton);
 
     // An ordinary button, like the rest of the header's.
-    collapseButton.setColours (IconButton::raisedColours());
+    collapseButton.setColours (IconButton::raisedColours);
     collapseButton.setTooltip ("Hide panel");
     collapseButton.onClick = [this] { if (onCollapseRequested) onCollapseRequested (! collapsed); };
     addAndMakeVisible (collapseButton);
@@ -624,7 +627,7 @@ void BottomPanel::openEffect (PluginId id)
         return;
 
     effectViewport.setViewedComponent (nullptr, false);
-    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? colour::master : colour::forTrack (*t));
+    effectEditor = std::make_unique<PluginEditor> (engine, getTarget(), id, showsMaster() ? Family::master : colour::familyOf (*t));
 
     // onClose runs from inside the editor (its Done button or its timer), so
     // the editor can't be deleted right there; close on the next message-loop
@@ -721,7 +724,7 @@ void BottomPanel::refreshTrack()
     inspector.refresh();
     soundPage->refresh (track);
     masterPage->refresh();
-    eqView.setTarget (getTarget(), showsMaster() ? colour::master : track.has_value() ? colour::forTrack (*track) : colour::master);
+    eqView.setTarget (getTarget(), ! showsMaster() && track.has_value() ? colour::familyOf (*track) : Family::master);
 
     if (mixer.isVisible())
         mixer.refresh();
@@ -747,13 +750,13 @@ void BottomPanel::refreshEditor()
 
     // The region picks the editor; with none, the track does.
     const bool audio = region.has_value() ? ! region->isMidi : audioTrack;
-    const auto trackColour = track.has_value() ? colour::forTrack (*track) : colour::master;
+    const auto family = track.has_value() ? colour::familyOf (*track) : Family::master;
 
     // Only one of them has the region, so the other forgets its drag and view.
     const auto tempo = engine.getTempoMap();
-    pianoRoll.setRegion (audio ? std::nullopt : region, trackColour, tempo);
-    audioEditor.setRegion (audio ? region : std::nullopt, trackColour, tempo);
-    regionInspector.setRegion (region, trackColour);
+    pianoRoll.setRegion (audio ? std::nullopt : region, family, tempo);
+    audioEditor.setRegion (audio ? region : std::nullopt, family, tempo);
+    regionInspector.setRegion (region, family);
     editorRegion = region;
 
     // Picking a region (in the arrangement) shows its settings, like GarageBand.
@@ -802,8 +805,8 @@ void BottomPanel::update()
 
 void BottomPanel::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::toolbarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().bottomPanelBg);
+    g.setColour (theme().bottomPanelBorder);
     g.fillRect (getLocalBounds().removeFromTop (1));
 
     // Collapsed, the strip is all grip (the ResizeHandle laid over it draws
@@ -811,22 +814,25 @@ void BottomPanel::paint (juce::Graphics& g)
     if (collapsed)
         return;
 
-    g.setColour (colour::wellBg);
+    g.setColour (theme().wellBg);
     g.fillRect (0, handleHeight + headerHeight, getWidth(), 1);
 
     // The segmented controls' shared background and outline; the buttons
     // inside draw only the chosen (or hovered) segment.
     auto drawSegmentBackground = [&g] (juce::Rectangle<int> area, float radius)
     {
-        g.setColour (colour::cardBg);
+        g.setColour (theme().segmentWell);
         g.fillRoundedRectangle (area.toFloat(), radius);
-        g.setColour (colour::border);
+        g.setColour (theme().segmentWellBorder);
         g.drawRoundedRectangle (area.toFloat().reduced (0.5f), radius, 1.0f);
     };
 
     drawSegmentBackground (tabsArea, segmentOutlineRadius);
 
-    g.setColour (colour::border);
+    for (auto* b : { &soundTab, &editorTab, &eqTab, &mixerButton })
+        IconButton::drawSegmentShadow (g, *b);
+
+    g.setColour (theme().border);
     g.fillRect (headerDivider);
 
     // The title: the master, or the selected track (a dot in its colour,
@@ -836,19 +842,19 @@ void BottomPanel::paint (juce::Graphics& g)
 
     auto drawTitle = [&] (const juce::String& title, const juce::String& note)
     {
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiBold (textSize::lg));
         const auto titleWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), title));
         g.drawText (title, r.removeFromLeft (juce::jmin (titleWidth + 2, r.getWidth())), juce::Justification::centredLeft, true);
         r.removeFromLeft (8);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
         g.drawText (note, r, juce::Justification::centredLeft, true);
     };
 
     if (showsMaster())
     {
-        g.setColour (colour::master);
+        g.setColour (theme().family (Family::master));
         g.fillEllipse (r.removeFromLeft (10).withSizeKeepingCentre (10, 10).toFloat());
         r.removeFromLeft (8);
         drawTitle ("Master", "The whole mix");
@@ -862,7 +868,7 @@ void BottomPanel::paint (juce::Graphics& g)
     }
     else
     {
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::lg));
         g.drawText ("No track selected", r, juce::Justification::centredLeft);
     }
@@ -871,18 +877,21 @@ void BottomPanel::paint (juce::Graphics& g)
     // region's name beside it.
     if (showsInspectorColumn())
     {
-        g.setColour (colour::sidebarBg);
+        g.setColour (theme().inspectorBg);
         g.fillRect (switchRow);
-        g.setColour (colour::divider);
+        g.setColour (theme().divider);
         g.fillRect (switchRow.getRight() - 1, switchRow.getY(), 1, switchRow.getHeight());
-        g.setColour (colour::borderSoft);
+        g.setColour (theme().borderSoft);
         g.fillRect (switchRow.getX(), switchRow.getBottom() - 1, switchRow.getWidth() - 1, 1);
 
         drawSegmentBackground (modeArea, smallSegmentOutlineRadius);
 
+        for (auto* b : { &trackModeButton, &masterModeButton, &regionModeButton })
+            IconButton::drawSegmentShadow (g, *b);
+
         if (showsRegionInspector())
         {
-            g.setColour (editorRegion.has_value() ? colour::text : colour::textSecondary);
+            g.setColour (editorRegion.has_value() ? theme().text : theme().textSecondary);
             g.setFont (fonts::ui (textSize::md));
             g.drawText (editorRegion.has_value() ? editorRegion->name : juce::String ("No region selected"),
                         regionNameArea, juce::Justification::centredLeft, true);   // true: "..." if it's too long

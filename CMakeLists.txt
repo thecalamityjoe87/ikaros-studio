@@ -279,11 +279,14 @@ set(IKAROS_PLATFORM_SOURCES
     src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
     src/platform/AppFolders.h          src/platform/AppFolders.cpp
     src/platform/FileLock.h            src/platform/FileLock.cpp
-    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp)
+    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp
+    src/platform/SystemAppearance.h    src/platform/SystemAppearance.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
-    src/ui/theme/Tokens.h
+    src/ui/theme/Tokens.h                   src/ui/theme/Family.h
+    src/ui/theme/Theme.h                    src/ui/theme/Theme.cpp
+    src/ui/theme/ThemeManager.h             src/ui/theme/ThemeManager.cpp
     src/ui/theme/Fonts.h                    src/ui/theme/Fonts.cpp
     src/ui/theme/IkarosLookAndFeel.h        src/ui/theme/IkarosLookAndFeel.cpp
 
@@ -318,6 +321,7 @@ set(IKAROS_UI_SOURCES
     src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp
     src/ui/preferences/PreferencesPage.h    src/ui/preferences/PreferencesPage.cpp
     src/ui/preferences/PreferencesPages.h   src/ui/preferences/PreferencesPages.cpp
+    src/ui/preferences/ThemePicker.h        src/ui/preferences/ThemePicker.cpp
     src/ui/preferences/SoundsPluginsPage.cpp
     src/ui/preferences/AudioSettingsPanel.h src/ui/preferences/AudioSettingsPanel.cpp
 
@@ -435,8 +439,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
 
-    # sd-bus (part of libsystemd) for src/platform/AudioHardware: it asks
-    # RealtimeKit for a real-time audio thread.
+    # sd-bus (part of libsystemd) for src/platform/AudioHardware, which asks
+    # RealtimeKit for a real-time audio thread, and SystemAppearance, which
+    # asks the desktop portal whether dark mode is on.
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(IKAROS_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
     target_link_libraries(IkarosStudio PRIVATE PkgConfig::IKAROS_SYSTEMD)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/theme/Family.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace ikaros
@@ -24,7 +25,8 @@ public:
 
     void setName (const juce::String&) override;
     void setValue (float normalised, const juce::String& valueText);
-    void setArcColour (juce::Colour);
+    /** Colours the value arc in a family's colour (e.g. the selected track's). */
+    void setArcFamily (tokens::Family);
 
     std::function<void (float)> onValueChange;   // normalised 0..1
     std::function<void()> onDragStart;
@@ -33,6 +35,10 @@ public:
     juce::Slider& getSlider() noexcept           { return slider; }
 
     void paint (juce::Graphics&) override;
+
+    /** Draws a knob's card shadow (light mode only). Call it from the
+        parent's paint(): the shadow falls outside the knob's own bounds. */
+    static void drawShadow (juce::Graphics&, const Knob&);
     void resized() override;
 
     static constexpr int preferredWidth = 80;

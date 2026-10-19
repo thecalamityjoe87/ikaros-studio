@@ -31,7 +31,7 @@ void ClipLight::paint (juce::Graphics& g)
     const auto side = (float) juce::jmin (getWidth(), getHeight());
     const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (side, side);
 
-    g.setColour (clipped ? colour::record : colour::controlFill);
+    g.setColour (clipped ? theme().record : theme().controlFill);
     g.fillRoundedRectangle (r, side * 0.3f);
 }
 

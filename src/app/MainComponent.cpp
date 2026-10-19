@@ -146,7 +146,7 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
+    g.fillAll (theme().windowBg);
 }
 
 void MainComponent::resized()

@@ -67,8 +67,8 @@ namespace
 class LibrarySidebar::CategoryTile  : public juce::Button
 {
 public:
-    CategoryTile (const juce::String& n, const juce::String& l, juce::Colour c)
-        : juce::Button (n), name (n), label (l), iconColour (c)
+    CategoryTile (const juce::String& n, const juce::String& l, Family f)
+        : juce::Button (n), name (n), label (l), family (f)
     {
         setTitle (n);
         setTooltip (n == "Loops" ? juce::String ("Browse loops")
@@ -83,18 +83,18 @@ public:
         const bool on = getToggleState();
 
         // The chosen category is neutral: selected fill, grey border.
-        g.setColour (on ? colour::selectedBg : colour::tileBg.brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
+        g.setColour (on ? theme().selectedBg : theme().tileBg.brighter (down ? 0.08f : (over ? 0.04f : 0.0f)));
         g.fillRoundedRectangle (r, size::radius);
-        g.setColour (on ? colour::selectedBorder : colour::borderSoft);
+        g.setColour (on ? theme().selectedBorder : theme().tileBorder);
         g.drawRoundedRectangle (r, size::radius, 1.0f);
 
         auto content = getLocalBounds().reduced (2, 7);
         auto labelArea = content.removeFromBottom (14);
-        icons::draw (g, icons::forCategory (name), content.toFloat(), iconColour, 18.0f);
+        icons::draw (g, icons::forCategory (name), content.toFloat(), theme().ink (family), 18.0f);
 
         // "Woodwinds" only just fits a tile: squash it a little rather than
         // shrink it below the 11px minimum.
-        g.setColour (on ? colour::text : colour::textSecondary);
+        g.setColour (on ? theme().text : theme().textSecondary);
         g.setFont (fonts::ui (textSize::xs));
         g.drawFittedText (label, labelArea, juce::Justification::centred, 1, 0.85f);
 
@@ -106,7 +106,7 @@ public:
 
 private:
     const juce::String label;
-    juce::Colour iconColour;
+    const Family family;   // the icon's colour, looked up when painting
 };
 
 //==============================================================================
@@ -126,7 +126,7 @@ public:
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        g.setColour (over ? colour::text : colour::textSecondary);
+        g.setColour (over ? theme().text : theme().textSecondary);
         g.setFont (getFont());
         g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centredLeft, false);
 
@@ -222,7 +222,7 @@ public:
 
         if (item.kind == Item::Kind::label)
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f));
             g.drawText (item.name.toUpperCase(), getLocalBounds().withTrimmedLeft (size::libraryRowInset).withTrimmedTop (8),
                         juce::Justification::centredLeft);
@@ -235,9 +235,9 @@ public:
         const bool over = isMouseOver (true);   // true over the preview button too
 
         if (active)
-            g.setColour (colour::selectedBg);
+            g.setColour (theme().selectedBg);
         else
-            g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
+            g.setColour (over ? (down ? theme().rowPressed : theme().rowHover) : juce::Colours::transparentBlack);
 
         g.fillRoundedRectangle (r, size::radius);
 
@@ -247,11 +247,11 @@ public:
         switch (item.kind)
         {
             case Item::Kind::folder:
-                icons::draw (g, Icon::folder, content.removeFromLeft (16).toFloat(), colour::textSecondary, 15.0f);
+                icons::draw (g, Icon::folder, content.removeFromLeft (16).toFloat(), theme().textSecondary, 15.0f);
                 content.removeFromLeft (8);
                 break;
             case Item::Kind::pluginEffect:
-                icons::draw (g, Icon::plugin, content.removeFromLeft (16).toFloat(), colour::textSecondary, 14.0f);
+                icons::draw (g, Icon::plugin, content.removeFromLeft (16).toFloat(), theme().textSecondary, 14.0f);
                 content.removeFromLeft (8);
                 break;
             case Item::Kind::sound:
@@ -275,7 +275,7 @@ public:
             paintTag (g, content, item.detail);
 
         g.setFont (fonts::ui (textSize::lg));
-        g.setColour (item.kind == Item::Kind::pack ? colour::textSecondary : colour::text);   // not installed: a little muted
+        g.setColour (item.kind == Item::Kind::pack ? theme().textSecondary : theme().text);   // not installed: a little muted
         g.drawText (item.name, content.withTrimmedRight (6), juce::Justification::centredLeft, true);
 
         if (hasKeyboardFocus (false))
@@ -332,7 +332,7 @@ private:
     {
         g.setFont (fonts::ui (textSize::sm));
         const auto w = juce::jmin (content.getWidth() / 2, textWidth (g.getCurrentFont(), text) + 4);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.drawText (text, content.removeFromRight (w), juce::Justification::centredRight, true);
     }
 
@@ -344,11 +344,11 @@ private:
         const auto w = textWidth (font, text) + 14;
         auto chip = content.removeFromRight (w).withSizeKeepingCentre (w, 20).toFloat();
 
-        g.setColour (colour::neutralActive);
+        g.setColour (theme().neutralActive);
         g.fillRoundedRectangle (chip, chip.getHeight() / 2.0f);
-        g.setColour (colour::selectedBorder);
+        g.setColour (theme().selectedBorder);
         g.drawRoundedRectangle (chip.reduced (0.5f), chip.getHeight() / 2.0f, 1.0f);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (font);
         g.drawText (text, chip, juce::Justification::centred, false);
     }
@@ -367,9 +367,9 @@ private:
         paintTag (g, content, status);
 
         auto button = getRoundButtonArea().toFloat();
-        g.setColour (colour::buttonFill.brighter (isMouseOver() && ! busy ? 0.1f : 0.0f));
+        g.setColour (theme().buttonFill.brighter (isMouseOver() && ! busy ? 0.1f : 0.0f));
         g.fillEllipse (button);
-        g.setColour (colour::buttonBorder);
+        g.setColour (theme().buttonBorder);
         g.drawEllipse (button.reduced (0.5f), 1.0f);
 
         if (busy)
@@ -379,12 +379,12 @@ private:
             const auto progress = state == StorePack::State::installing ? 1.0f : pack->progress;
             arc.addCentredArc (button.getCentreX(), button.getCentreY(), button.getWidth() / 2.0f - 1.0f, button.getHeight() / 2.0f - 1.0f,
                                0.0f, 0.0f, juce::MathConstants<float>::twoPi * juce::jlimit (0.02f, 1.0f, progress), true);
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else
         {
-            icons::draw (g, Icon::download, button, colour::textSecondary, 13.0f);
+            icons::draw (g, Icon::download, button, theme().textSecondary, 13.0f);
         }
     }
 };
@@ -396,7 +396,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     setTitle ("Sound library");
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
-    searchField.setTextToShowWhenEmpty ("Search sounds and loops", colour::textSecondary);
+    searchField.setTextToShowWhenEmpty ("Search sounds and loops", theme().textSecondary);
     searchField.setFont (fonts::ui (textSize::lg));
     searchField.setTitle ("Search sounds");
     searchField.setIndents (36, 9);   // room for the magnifier (see paintOverChildren)
@@ -406,7 +406,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
 
     for (auto& c : categories)
     {
-        auto* tile = tiles.add (new CategoryTile (c.name, c.label, colour::forCategory (c.name)));
+        auto* tile = tiles.add (new CategoryTile (c.name, c.label, colour::familyOf (c.name)));
         tile->onClick = [this, n = juce::String (c.name)]
         {
             if (n == "Loops")
@@ -428,9 +428,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     // Tools above the list (only some categories show them).
     for (auto* b : { &upButton, &chooseFolderButton, &scanButton })
     {
-        auto colours = IconButton::raisedColours();
-        colours.border = colour::border;
-        b->setColours (colours);
+        b->setColours (IconButton::borderedColours);
         b->setCornerRadius (6.0f);
         b->setFont (fonts::ui (textSize::sm));
         b->setIconSize (16.0f);
@@ -453,9 +451,7 @@ LibrarySidebar::LibrarySidebar (AudioEngine& e, Selection& s)
     scanButton.setTooltip ("Look for new plug-ins");
     scanButton.onClick = [this] { showScanMenu(); };
 
-    auto moreColours = IconButton::raisedColours();
-    moreColours.border = colour::border;
-    manageSoundsButton.setColours (moreColours);
+    manageSoundsButton.setColours (IconButton::borderedColours);
     manageSoundsButton.setFont (fonts::uiSemiBold (textSize::md));
     manageSoundsButton.setIconSize (16.0f);
     manageSoundsButton.setTooltip ("Download, update and remove sound packs");
@@ -1057,26 +1053,32 @@ void LibrarySidebar::paintOverChildren (juce::Graphics& g)
     // over the children: the TextEditor fills its own background, so
     // anything paint() drew there would be hidden.
     icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (34).toFloat().translated (2.0f, 0.0f),
-                 colour::textSecondary, 15.0f, 1.8f);
+                 theme().textSecondary, 15.0f, 1.8f);
 }
 
 void LibrarySidebar::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().librarySidebarBg);
+    g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
+
+    // The chosen category tile's shadow (light mode only). It falls outside
+    // the tile, so it's drawn here, under the tiles, rather than by the tile.
+    for (auto* t : tiles)
+        if (t->isVisible() && t->getToggleState())
+            juce::DropShadow (theme().selectedTileShadow, 4, { 0, 1 }).drawForRectangle (g, t->getBounds());
 
     // The count on the right, then the breadcrumb: "All sounds" (a button
     // when there's somewhere to go back from) › the category.
     auto crumb = crumbArea;
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::sm));
     crumb.removeFromRight (textWidth (g.getCurrentFont(), countText) + 8);
     g.drawText (countText, crumbArea, juce::Justification::centredRight, false);
 
     if (crumbText.isEmpty())
     {
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiSemiBold (textSize::md));
         g.drawText ("All sounds", crumb, juce::Justification::centredLeft, true);
     }
@@ -1087,13 +1089,13 @@ void LibrarySidebar::paint (juce::Graphics& g)
         g.setFont (CrumbButton::getFont());
         g.drawText (separator, crumb.removeFromLeft (textWidth (g.getCurrentFont(), separator)), juce::Justification::centred, false);
 
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiSemiBold (textSize::md));
         g.drawText (crumbText, crumb, juce::Justification::centredLeft, true);
     }
 
     // Tools above the list: the folder being shown, or the plug-in scan.
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::sm));
 
     if (upButton.isVisible())

@@ -88,13 +88,17 @@ public:
     void drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> area,
                         bool isDown, bool isOver, juce::Colour, juce::Colour) override
     {
+        // The 1px gaps either side of the key are its dividers.
+        g.setColour (theme().pianoKeyDivider);
+        g.fillRect (area);
+
         auto key = area.reduced (1.0f, 0.0f);
-        g.setColour (isDown ? colour::pianoWhiteDown : (isOver ? colour::pianoWhite.darker (0.05f) : colour::pianoWhite));
+        g.setColour (isDown ? theme().pianoWhiteDown : (isOver ? theme().pianoWhite.darker (0.05f) : theme().pianoWhite));
         g.fillRoundedRectangle (key.withTrimmedTop (-6.0f), size::radiusSmall);   // round only the bottom corners
 
         if (note % 12 == 0)
         {
-            g.setColour (colour::pianoLabel);
+            g.setColour (theme().pianoLabel);
             g.setFont (fonts::ui (textSize::tiny));
             g.drawText ("C" + juce::String (note / 12 - 1), key.removeFromBottom (18.0f), juce::Justification::centred);
         }
@@ -104,10 +108,10 @@ public:
                         bool isDown, bool isOver, juce::Colour) override
     {
         auto key = area.withTrimmedTop (-4.0f);
-        g.setColour (isDown ? colour::pianoBlackDown : (isOver ? colour::pianoBlack.brighter (0.15f) : colour::pianoBlack));
+        g.setColour (isDown ? theme().pianoBlackDown : (isOver ? theme().pianoBlack.brighter (0.15f) : theme().pianoBlack));
         g.fillRoundedRectangle (key, size::radiusXs);
 
-        g.setColour (colour::border);
+        g.setColour (theme().pianoBlackLip);
         g.fillRoundedRectangle (key.removeFromBottom (3.0f), 1.5f);
     }
 };
@@ -124,7 +128,7 @@ PianoKeyboard::PianoKeyboard (AudioEngine& e) : engine (e)
 
     for (auto* b : { &octaveDown, &octaveUp })
     {
-        b->setColours (IconButton::ghostColours());
+        b->setColours (IconButton::ghostColours);
         b->setCornerRadius (6.0f);
         b->setIconSize (18.0f);
         b->setMouseClickGrabsKeyboardFocus (false);
@@ -223,8 +227,11 @@ void PianoKeyboard::handleNoteOff (juce::MidiKeyboardState*, int, int note, floa
 
 void PianoKeyboard::paint (juce::Graphics& g)
 {
-    g.setColour (colour::lcdBg);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusLarge);
+    const auto tray = getLocalBounds().toFloat();
+    g.setColour (theme().keyboardTray);
+    g.fillRoundedRectangle (tray, size::radiusLarge);
+    g.setColour (theme().keyboardTrayBorder);
+    g.drawRoundedRectangle (tray.reduced (0.5f), size::radiusLarge, 1.0f);
 }
 
 void PianoKeyboard::resized()

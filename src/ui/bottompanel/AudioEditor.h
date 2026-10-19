@@ -4,6 +4,7 @@
 #include "engine/FlexEditor.h"
 #include "engine/WaveformCache.h"
 #include "ui/bottompanel/EditorGrid.h"
+#include "ui/theme/Family.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <optional>
 
@@ -54,7 +55,7 @@ public:
     explicit AudioEditor (AudioEngine&);
     ~AudioEditor() override;
 
-    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, const TempoMap&);
+    void setRegion (std::optional<RegionInfo>, tokens::Family, const TempoMap&);
     void setPlayheadBeat (double editBeat);
 
     /** Where the region's edges snap to when they're dragged, and what
@@ -112,7 +113,8 @@ private:
 
     AudioEngine& engine;
     std::optional<RegionInfo> region;
-    juce::Colour colour;
+    tokens::Family family = tokens::Family::master;   // the track's
+    juce::Colour trackColour() const;
     TempoMap tempo;   // the song's bars (they can differ in length)
     double playheadBeat = -1.0;     // on the timeline; <0 = hidden
 

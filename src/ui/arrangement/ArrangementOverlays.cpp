@@ -25,10 +25,10 @@ void ArrangementView::DropZone::paint (juce::Graphics& g)
     const float dashes[] = { 5.0f, 4.0f };
     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
 
-    g.setColour (colour::borderStrong);
+    g.setColour (theme().arrangement.outline);
     g.fillPath (dashed);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().arrangement.textSecondary);
     g.setFont (fonts::ui (textSize::lg));
     g.drawText ("Drop a sound, loop or audio file here", r, juce::Justification::centred);
 }
@@ -49,7 +49,7 @@ void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMou
     // A faint fill on hover, a little more while pressed.
     if (isMouseOver || isButtonDown)
     {
-        g.setColour (colour::tintLight.withAlpha (isButtonDown ? 0.07f : 0.04f));
+        g.setColour (theme().tintLight.withAlpha (isButtonDown ? 0.07f : 0.04f));
         g.fillRoundedRectangle (r, size::radiusMedium);
     }
 
@@ -57,7 +57,7 @@ void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMou
     outline.addRoundedRectangle (r, size::radiusMedium);
     const float dashes[] = { 4.0f, 3.0f };
     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
-    g.setColour (isMouseOver ? colour::textSecondary : colour::outline);
+    g.setColour (isMouseOver ? theme().textSecondary : theme().outline);
     g.fillPath (dashed);
 
     // "+" and the label, centred together.
@@ -67,9 +67,9 @@ void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMou
     const float groupWidth = iconSize + gap + juce::GlyphArrangement::getStringWidth (font, text);
     auto group = r.withSizeKeepingCentre (groupWidth, r.getHeight());
 
-    icons::draw (g, Icon::plus, group.removeFromLeft (iconSize), colour::textSoft, iconSize, 2.2f);
+    icons::draw (g, Icon::plus, group.removeFromLeft (iconSize), theme().textSoft, iconSize, 2.2f);
     group.removeFromLeft (gap);
-    g.setColour (colour::textSoft);
+    g.setColour (theme().textSoft);
     g.setFont (font);
     g.drawText (text, group, juce::Justification::centredLeft, false);
 
@@ -134,7 +134,7 @@ void ArrangementView::Playhead::paint (juce::Graphics& g)
     if (x < -8.0f || x > (float) getWidth() + 8.0f)
         return;
 
-    g.setColour (highlighted ? colour::accent.brighter (0.3f) : colour::accent);
+    g.setColour (highlighted ? theme().arrangement.playhead.brighter (0.3f) : theme().arrangement.playhead);
     g.fillRect (x - 1.0f, 0.0f, 2.0f, (float) getHeight());
 
     if (highlighted)
@@ -198,11 +198,12 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
 {
     for (auto& ghost : ghosts)
     {
-        g.setColour (ghost.colour.withAlpha (0.3f));
+        const auto ghostColour = theme().family (ghost.family);
+        g.setColour (ghostColour.withAlpha (0.3f));
         g.fillRoundedRectangle (ghost.area, size::radius);
-        g.setColour (ghost.colour);
+        g.setColour (ghostColour);
         g.drawRoundedRectangle (ghost.area.reduced (0.75f), size::radius, 1.5f);
-        g.setColour (colour::text);
+        g.setColour (theme().arrangement.text);
         g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (ghost.name, ghost.area.reduced (8.0f, 3.0f).removeFromTop (14.0f),
                     juce::Justification::centredLeft, true);
@@ -210,9 +211,9 @@ void ArrangementView::Overlay::paint (juce::Graphics& g)
 
     if (! dropArea.isEmpty())
     {
-        g.setColour (colour::highlight.withAlpha (0.08f));
+        g.setColour (theme().arrangement.highlight.withAlpha (0.08f));
         g.fillRoundedRectangle (dropArea, size::radiusLarge);
-        g.setColour (colour::highlight);
+        g.setColour (theme().arrangement.highlight);
         g.drawRoundedRectangle (dropArea.reduced (1.0f), size::radiusLarge, 1.5f);
         // Where a file will start. (Sounds have no position: markerX < 0.)
         const bool hasMarker = dropMarkerX >= 0.0f;

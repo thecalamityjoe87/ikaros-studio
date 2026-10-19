@@ -154,7 +154,7 @@ void ArrangementView::RegionDrag::updateMoveDrag (juce::Point<int> pos)
         auto area = owner.rowAreaInOverlay (row);
         ghosts.push_back ({ { owner.geometry.beatToX (r.startBeat + delta), area.getY() + (float) regionTop,
                               juce::jmax (8.0f, owner.geometry.beatsToWidth (r.lengthBeats)), area.getHeight() - (float) regionGap },
-                            tokens::colour::forTrack (owner.tracks[(size_t) row]), r.name });
+                            tokens::colour::familyOf (owner.tracks[(size_t) row]), r.name });
     }
 
     owner.overlay->setGhosts (std::move (ghosts));

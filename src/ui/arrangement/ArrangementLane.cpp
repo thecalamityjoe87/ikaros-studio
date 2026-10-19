@@ -47,7 +47,7 @@ void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
     if (isSelected != selected)
         repaint();
 
-    colour = colour::forTrack (t);
+    family = colour::familyOf (t);
     selected = isSelected;
     isAudio = t.kind == TrackKind::audio;
     // Quieter when muted; fainter still under automation, so the curve stands out.
@@ -62,14 +62,14 @@ void ArrangementView::Lane::updateTrack (const TrackInfo& t, bool isSelected)
 
     // The regions keep what they show; only the colour and selection may differ.
     for (auto& [id, comp] : regions)
-        comp->update (comp->getInfo(), colour, owner.selection.isSelected (id), outlineFor (owner.selection, selected, id));
+        comp->update (comp->getInfo(), family, owner.selection.isSelected (id), outlineFor (owner.selection, selected, id));
 }
 
 void ArrangementView::Lane::updateRegion (const RegionInfo& info)
 {
     if (auto* comp = findRegion (info.id))
     {
-        comp->update (info, colour, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
+        comp->update (info, family, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         resized();   // it may have moved or changed length
     }
 }
@@ -103,7 +103,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
         }
         else
         {
-            comp = std::make_unique<RegionComponent> (info, colour);
+            comp = std::make_unique<RegionComponent> (info, family);
             addAndMakeVisible (*comp);
 
             // The arrangement handles the gestures: it knows about the
@@ -126,7 +126,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             };
         }
 
-        comp->update (info, colour, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
+        comp->update (info, family, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         next[info.id] = std::move (comp);
     }
 
@@ -161,9 +161,9 @@ void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
     auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
     auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
 
-    g.setColour (colour::record.withAlpha (0.25f));
+    g.setColour (theme().arrangement.record.withAlpha (0.25f));
     g.fillRoundedRectangle (r, size::radius);
-    g.setColour (colour::record);
+    g.setColour (theme().arrangement.record);
     g.drawRoundedRectangle (r, size::radius, 1.5f);
 
     g.setFont (fonts::uiBold (textSize::xs));
@@ -175,24 +175,24 @@ void ArrangementView::Lane::paint (juce::Graphics& g)
     auto r = getLocalBounds();
 
     if (selected)
-        g.fillAll (colour::tintLight.withAlpha (colour::selectedLaneTint));
+        g.fillAll (theme().arrangement.selectedLane);
 
     // Beat lines (faint), when zoomed in enough for them to be useful...
     auto& geo = owner.geometry;
 
     if (geo.pixelsPerBeat >= 6.0)
     {
-        g.setColour (colour::tintLight.withAlpha (0.025f));
+        g.setColour (theme().arrangement.gridBeat);
 
         for (double beat = std::ceil (geo.scrollBeats); geo.beatToX (beat) <= (float) getWidth(); beat += 1.0)
             g.fillRect (juce::roundToInt (geo.beatToX (beat)), 0, 1, r.getHeight());
     }
 
     // ...and bar lines (stronger).
-    g.setColour (colour::tintLight.withAlpha (0.05f));
+    g.setColour (theme().arrangement.gridBar);
     forEachVisibleBar (geo, getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
 
-    g.setColour (colour::divider);
+    g.setColour (theme().arrangement.laneDivider);
     g.fillRect (r.removeFromBottom (1));
 
     if (showFocusRing && hasKeyboardFocus (false))

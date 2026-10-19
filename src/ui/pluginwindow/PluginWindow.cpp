@@ -7,7 +7,7 @@ namespace ikaros
 using namespace tokens;
 
 PluginWindow::PluginWindow (PluginWindowRequest request)
-    : juce::DocumentWindow (request.title, colour::windowBg, juce::DocumentWindow::closeButton,
+    : juce::DocumentWindow (request.title, theme().windowBg, juce::DocumentWindow::closeButton,
                             false),   // added to the desktop below, once it has its size
       close (std::move (request.close)),
       onMoved (std::move (request.moved))

@@ -1,6 +1,7 @@
 #include "ui/bottompanel/NoiseGateView.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/TrackColours.h"
 
 namespace ikaros
@@ -13,7 +14,7 @@ NoiseGateView::NoiseGateView (AudioEngine& e, Selection& s) : engine (e), select
     setTitle ("Noise Gate");
 
     // Like the Monitoring button: green while it's on.
-    onButton.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
+    onButton.setColours (IconButton::powerColours);
     onButton.setFont (fonts::uiSemiBold (textSize::sm));
     onButton.setCornerRadius (6.0f);
     onButton.onClick = [this]
@@ -78,7 +79,7 @@ void NoiseGateView::refresh()
             threshold.setValue (gate.threshold, juce::dontSendNotification);
 
         threshold.setEnabled (gate.on);
-        threshold.setColour (juce::Slider::trackColourId, colour::forTrack (*track));
+        IkarosLookAndFeel::setFamilyColour (threshold, colour::familyOf (*track));
         thresholdText = gate.thresholdText;
     }
 
@@ -97,14 +98,14 @@ void NoiseGateView::paint (juce::Graphics& g)
         return;
 
     g.setFont (fonts::ui (textSize::sm));
-    g.setColour (threshold.isEnabled() ? colour::textSecondary : colour::textSecondary.withMultipliedAlpha (0.5f));
+    g.setColour (threshold.isEnabled() ? theme().textSecondary : theme().textSecondary.withMultipliedAlpha (0.5f));
     g.drawText ("Threshold", thresholdRow, juce::Justification::centredLeft);
 
-    g.setColour (threshold.isEnabled() ? colour::text : colour::textSecondary);
+    g.setColour (threshold.isEnabled() ? theme().text : theme().textSecondary);
     g.setFont (fonts::mono (textSize::sm));
     g.drawText (thresholdText, valueArea, juce::Justification::centredRight);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText ("Silences the track while it's quieter than the threshold.",
                       hintArea, juce::Justification::topLeft, 2, 1.0f);

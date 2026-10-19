@@ -89,7 +89,7 @@ public:
     {
         if (folders.isEmpty())
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::ui (textSize::md));
             g.drawText ("None added", listBox.getBounds().reduced (10, 0).withHeight (28), juce::Justification::centredLeft);
         }
@@ -123,11 +123,11 @@ private:
 
         if (selected)
         {
-            g.setColour (colour::selectedRow);
+            g.setColour (theme().selectedRow);
             g.fillRect (0, 0, width, height);
         }
 
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::ui (textSize::md));
         g.drawText (folders[row], 10, 0, width - 20, height, juce::Justification::centredLeft, true);
     }

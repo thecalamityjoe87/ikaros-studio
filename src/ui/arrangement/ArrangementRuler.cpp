@@ -34,16 +34,16 @@ void ArrangementView::Ruler::setLoop (bool on, double start, double end)
 void ArrangementView::Ruler::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds();
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().rulerBg);
+    g.setColour (theme().divider);
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
-    g.setColour (colour::trackColumnBg);
+    g.setColour (theme().tracksBarBg);
     g.fillRect (label);
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (label.removeFromRight (1));
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (columnLabelFont());
     g.drawText ("TRACKS", label.withTrimmedLeft (columnPadding), juce::Justification::centredLeft);
 
@@ -62,7 +62,7 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
         // radius keeps the ends from looking inset from the lines.
         const auto x1 = (float) juce::roundToInt (geo.beatToX (loopStart));
         const auto x2 = (float) juce::roundToInt (geo.beatToX (loopEnd)) + 1.0f;
-        g.setColour (colour::accent.withAlpha (0.4f));
+        g.setColour (theme().arrangement.cycle.withAlpha (0.4f));
         g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, size::radiusHair);
     }
 
@@ -75,12 +75,12 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     forEachVisibleBar (geo, r.getWidth(), barStride (geo, 6.0), [&] (int bar, int x)
     {
         const bool labelled = bar % labelStride == 0;
-        g.setColour (colour::borderStrong);
+        g.setColour (theme().borderStrong);
         g.fillRect (x, bottom - (labelled ? 16 : 7), 1, labelled ? 14 : 5);
 
         if (labelled)
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.drawText (juce::String (bar + 1), x + 4, bottom - 16, 40, 14, juce::Justification::centredLeft);
         }
     });

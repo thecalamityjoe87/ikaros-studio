@@ -9,75 +9,80 @@ using namespace tokens;
 
 IkarosLookAndFeel::IkarosLookAndFeel()
 {
-    // LookAndFeel_V4 is driven by a ColourScheme; set ours so any widget we
-    // don't customise below still matches the palette.
-    setColourScheme ({ colour::windowBg,        // windowBackground
-                       colour::toolbarBg,       // widgetBackground
-                       colour::wellBg,          // menuBackground
-                       colour::border,          // outline
-                       colour::text,            // defaultText
-                       colour::raised,          // defaultFill
-                       colour::text,            // highlightedText
-                       colour::neutralActive,   // highlightedFill (not the accent: that only means "on")
-                       colour::text });         // menuText
-
-    setColour (juce::ResizableWindow::backgroundColourId, colour::windowBg);
-    setColour (juce::DocumentWindow::textColourId, colour::text);
-
-    setColour (juce::TextButton::buttonColourId, colour::raised);
-    setColour (juce::TextButton::buttonOnColourId, colour::neutralActive);
-    setColour (juce::TextButton::textColourOffId, colour::text);
-    setColour (juce::TextButton::textColourOnId, colour::text);
-
-    setColour (juce::Label::textColourId, colour::text);
-    setColour (juce::Label::textWhenEditingColourId, colour::text);
-    setColour (juce::Label::backgroundWhenEditingColourId, colour::raised);
-    setColour (juce::Label::outlineWhenEditingColourId, colour::highlight);
-
-    // Slider fills and knob arcs default to neutral grey; track controls set
-    // their own (the track colour) per slider.
-    setColour (juce::Slider::trackColourId, colour::textSecondary);
-    setColour (juce::Slider::backgroundColourId, colour::controlFill);
-    setColour (juce::Slider::thumbColourId, colour::text);
-    setColour (knobArcColourId, colour::textSecondary);
-
-    setColour (juce::TextEditor::backgroundColourId, colour::wellBg);
-    setColour (juce::TextEditor::textColourId, colour::text);
-    setColour (juce::TextEditor::highlightColourId, colour::highlight.withAlpha (0.25f));
-    setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
-    setColour (juce::TextEditor::focusedOutlineColourId, colour::selectedBorder);
-    setColour (juce::CaretComponent::caretColourId, colour::text);
-
-    setColour (juce::PopupMenu::backgroundColourId, colour::toolbarBg);
-    setColour (juce::PopupMenu::textColourId, colour::text);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, colour::neutralActive);
-    setColour (juce::PopupMenu::highlightedTextColourId, colour::text);
-    setColour (juce::PopupMenu::headerTextColourId, colour::textSecondary);
-
-    setColour (juce::ScrollBar::thumbColourId, colour::borderStrong);
-    setColour (juce::TooltipWindow::backgroundColourId, colour::raised);
-    setColour (juce::TooltipWindow::textColourId, colour::text);
-    setColour (juce::TooltipWindow::outlineColourId, colour::border);
-
-    // The value bubble a slider shows while it's dragged (see
-    // Slider::setPopupDisplayEnabled). Its text uses the tooltip's colour.
-    setColour (juce::BubbleComponent::backgroundColourId, colour::raised);
-    setColour (juce::BubbleComponent::outlineColourId, colour::border);
-
-    setColour (juce::ComboBox::backgroundColourId, colour::raised);
-    setColour (juce::ComboBox::outlineColourId, colour::border);
-    setColour (juce::ComboBox::textColourId, colour::text);
-    setColour (juce::ComboBox::arrowColourId, colour::textSecondary);
-    setColour (juce::ListBox::backgroundColourId, colour::wellBg);
-    setColour (juce::ListBox::outlineColourId, colour::borderSoft);
-    setColour (juce::ToggleButton::textColourId, colour::text);
-    setColour (juce::ToggleButton::tickColourId, colour::accent);
-    setColour (juce::AlertWindow::backgroundColourId, colour::toolbarBg);
-    setColour (juce::AlertWindow::textColourId, colour::text);
-    setColour (juce::AlertWindow::outlineColourId, colour::border);
+    applyThemeColours();
 
     // Makes the bundled Figtree the fallback for any Font that doesn't name a typeface.
     setDefaultSansSerifTypeface (fonts::defaultTypeface());
+}
+
+void IkarosLookAndFeel::applyThemeColours()
+{
+    // LookAndFeel_V4 is driven by a ColourScheme; set ours so any widget we
+    // don't customise below still matches the palette.
+    setColourScheme ({ theme().windowBg,        // windowBackground
+                       theme().toolbarBg,       // widgetBackground
+                       theme().wellBg,          // menuBackground
+                       theme().border,          // outline
+                       theme().text,            // defaultText
+                       theme().raised,          // defaultFill
+                       theme().text,            // highlightedText
+                       theme().neutralActive,   // highlightedFill (not the accent: that only means "on")
+                       theme().text });         // menuText
+
+    setColour (juce::ResizableWindow::backgroundColourId, theme().windowBg);
+    setColour (juce::DocumentWindow::textColourId, theme().text);
+
+    setColour (juce::TextButton::buttonColourId, theme().raised);
+    setColour (juce::TextButton::buttonOnColourId, theme().neutralActive);
+    setColour (juce::TextButton::textColourOffId, theme().text);
+    setColour (juce::TextButton::textColourOnId, theme().text);
+
+    setColour (juce::Label::textColourId, theme().text);
+    setColour (juce::Label::textWhenEditingColourId, theme().text);
+    setColour (juce::Label::backgroundWhenEditingColourId, theme().raised);
+    setColour (juce::Label::outlineWhenEditingColourId, theme().highlight);
+
+    // Slider fills and knob arcs default to neutral grey; track controls set
+    // their own (the track colour) per slider.
+    setColour (juce::Slider::trackColourId, theme().sliderFill);
+    setColour (juce::Slider::backgroundColourId, theme().sliderTrack);
+    setColour (juce::Slider::thumbColourId, theme().sliderThumb);
+    setColour (knobArcColourId, theme().textSecondary);
+
+    setColour (juce::TextEditor::backgroundColourId, theme().inputBg);
+    setColour (juce::TextEditor::textColourId, theme().text);
+    setColour (juce::TextEditor::highlightColourId, theme().highlight.withAlpha (0.25f));
+    setColour (juce::TextEditor::outlineColourId, theme().inputBorder);
+    setColour (juce::TextEditor::focusedOutlineColourId, theme().selectedBorder);
+    setColour (juce::CaretComponent::caretColourId, theme().text);
+
+    setColour (juce::PopupMenu::backgroundColourId, theme().popupBg);
+    setColour (juce::PopupMenu::textColourId, theme().text);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, theme().neutralActive);
+    setColour (juce::PopupMenu::highlightedTextColourId, theme().text);
+    setColour (juce::PopupMenu::headerTextColourId, theme().textSecondary);
+
+    setColour (juce::ScrollBar::thumbColourId, theme().borderStrong);
+    setColour (juce::TooltipWindow::backgroundColourId, theme().raised);
+    setColour (juce::TooltipWindow::textColourId, theme().text);
+    setColour (juce::TooltipWindow::outlineColourId, theme().border);
+
+    // The value bubble a slider shows while it's dragged (see
+    // Slider::setPopupDisplayEnabled). Its text uses the tooltip's colour.
+    setColour (juce::BubbleComponent::backgroundColourId, theme().raised);
+    setColour (juce::BubbleComponent::outlineColourId, theme().border);
+
+    setColour (juce::ComboBox::backgroundColourId, theme().raised);
+    setColour (juce::ComboBox::outlineColourId, theme().border);
+    setColour (juce::ComboBox::textColourId, theme().text);
+    setColour (juce::ComboBox::arrowColourId, theme().textSecondary);
+    setColour (juce::ListBox::backgroundColourId, theme().wellBg);
+    setColour (juce::ListBox::outlineColourId, theme().borderSoft);
+    setColour (juce::ToggleButton::textColourId, theme().text);
+    setColour (juce::ToggleButton::tickColourId, theme().accent);
+    setColour (juce::AlertWindow::backgroundColourId, theme().dialogBg);
+    setColour (juce::AlertWindow::textColourId, theme().text);
+    setColour (juce::AlertWindow::outlineColourId, theme().border);
 }
 
 //==============================================================================
@@ -123,16 +128,36 @@ juce::Font IkarosLookAndFeel::getMenuBarFont (juce::MenuBarComponent&, int, cons
 //==============================================================================
 void IkarosLookAndFeel::styleInlineEditor (juce::TextEditor& editor)
 {
-    // Colours set on the component itself win over the LookAndFeel's defaults
-    // (findColour checks the component first, then its parents, then the L&F).
-    editor.setColour (juce::TextEditor::backgroundColourId, colour::raised);
-    editor.setColour (juce::TextEditor::outlineColourId, colour::selectedBorder);
-    editor.setColour (juce::TextEditor::focusedOutlineColourId, colour::selectedBorder);
+    // A flag rather than colours, so the colours are read from the theme
+    // each time the field paints.
+    editor.getProperties().set ("inline", true);
+    editor.repaint();
+}
+
+void IkarosLookAndFeel::setFamilyColour (juce::Slider& s, Family f, FamilyShade shade)
+{
+    // getProperties() is a free-form NamedValueSet every component carries.
+    // A juce::var holds an int, not our enums, hence the casts.
+    s.getProperties().set ("family", static_cast<int> (f));
+    s.getProperties().set ("familyShade", static_cast<int> (shade));
+    s.repaint();
+}
+
+juce::Colour IkarosLookAndFeel::valueColourFor (juce::Slider& s, int colourId)
+{
+    const auto& family = s.getProperties()["family"];   // a void var if it was never set
+
+    if (family.isVoid())
+        return s.findColour (colourId);
+
+    const auto f = static_cast<Family> ((int) family);
+    const auto shade = static_cast<FamilyShade> ((int) s.getProperties()["familyShade"]);
+    return shade == FamilyShade::knobArc ? theme().knobArc (f) : theme().ink (f);
 }
 
 void IkarosLookAndFeel::drawFocusRing (juce::Graphics& g, juce::Rectangle<float> bounds, float cornerRadius)
 {
-    g.setColour (colour::highlight);
+    g.setColour (theme().highlight);
     g.drawRoundedRectangle (bounds.reduced (1.0f), cornerRadius, 2.0f);
 }
 
@@ -148,7 +173,7 @@ void IkarosLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b
     g.setColour (fill);
     g.fillRoundedRectangle (r, size::radius);
 
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (r, size::radius, 1.0f);
 
     if (b.hasKeyboardFocus (false))
@@ -166,19 +191,19 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
     // automation moves it, not the user.
     const bool automated = s.getProperties()["automated"];
     auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
-    auto trackColour = s.findColour (juce::Slider::trackColourId);
+    auto trackColour = valueColourFor (s, juce::Slider::trackColourId);
 
     if (vertical)
     {
         // Mixer fader: dark slot with a light rectangular cap.
         auto slot = bounds.withSizeKeepingCentre (6.0f, bounds.getHeight());
-        g.setColour (colour::wellBg);
+        g.setColour (theme().wellBg);
         g.fillRoundedRectangle (slot, size::radiusTiny);
 
         auto cap = juce::Rectangle<float> (26.0f, 14.0f).withCentre ({ slot.getCentreX(), sliderPos });
-        g.setColour (automated ? colour::automated : colour::textMenu);
+        g.setColour (automated ? theme().automated : theme().faderCap);
         g.fillRoundedRectangle (cap, size::radiusXs);
-        g.setColour (colour::lcdLabel);
+        g.setColour (theme().lcdLabel);
         g.fillRect (cap.removeFromBottom (2.0f).reduced (3.0f, 0.0f));
     }
     else
@@ -189,15 +214,22 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         // edges, as far as the thumb itself goes.
         auto track = bounds.expanded ((float) getSliderThumbRadius (s), 0.0f);
         track = track.withSizeKeepingCentre (track.getWidth(), 4.0f);
-        g.setColour (colour::controlFill);
+        g.setColour (theme().sliderTrack);
         g.fillRoundedRectangle (track, size::radiusHair);
 
         g.setColour (trackColour);
         g.fillRoundedRectangle (track.withRight (sliderPos), size::radiusHair);
 
+        // The thumb, with a border and soft shadow in light mode (both
+        // transparent in dark).
         auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ sliderPos, track.getCentreY() });
-        g.setColour (automated ? colour::automated : colour::text);
+        juce::Path disc;
+        disc.addEllipse (thumb);
+        juce::DropShadow (theme().thumbShadow, 3, { 0, 1 }).drawForPath (g, disc);
+        g.setColour (automated ? theme().automated : theme().sliderThumb);
         g.fillEllipse (thumb);
+        g.setColour (theme().thumbBorder);
+        g.drawEllipse (thumb.reduced (0.5f), 1.0f);
     }
 
     if (s.hasKeyboardFocus (false))
@@ -226,7 +258,7 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
 
     juce::Path track;
     track.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
-    g.setColour (colour::controlFill);
+    g.setColour (theme().knobTrack);
     g.strokePath (track, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
 
     // A "bipolar" knob (e.g. pan) draws its arc out from 12 o'clock instead of
@@ -240,7 +272,7 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     if (bipolar)
     {
         const auto top = (startAngle + endAngle) * 0.5f;
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.drawLine ({ centre.getPointOnCircumference (radius + arcWidth * 0.9f, top),
                       centre.getPointOnCircumference (radius + arcWidth * 2.2f, top) },
                     juce::jmax (1.0f, arcWidth * 0.5f));
@@ -253,22 +285,22 @@ void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
         juce::Path value;
         value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
                              juce::jmin (arcStart, valueAngle), juce::jmax (arcStart + 0.001f, valueAngle), true);
-        g.setColour (s.findColour (knobArcColourId));
+        g.setColour (valueColourFor (s, knobArcColourId));
         g.strokePath (value, { arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded });
     }
 
     auto capRadius = radius * 0.68f;
     const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
-    g.setColour (colour::controlFill);
+    g.setColour (theme().knobBody);
     g.fillEllipse (cap);
-    g.setColour (colour::borderStrong);
+    g.setColour (theme().knobRim);
     g.drawEllipse (cap, 1.0f);
 
     // getPointOnCircumference measures angles clockwise from 12 o'clock, like the slider does.
     auto inner = centre.getPointOnCircumference (capRadius * 0.27f, valueAngle);
     auto outer = centre.getPointOnCircumference (capRadius * 0.8f, valueAngle);
     // An automated knob's needle is in the "automated" colour (see drawLinearSlider).
-    g.setColour ((bool) s.getProperties()["automated"] ? colour::automated : colour::text);
+    g.setColour ((bool) s.getProperties()["automated"] ? theme().automated : theme().knobPointer);
     g.drawLine ({ inner, outer }, size * 0.055f);
 
     if (s.hasKeyboardFocus (false))
@@ -291,7 +323,7 @@ void IkarosLookAndFeel::drawCompactKnob (juce::Graphics& g, juce::Rectangle<floa
     // a selected track's lighter background.
     juce::Path ring;
     ring.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
-    g.setColour (colour::borderStrong);
+    g.setColour (theme().compactKnobTrack);
     g.strokePath (ring, stroke);
 
     // Bipolar (pan): the arc grows out from 12 o'clock; at the centre there's none.
@@ -303,19 +335,19 @@ void IkarosLookAndFeel::drawCompactKnob (juce::Graphics& g, juce::Rectangle<floa
         juce::Path value;
         value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
                              juce::jmin (arcStart, valueAngle), juce::jmax (arcStart, valueAngle), true);
-        g.setColour (s.findColour (knobArcColourId));
+        g.setColour (valueColourFor (s, knobArcColourId));
         g.strokePath (value, stroke);
     }
 
     // The cap sits just inside the ring, with a small gap.
     const auto capRadius = radius - arcWidth * 0.5f - juce::jmax (1.5f, size * 0.07f);
     const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
-    g.setColour (colour::knobCap);
+    g.setColour (theme().compactKnobBody);
     g.fillEllipse (cap);
-    g.setColour (colour::buttonBorder);
+    g.setColour (theme().compactKnobRim);
     g.drawEllipse (cap, 1.0f);
 
-    g.setColour ((bool) s.getProperties()["automated"] ? colour::automated : colour::thumb);
+    g.setColour ((bool) s.getProperties()["automated"] ? theme().automated : theme().compactKnobPointer);
     g.drawLine ({ centre.getPointOnCircumference (capRadius * 0.2f, valueAngle),
                   centre.getPointOnCircumference (capRadius * 0.75f, valueAngle) }, juce::jmax (1.6f, size * 0.07f));
 
@@ -340,7 +372,7 @@ juce::Font IkarosLookAndFeel::getSliderPopupFont (juce::Slider&)
 //==============================================================================
 void IkarosLookAndFeel::drawMenuBarBackground (juce::Graphics& g, int w, int h, bool, juce::MenuBarComponent&)
 {
-    g.setColour (colour::menuBarBg);
+    g.setColour (theme().titleBarBg);
     g.fillRect (0, 0, w, h);
 }
 
@@ -351,11 +383,11 @@ void IkarosLookAndFeel::drawMenuBarItem (juce::Graphics& g, int w, int h, int, c
 
     if (isMenuOpen || isMouseOverItem)
     {
-        g.setColour (colour::raised);
+        g.setColour (theme().raised);
         g.fillRoundedRectangle (r, size::radiusSmall);
     }
 
-    g.setColour (isMenuOpen ? colour::text : colour::textMenu);
+    g.setColour (isMenuOpen ? theme().text : theme().textMenu);
     g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (text, r.toNearestInt(), juce::Justification::centred, 1);
 }
@@ -368,13 +400,13 @@ void IkarosLookAndFeel::drawResizableWindowBorder (juce::Graphics& g, int w, int
     // colour so it reads as part of the window, with a 1px outline so the
     // window edge stays visible against dark desktops.
     juce::Rectangle<int> r (w, h);
-    g.setColour (colour::menuBarBg);
+    g.setColour (theme().titleBarBg);
     g.fillRect (r.removeFromTop (border.getTop()));
     g.fillRect (r.removeFromBottom (border.getBottom()));
     g.fillRect (r.removeFromLeft (border.getLeft()));
     g.fillRect (r.removeFromRight (border.getRight()));
 
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRect (0, 0, w, h, 1);
 }
 
@@ -383,12 +415,12 @@ void IkarosLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Graph
                                                   const juce::Path& path, juce::Image&)
 {
     // A soft shadow, then the popover body in the toolbar colour with a border.
-    shadow::popover.drawForPath (g, path);
+    theme().popoverShadow.drawForPath (g, path);
 
-    g.setColour (colour::toolbarBg);
+    g.setColour (theme().popupBg);
     g.fillPath (path);
 
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.strokePath (path, juce::PathStrokeType (1.0f));
 }
 
@@ -400,7 +432,8 @@ float IkarosLookAndFeel::getCallOutBoxCornerSize (const juce::CallOutBox&)
 //==============================================================================
 void IkarosLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int w, int h, juce::TextEditor& e)
 {
-    g.setColour (e.findColour (juce::TextEditor::backgroundColourId));
+    const bool inlineField = e.getProperties()["inline"];   // see styleInlineEditor
+    g.setColour (inlineField ? theme().raised : e.findColour (juce::TextEditor::backgroundColourId));
     g.fillRoundedRectangle (juce::Rectangle<float> ((float) w, (float) h), size::radius);
 }
 
@@ -409,8 +442,11 @@ void IkarosLookAndFeel::drawTextEditorOutline (juce::Graphics& g, int w, int h, 
     auto r = juce::Rectangle<float> ((float) w, (float) h).reduced (0.5f);
     const bool focused = e.hasKeyboardFocus (true) && ! e.isReadOnly();
 
-    g.setColour (e.findColour (focused ? juce::TextEditor::focusedOutlineColourId
-                                       : juce::TextEditor::outlineColourId));
+    if ((bool) e.getProperties()["inline"])   // see styleInlineEditor
+        g.setColour (theme().selectedBorder);
+    else
+        g.setColour (e.findColour (focused ? juce::TextEditor::focusedOutlineColourId
+                                           : juce::TextEditor::outlineColourId));
     g.drawRoundedRectangle (r, size::radius, focused ? 2.0f : 1.0f);
 }
 
@@ -420,13 +456,15 @@ int IkarosLookAndFeel::getDefaultScrollbarWidth()
     return size::scrollbarWidth;
 }
 
-void IkarosLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int w, int h,
+void IkarosLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar& bar, int x, int y, int w, int h,
                                        bool vertical, int thumbStart, int thumbSize, bool over, bool down)
 {
     auto thumb = vertical ? juce::Rectangle<int> (x, thumbStart, w, thumbSize)
                           : juce::Rectangle<int> (thumbStart, y, thumbSize, h);
 
-    g.setColour (colour::borderStrong.brighter (down ? 0.3f : (over ? 0.15f : 0.0f)));
+    const bool onArrangement = bar.getProperties()["arrangement"];   // see ArrangementView
+    const auto colour = onArrangement ? theme().arrangement.scrollbar : theme().borderStrong;
+    g.setColour (colour.brighter (down ? 0.3f : (over ? 0.15f : 0.0f)));
     g.fillRoundedRectangle (thumb.toFloat().reduced (2.5f), size::radiusTiny);
 }
 

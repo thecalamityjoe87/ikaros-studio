@@ -90,8 +90,8 @@ void TrackInspector::layoutSections()
 
 void TrackInspector::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().inspectorBg);
+    g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
 }
 

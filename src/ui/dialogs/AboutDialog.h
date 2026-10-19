@@ -31,12 +31,14 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDown (const juce::MouseEvent&) override;   // click outside the panel = close
+    void lookAndFeelChanged() override;                  // the theme changed: recolour the text
 
 private:
     enum class Page { about, credits, releaseNotes, acknowledgements };
 
     explicit AboutDialog (AudioEngine&);
 
+    void applyTextColours();
     void showPage (Page);
     void fillCredits();
     void fillReleaseNotes();

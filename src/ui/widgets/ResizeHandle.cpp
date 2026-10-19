@@ -24,7 +24,7 @@ void ResizeHandle::paint (juce::Graphics& g)
         constexpr float gripWidth = 40.0f, gripHeight = 3.0f;
         const auto grip = orientation == Orientation::vertical ? getLocalBounds().toFloat().withSizeKeepingCentre (gripHeight, gripWidth)
                                                                : getLocalBounds().toFloat().withSizeKeepingCentre (gripWidth, gripHeight);
-        g.setColour (dragging || isMouseOver() ? colour::textSecondary : colour::borderStrong);
+        g.setColour (dragging || isMouseOver() ? theme().textSecondary : theme().borderStrong);
         g.fillRoundedRectangle (grip, gripHeight * 0.5f);
         return;
     }
@@ -33,7 +33,7 @@ void ResizeHandle::paint (juce::Graphics& g)
         return;
 
     // A 2px line along the middle of the strip, i.e. on the edge itself.
-    g.setColour (colour::highlight.withAlpha (dragging ? 0.8f : 0.5f));
+    g.setColour (theme().highlight.withAlpha (dragging ? 0.8f : 0.5f));
     auto r = getLocalBounds().toFloat();
 
     if (orientation == Orientation::vertical)

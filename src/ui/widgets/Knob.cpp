@@ -53,15 +53,20 @@ void Knob::setValue (float normalised, const juce::String& text)
     }
 }
 
-void Knob::setArcColour (juce::Colour c)
+void Knob::setArcFamily (Family f)
 {
-    slider.setColour (IkarosLookAndFeel::knobArcColourId, c);
+    IkarosLookAndFeel::setFamilyColour (slider, f, IkarosLookAndFeel::FamilyShade::knobArc);
 }
 
 void Knob::paint (juce::Graphics& g)
 {
-    g.setColour (colour::cardBg);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusCard);
+    // A card, with a border in light mode (transparent in dark). Its shadow
+    // falls outside the knob's bounds, so the parent draws it: see drawShadow.
+    const auto card = getLocalBounds().toFloat();
+    g.setColour (theme().smartCardBg);
+    g.fillRoundedRectangle (card, size::radiusCard);
+    g.setColour (theme().smartCardBorder);
+    g.drawRoundedRectangle (card.reduced (0.5f), size::radiusCard, 1.0f);
 
     auto r = textArea;
 
@@ -69,23 +74,31 @@ void Knob::paint (juce::Graphics& g)
     {
         // Name and value beside the dial, centred vertically.
         r = r.withSizeKeepingCentre (r.getWidth(), 40);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiBold (textSize::xl));
         g.drawText (label, r.removeFromTop (22), juce::Justification::centredLeft, true);
 
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::mono (textSize::lg));
         g.drawText (valueText, r, juce::Justification::centredLeft, true);
         return;
     }
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::sm));
     g.drawText (label, r.removeFromTop (16), juce::Justification::centred, true);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::mono (textSize::xs));
     g.drawText (valueText, r.removeFromTop (16), juce::Justification::centred, true);
+}
+
+void Knob::drawShadow (juce::Graphics& g, const Knob& knob)
+{
+    // A component can only paint inside its own bounds, so a shadow around
+    // it has to come from its parent's paint(), which runs before the
+    // children paint on top.
+    juce::DropShadow (theme().smartCardShadow, 6, { 0, 1 }).drawForRectangle (g, knob.getBounds());
 }
 
 void Knob::resized()

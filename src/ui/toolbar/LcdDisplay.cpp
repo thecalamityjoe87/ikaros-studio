@@ -73,7 +73,7 @@ namespace
         {
             for (auto* b : { &majorButton, &minorButton })
             {
-                b->setColours (IconButton::segmentColours());
+                b->setColours (IconButton::segmentColours);
                 b->setCornerRadius (size::radiusSmall);
                 b->setFont (fonts::uiSemiBold (textSize::sm));
                 addAndMakeVisible (b);
@@ -105,7 +105,7 @@ namespace
         void paint (juce::Graphics& g) override
         {
             // The well behind the Major | Minor segments.
-            g.setColour (colour::wellBg);
+            g.setColour (theme().wellBg);
             g.fillRoundedRectangle (getSegmentArea().toFloat(), size::radiusXs + 2.0f);
         }
 
@@ -171,9 +171,12 @@ namespace
 
                 // The current root is marked like any selection: a lighter
                 // fill with a grey border, never the accent.
-                IconButton::Colours c { colour::raised, colour::textSecondary, colour::selectedBg, colour::text };
-                c.border = i == root ? colour::selectedBorder : juce::Colours::transparentBlack;
-                b->setColours (c);
+                b->setColours ([isRoot = i == root]
+                {
+                    IconButton::Colours c { theme().raised, theme().textSecondary, theme().selectedBg, theme().text };
+                    c.border = isRoot ? theme().selectedBorder : juce::Colours::transparentBlack;
+                    return c;
+                });
                 b->setToggleState (i == root, juce::dontSendNotification);
             }
         }
@@ -190,7 +193,7 @@ namespace
         {
             for (auto* b : { &fewerButton, &moreButton })
             {
-                b->setColours (IconButton::neutralToggleColours());
+                b->setColours (IconButton::neutralToggleColours);
                 b->setCornerRadius (size::radiusSmall);
                 b->setFont (fonts::uiSemiBold (textSize::lg));
                 addAndMakeVisible (b);
@@ -203,7 +206,7 @@ namespace
             {
                 auto* b = denominatorButtons.add (new IconButton ("Beat value " + juce::String (value),
                                                                   std::nullopt, juce::String (value)));
-                b->setColours (IconButton::segmentColours());
+                b->setColours (IconButton::segmentColours);
                 b->setCornerRadius (size::radiusSmall);
                 b->setFont (fonts::monoBold (textSize::md));
                 b->onClick = [this, value] { setDenominator (value); };
@@ -218,16 +221,16 @@ namespace
 
         void paint (juce::Graphics& g) override
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::ui (textSize::sm));
             g.drawText ("Beats per bar", getRow (0).withWidth (labelWidth), juce::Justification::centredLeft);
             g.drawText ("Beat value", getRow (1).withWidth (labelWidth), juce::Justification::centredLeft);
 
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.setFont (fonts::monoBold (textSize::xl));
             g.drawText (juce::String (numerator), numberArea, juce::Justification::centred);
 
-            g.setColour (colour::wellBg);
+            g.setColour (theme().wellBg);
             g.fillRoundedRectangle (getRow (1).withTrimmedLeft (labelWidth).toFloat(), size::radiusXs + 2.0f);
         }
 
@@ -329,25 +332,25 @@ void LcdDisplay::Field::paint (juce::Graphics& g)
     const auto r = getLocalBounds().toFloat();
 
     // A shade lighter than the readout; lighter still under the mouse.
-    auto bg = colour::field;
+    auto bg = theme().field;
 
     if (isMouseOverOrDragging (true))
-        bg = bg.overlaidWith (colour::tintLight.withAlpha (0.06f));
+        bg = bg.overlaidWith (theme().tintLight.withAlpha (0.06f));
 
     g.setColour (bg);
     g.fillRoundedRectangle (r, size::radiusSmall);
 
     const auto valueArea = getValueArea();
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::monoBold (textSize::xl));
     g.drawText (valueText, valueArea, juce::Justification::bottomLeft, false);
 
     if (showChevron)
         icons::draw (g, Icon::chevronDown,
                      valueArea.withX (valueArea.getRight()).withWidth (trailingWidth).toFloat().translated (0.0f, 2.0f),
-                     colour::textSecondary, 12.0f, 2.0f);
+                     theme().textSecondary, 12.0f, 2.0f);
 
-    g.setColour (colour::lcdLabel);
+    g.setColour (theme().lcdLabel);
     g.setFont (fonts::mono (textSize::caption).withExtraKerningFactor (0.1f));
     g.drawText (caption, getLocalBounds().reduced (fieldPaddingX, 0).withTrimmedTop (valueRowHeight).withTrimmedBottom (1),
                 juce::Justification::centredLeft);
@@ -385,7 +388,6 @@ LcdDisplay::TempoField::TempoField (LcdDisplay& o)
     editor.setFont (fonts::monoBold (textSize::xl));
     editor.setJustificationType (juce::Justification::bottomLeft);
     editor.setBorderSize ({ 0, 0, 0, 0 });
-    editor.setColour (juce::Label::textColourId, colour::text);
     editor.setTitle ("Tempo in BPM");
 
     // The label itself ignores the mouse, so clicks and drags reach this
@@ -439,7 +441,7 @@ void LcdDisplay::TempoField::paint (juce::Graphics& g)
     {
         const bool hot = part == hoveredPart && isMouseOver();
         icons::draw (g, part == Part::stepUp ? Icon::chevronUp : Icon::chevronDown,
-                     getStepperArea (part).toFloat(), hot ? colour::text : colour::textSecondary, 11.0f, 2.0f);
+                     getStepperArea (part).toFloat(), hot ? theme().text : theme().textSecondary, 11.0f, 2.0f);
     }
 }
 
@@ -600,15 +602,18 @@ void LcdDisplay::setState (const TransportState& s, const juce::String& key)
 
 void LcdDisplay::paint (juce::Graphics& g)
 {
-    g.setColour (colour::lcdBg);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), size::radiusLarge);
+    const auto bounds = getLocalBounds().toFloat();
+    g.setColour (theme().lcdBg);
+    g.fillRoundedRectangle (bounds, size::radiusLarge);
+    g.setColour (theme().lcdBorder);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), size::radiusLarge, 1.0f);
 
     // The position isn't editable, so it has no field: same rows as the fields.
-    g.setColour (colour::text);
+    g.setColour (theme().lcdValue);
     g.setFont (fonts::monoBold (textSize::lcd));
     g.drawText (positionText, positionArea.withHeight (valueRowHeight), juce::Justification::bottomLeft, false);
 
-    g.setColour (colour::lcdLabel);
+    g.setColour (theme().lcdLabel);
     g.setFont (fonts::mono (textSize::caption).withExtraKerningFactor (0.1f));
     g.drawText (juce::String::fromUTF8 ("BAR \xc2\xb7 BEAT"),
                 positionArea.withTrimmedTop (valueRowHeight).withTrimmedBottom (1), juce::Justification::centredLeft);

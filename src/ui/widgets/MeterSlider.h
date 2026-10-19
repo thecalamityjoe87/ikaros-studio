@@ -20,12 +20,18 @@ class MeterSlider  : public juce::Slider
 public:
     MeterSlider();
 
+    /** The master's slider (in the toolbar) or a track's (in its header):
+        they differ only in shade. */
+    enum class Style { master, trackHeader };
+    void setStyle (Style s)   { style = s; repaint(); }
+
     void setLevel (StereoLevel);
 
     void paint (juce::Graphics&) override;
 
 private:
     float left = 0.0f, right = 0.0f;    // displayed levels, 0..1 along the bars
+    Style style = Style::master;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MeterSlider)
 };

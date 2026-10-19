@@ -29,15 +29,15 @@ public:
 
         if (over)
         {
-            g.setColour (colour::raised.withAlpha (0.5f));
+            g.setColour (theme().raised.withAlpha (0.5f));
             g.fillRect (r);
         }
 
         auto content = r.reduced (12.0f, 0.0f);
         icons::draw (g, getToggleState() ? Icon::chevronDown : Icon::chevronRight,
-                     content.removeFromRight (16.0f), colour::textSecondary, 16.0f, 2.0f);
+                     content.removeFromRight (16.0f), theme().textSecondary, 16.0f, 2.0f);
 
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiSemiBold (textSize::md));
         g.drawText (getName(), content, juce::Justification::centredLeft, true);
 
@@ -80,7 +80,7 @@ int CollapsibleSection::getPreferredHeight() const
 void CollapsibleSection::paint (juce::Graphics& g)
 {
     // A divider under each section, like GarageBand's inspector.
-    g.setColour (colour::divider.withAlpha (0.6f));
+    g.setColour (theme().divider.withAlpha (0.6f));
     g.fillRect (getLocalBounds().removeFromBottom (1));
 }
 

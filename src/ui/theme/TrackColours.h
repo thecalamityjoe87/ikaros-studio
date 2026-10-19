@@ -10,44 +10,49 @@
 // and Tokens.h shouldn't depend on the engine.
 
 #include "engine/EngineTypes.h"
-#include "ui/theme/Tokens.h"
+#include "ui/theme/Theme.h"
 
 namespace ikaros::tokens::colour
 {
 
-/** The family colour for a library category ("Keyboards", "Drums"...). Sounds
-    from packs with a category we don't know get the neutral loops grey. */
-inline juce::Colour forCategory (const juce::String& category)
+/** The family of a library category ("Keyboards", "Drums"...). Sounds from
+    packs with a category we don't know count as loops (neutral grey). */
+inline Family familyOf (const juce::String& category)
 {
     // A function-local static is built once, the first time this runs.
-    struct Family { const char* category; juce::Colour colour; };
-    static const Family families[]
+    struct Entry { const char* category; Family family; };
+    static const Entry entries[]
     {
-        { "Keyboards",   family::keys },
-        { "Drums",       family::drums },
-        { "Bass",        family::bass },
-        { "Synths",      family::synths },
-        { "Guitar",      family::guitar },
-        { "Strings",     family::strings },
-        { "Woodwinds",   family::woodwinds },
-        { "Brass",       family::brass },
-        { "Loops",       family::loops },
-        { "Audio Files", family::audio },
+        { "Keyboards",   Family::keys },
+        { "Drums",       Family::drums },
+        { "Bass",        Family::bass },
+        { "Synths",      Family::synths },
+        { "Guitar",      Family::guitar },
+        { "Strings",     Family::strings },
+        { "Woodwinds",   Family::woodwinds },
+        { "Brass",       Family::brass },
+        { "Loops",       Family::loops },
+        { "Audio Files", Family::audio },
     };
 
-    for (auto& f : families)
-        if (category == f.category)
-            return f.colour;
+    for (auto& e : entries)
+        if (category == e.category)
+            return e.family;
 
-    return family::loops;
+    return Family::loops;
 }
 
-/** A track's colour. Audio (recorded) tracks are always the audio blue,
+/** A track's family. Audio (recorded) tracks are always audio blue,
     whatever was dropped on them; instrument tracks follow their sound. */
-inline juce::Colour forTrack (const TrackInfo& t)
+inline Family familyOf (const TrackInfo& t)
 {
-    return t.kind == TrackKind::audio ? family::audio : forCategory (t.category);
+    return t.kind == TrackKind::audio ? Family::audio : familyOf (t.category);
 }
+
+/** Shorthands for painting: the colour of a category's or a track's family
+    in the current theme. */
+inline juce::Colour forCategory (const juce::String& category)   { return theme().family (familyOf (category)); }
+inline juce::Colour forTrack (const TrackInfo& t)                { return theme().family (familyOf (t)); }
 
 /** Text or icons drawn on a solid family-colour fill (a region's header):
     dark on the light colours, such as the drums yellow, white on the rest.
@@ -56,7 +61,8 @@ inline juce::Colour forTrack (const TrackInfo& t)
 inline juce::Colour textOn (juce::Colour fill)
 {
     constexpr float lightFill = 0.65f;   // keys, drums, woodwinds and brass are above it; strings, audio, bass below
-    return fill.getPerceivedBrightness() > lightFill ? palette::background : textOnColour;
+    const auto& arrangement = theme().arrangement;
+    return fill.getPerceivedBrightness() > lightFill ? arrangement.regionTextDark : arrangement.regionTextLight;
 }
 
 } // namespace ikaros::tokens::colour

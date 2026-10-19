@@ -30,13 +30,15 @@ void PreviewButton::setState (bool isPlaying, bool available)
 
     // Light, so it reads as "click to hear" without using the accent (the
     // accent only means "on"). Greyed when there's nothing to play.
-    Colours c { colour::previewFill, colour::previewIcon, colour::previewFill, colour::previewIcon };
-    c.hoverBackground = colour::tintLight;
+    setColours ([available]
+    {
+        if (! available)
+            return Colours { theme().buttonFill, theme().textDisabled, theme().buttonFill, theme().textDisabled, theme().buttonBorder };
 
-    if (! available)
-        c = { colour::buttonFill, colour::textDisabled, colour::buttonFill, colour::textDisabled, colour::buttonBorder };
-
-    setColours (c);
+        Colours c { theme().previewFill, theme().previewIcon, theme().previewFill, theme().previewIcon };
+        c.hoverBackground = theme().tintLight;
+        return c;
+    });
 }
 
 void PreviewButton::updateVisibility (juce::Component& row)

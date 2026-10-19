@@ -86,7 +86,7 @@ AlertDialog::AlertDialog (const juce::MessageBoxOptions& options, const juce::St
     setAlwaysOnTop (true);
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
 
-    messageText.append (options.getMessage(), fonts::ui (textSize::lg), colour::textSecondary);
+    messageText.append (options.getMessage(), fonts::ui (textSize::lg), theme().textSecondary);
     messageText.setLineSpacing (3.0f);
 
     if (tickBoxText.isNotEmpty())
@@ -105,16 +105,7 @@ AlertDialog::AlertDialog (const juce::MessageBoxOptions& options, const juce::St
 
         auto* button = buttons.add (new IconButton (text, std::nullopt, text));
 
-        if (i == 0)
-        {
-            button->setColours (IconButton::primaryColours());
-        }
-        else
-        {
-            auto colours = IconButton::raisedColours();
-            colours.border = colour::border;
-            button->setColours (colours);
-        }
+        button->setColours (i == 0 ? IconButton::primaryColours : IconButton::borderedColours);
 
         button->onClick = [this, result] { close (result); };
         addAndMakeVisible (button);
@@ -254,15 +245,15 @@ void AlertDialog::resized()
 void AlertDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the dialog.
-    g.fillAll (colour::scrim);
+    g.fillAll (theme().scrim);
 
-    shadow::dialog.drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::title));
     g.drawText (title, titleArea, juce::Justification::centredLeft, true);
 

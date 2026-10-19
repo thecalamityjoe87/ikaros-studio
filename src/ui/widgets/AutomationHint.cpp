@@ -41,7 +41,7 @@ HintBubble::HintBubble (juce::Component& target, const juce::String& text,
     : actionName (name), action (std::move (fn))
 {
     juce::AttributedString s;
-    s.append (text, fonts::ui (textSize::md), colour::text);
+    s.append (text, fonts::ui (textSize::md), theme().text);
     s.setWordWrap (juce::AttributedString::byWord);
     layout.createLayout (s, bubbleWidth - padding * 2.0f);
 
@@ -94,18 +94,18 @@ void HintBubble::paint (juce::Graphics& g)
     outline.addPath (arrow);
     outline.setUsingNonZeroWinding (true);
 
-    g.setColour (colour::raised);
+    g.setColour (theme().raised);
     g.fillPath (outline);
-    g.setColour (colour::automated);
+    g.setColour (theme().automated);
     g.strokePath (outline, juce::PathStrokeType (1.0f));
 
     layout.draw (g, bubble.reduced (padding).withHeight (layout.getHeight()));
 
     if (! actionArea.isEmpty())
     {
-        g.setColour (colour::automated);
+        g.setColour (theme().automated);
         g.fillRoundedRectangle (actionArea, size::radiusSmall);
-        g.setColour (colour::textOnAccent);
+        g.setColour (theme().textOnAccent);
         g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (actionName, actionArea, juce::Justification::centred, true);
     }
@@ -187,12 +187,12 @@ void followAutomation (juce::Slider& s, std::function<bool()> isAutomated, std::
 
 juce::Colour getAutomationColour (const juce::String& id)
 {
-    if (id == automationTargets::volume)                     return colour::automationVolume;
-    if (id == automationTargets::pan)                        return colour::automationPan;
-    if (id == automationTargets::send (SendBuses::reverb))   return colour::automationReverb;
-    if (id == automationTargets::send (SendBuses::delay))    return colour::automationDelay;
-    if (id.startsWith ("sound:"))                            return colour::automationSound;
-    return colour::automationPlugin;
+    if (id == automationTargets::volume)                     return theme().automationVolume;
+    if (id == automationTargets::pan)                        return theme().automationPan;
+    if (id == automationTargets::send (SendBuses::reverb))   return theme().automationReverb;
+    if (id == automationTargets::send (SendBuses::delay))    return theme().automationDelay;
+    if (id.startsWith ("sound:"))                            return theme().automationSound;
+    return theme().automationPlugin;
 }
 
 void setAutomatedLook (juce::Slider& s, bool automated)

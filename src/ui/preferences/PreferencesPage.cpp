@@ -40,21 +40,21 @@ public:
             switch (row.kind)
             {
                 case Row::Kind::heading:
-                    g.setColour (colour::text);
+                    g.setColour (theme().text);
                     g.setFont (fonts::uiBold (textSize::xl));
                     g.drawText (row.text, row.textArea, juce::Justification::centredLeft);
-                    g.setColour (colour::borderSoft);
+                    g.setColour (theme().borderSoft);
                     g.fillRect (row.textArea.getX(), row.textArea.getBottom(), row.textArea.getWidth(), 1);
                     break;
 
                 case Row::Kind::labelled:
-                    g.setColour (colour::text);
+                    g.setColour (theme().text);
                     g.setFont (fonts::ui (textSize::mdPlus));
                     g.drawText (row.text, row.textArea, juce::Justification::centredLeft);
                     break;
 
                 case Row::Kind::note:
-                    g.setColour (colour::textSecondary);
+                    g.setColour (theme().textSecondary);
                     g.setFont (noteFont());
                     g.drawFittedText (row.text, row.textArea, juce::Justification::topLeft, 20, 1.0f);
                     break;
@@ -65,7 +65,7 @@ public:
 
             if (row.note.isNotEmpty())
             {
-                g.setColour (colour::textSecondary);
+                g.setColour (theme().textSecondary);
                 g.setFont (noteFont());
                 g.drawFittedText (row.note, row.noteArea, juce::Justification::topLeft, 20, 1.0f);
             }
@@ -123,9 +123,7 @@ void PreferencesPage::setNote (juce::Component& control, const juce::String& not
 
 void PreferencesPage::styleButton (IconButton& b)
 {
-    auto colours = IconButton::raisedColours();
-    colours.border = colour::border;
-    b.setColours (colours);
+    b.setColours (IconButton::borderedColours);
     b.setFont (fonts::ui (textSize::md));
 }
 

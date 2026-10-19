@@ -2,6 +2,7 @@
 
 #include "engine/EngineTypes.h"
 #include "ui/bottompanel/EditorGrid.h"
+#include "ui/theme/Family.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <optional>
 
@@ -45,7 +46,7 @@ public:
     explicit PianoRoll (AudioEngine&);
     ~PianoRoll() override;
 
-    void setRegion (std::optional<RegionInfo>, juce::Colour trackColour, const TempoMap&);
+    void setRegion (std::optional<RegionInfo>, tokens::Family, const TempoMap&);
     void setPlayheadBeat (double editBeat);
 
     /** Where notes snap to when they're drawn, moved or resized (see RegionInspector). */
@@ -84,7 +85,8 @@ private:
 
     AudioEngine& engine;
     std::optional<RegionInfo> region;
-    juce::Colour colour;
+    tokens::Family family = tokens::Family::master;   // the track's
+    juce::Colour trackColour() const;
     TempoMap tempo;   // the song's bars (they can differ in length)
     double playheadBeat = -1.0;     // relative to the region start; <0 = hidden
 

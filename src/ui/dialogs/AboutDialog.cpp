@@ -44,18 +44,16 @@ AboutDialog::AboutDialog (AudioEngine& e)
     text.setReadOnly (true);
     text.setCaretVisible (false);
     text.setScrollbarsShown (true);
-    text.setColour (juce::TextEditor::focusedOutlineColourId, colour::borderSoft);
-    text.setColour (juce::TextEditor::textColourId, colour::textSecondary);
+    applyTextColours();
     text.setBorder ({ 12, 14, 12, 14 });
     addChildComponent (text);
 
     // The chosen tab is a rounded pill inside the shared background drawn in paint().
-    const auto tabColours = IconButton::segmentColours();
     int index = 0;
 
     for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
     {
-        b->setColours (tabColours);
+        b->setColours (IconButton::segmentColours);
         b->setCornerRadius (segmentRadius);
         b->setFont (fonts::uiBold (tabFontSize));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
@@ -64,11 +62,26 @@ AboutDialog::AboutDialog (AudioEngine& e)
         ++index;
     }
 
-    doneButton.setColours (IconButton::primaryColours());
+    doneButton.setColours (IconButton::primaryColours);
     doneButton.onClick = [this] { close(); };
     addAndMakeVisible (doneButton);
 
     showPage (Page::about);
+}
+
+void AboutDialog::applyTextColours()
+{
+    text.setColour (juce::TextEditor::focusedOutlineColourId, theme().borderSoft);
+    text.setColour (juce::TextEditor::textColourId, theme().textSecondary);
+}
+
+void AboutDialog::lookAndFeelChanged()
+{
+    // JUCE calls lookAndFeelChanged() on every component when the theme
+    // changes. A TextEditor keeps the colour each piece of text was added
+    // with, so set the colours again and refill the page.
+    applyTextColours();
+    showPage (page);
 }
 
 void AboutDialog::showPage (Page newPage)
@@ -100,14 +113,14 @@ namespace
     void addHeading (juce::TextEditor& t, const juce::String& s)
     {
         t.setFont (fonts::uiBold (textSize::lg));
-        t.setColour (juce::TextEditor::textColourId, colour::text);
+        t.setColour (juce::TextEditor::textColourId, theme().text);
         t.insertTextAtCaret (s + "\n");
     }
 
     void addBody (juce::TextEditor& t, const juce::String& s)
     {
         t.setFont (fonts::ui (textSize::md));
-        t.setColour (juce::TextEditor::textColourId, colour::textSecondary);
+        t.setColour (juce::TextEditor::textColourId, theme().textSecondary);
         t.insertTextAtCaret (s + "\n");
     }
 }
@@ -218,19 +231,22 @@ void AboutDialog::mouseDown (const juce::MouseEvent& e)
 
 void AboutDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::scrim);
+    g.fillAll (theme().scrim);
 
-    shadow::dialog.drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     // The tabs' shared background and outline.
-    g.setColour (colour::cardBg);
+    g.setColour (theme().segmentWell);
     g.fillRoundedRectangle (tabsArea.toFloat(), segmentOutlineRadius);
-    g.setColour (colour::border);
+    g.setColour (theme().segmentWellBorder);
     g.drawRoundedRectangle (tabsArea.toFloat().reduced (0.5f), segmentOutlineRadius, 1.0f);
+
+    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
+        IconButton::drawSegmentShadow (g, *b);
 
     if (page != Page::about)
         return;
@@ -243,17 +259,17 @@ void AboutDialog::paint (juce::Graphics& g)
     g.drawImage (icon, r.removeFromTop (112).toFloat(), juce::RectanglePlacement::centred);
     r.removeFromTop (10);
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::hero));
     g.drawText ("Ikaros Studio", r.removeFromTop (34), juce::Justification::centred);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::uiSemiBold (textSize::md));
     g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha)",
                 r.removeFromTop (22), juce::Justification::centred);
     r.removeFromTop (14);
 
-    g.setColour (colour::textSecondary);
+    g.setColour (theme().textSecondary);
     g.setFont (fonts::ui (textSize::lg));
     g.drawFittedText ("A digital audio workstation for Linux, Windows, and macOS. Record instruments and vocals, "
                   "play virtual instruments, arrange tracks, add effects, mix, and export your music. "

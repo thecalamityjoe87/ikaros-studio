@@ -19,16 +19,16 @@ namespace
         const char* name;
         const char* description;
         Icon icon;
-        juce::Colour colour;
+        std::optional<Family> family;   // none: neutral grey
     };
 
     const TemplateInfo templates[]
     {
-        { SessionTemplate::empty,      "Empty Session",       "One instrument track, ready to play.",       Icon::plus,      colour::textSecondary },
-        { SessionTemplate::keyboards,  "Keyboard Collection", "Piano, electric piano and organ.",           Icon::keyboards, family::keys },
-        { SessionTemplate::voice,      "Voice",               "A vocal track and a piano to sing along to.", Icon::mic,       family::audio },
-        { SessionTemplate::beats,      "Beat",                "Drum kit, synth bass and a pad.",            Icon::drums,     family::drums },
-        { SessionTemplate::songwriter, "Songwriter",          "Drums, bass, guitar, piano and vocals.",     Icon::guitar,    family::guitar },
+        { SessionTemplate::empty,      "Empty Session",       "One instrument track, ready to play.",       Icon::plus,      std::nullopt },
+        { SessionTemplate::keyboards,  "Keyboard Collection", "Piano, electric piano and organ.",           Icon::keyboards, Family::keys },
+        { SessionTemplate::voice,      "Voice",               "A vocal track and a piano to sing along to.", Icon::mic,       Family::audio },
+        { SessionTemplate::beats,      "Beat",                "Drum kit, synth bass and a pad.",            Icon::drums,     Family::drums },
+        { SessionTemplate::songwriter, "Songwriter",          "Drums, bass, guitar, piano and vocals.",     Icon::guitar,    Family::guitar },
     };
 
     // "Today, 2:05 PM", "Yesterday, 9:30 AM", or "Oct 9, 2026".
@@ -72,7 +72,7 @@ public:
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
 
-    void setTemplateArt (Icon i, juce::Colour c)    { icon = i; iconColour = c; }
+    void setTemplateArt (Icon i, std::optional<Family> f)   { icon = i; family = f; }
     void setPreview (const juce::Image& image)       { preview = image; }
 
     std::function<void()> onDoubleClick;
@@ -85,28 +85,28 @@ public:
         auto r = getLocalBounds().toFloat().reduced (1.0f);
         const bool on = getToggleState();
 
-        g.setColour (on ? colour::selectedRow : (over ? colour::raised : colour::cardBg));
+        g.setColour (on ? theme().selectedRow : (over ? theme().raised : theme().cardBg));
         g.fillRoundedRectangle (r, size::radiusCard);
 
         auto art = getLocalBounds().reduced (8).removeFromTop (artHeightFor (getWidth())).toFloat();
         paintArt (g, art);
 
         auto text = getLocalBounds().reduced (12, 0).withTrimmedTop ((int) art.getBottom() + 8);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.setFont (fonts::uiBold (textSize::lg));
         g.drawText (getName(), text.removeFromTop (20), juce::Justification::centredLeft, true);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::sm));
         g.drawFittedText (detail, text.removeFromTop (30), juce::Justification::topLeft, 2, 1.0f);
 
-        g.setColour (on ? colour::selectedBorder : colour::borderSoft);
+        g.setColour (on ? theme().selectedBorder : theme().borderSoft);
         g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
     }
 
 private:
     juce::String detail;
     std::optional<Icon> icon;
-    juce::Colour iconColour;
+    std::optional<Family> family;   // the template's colour (none: neutral grey), looked up when painting
     juce::Image preview;
 
     static int artHeightFor (int width)    { return (width - 16) * 5 / 8; }   // 16:10
@@ -121,6 +121,7 @@ private:
         if (icon.has_value())
         {
             // A template: its colour fading down, with its icon.
+            const auto iconColour = family.has_value() ? theme().family (*family) : theme().textSecondary;
             g.setGradientFill (juce::ColourGradient (iconColour.withAlpha (0.35f), art.getTopLeft(),
                                                      iconColour.withAlpha (0.08f), art.getBottomRight(), false));
             g.fillRect (art);
@@ -128,7 +129,7 @@ private:
             return;
         }
 
-        g.setColour (colour::wellBg);
+        g.setColour (theme().wellBg);
         g.fillRect (art);
 
         if (preview.isValid())
@@ -141,7 +142,7 @@ private:
         else
         {
             // Saved before previews existed.
-            icons::draw (g, Icon::waveform, art, colour::textSecondary.withAlpha (0.6f), 40.0f, 1.6f);
+            icons::draw (g, Icon::waveform, art, theme().textSecondary.withAlpha (0.6f), 40.0f, 1.6f);
         }
     }
 };
@@ -166,14 +167,14 @@ public:
 
         if (on || over)
         {
-            g.setColour (on ? colour::selectedRow : colour::raised.withAlpha (0.5f));
+            g.setColour (on ? theme().selectedRow : theme().raised.withAlpha (0.5f));
             g.fillRoundedRectangle (r, size::radius);
         }
 
         auto content = getLocalBounds().reduced (12, 0);
-        icons::draw (g, icon, content.removeFromLeft (20).toFloat(), on ? colour::text : colour::textSecondary, 18.0f, 1.8f);
+        icons::draw (g, icon, content.removeFromLeft (20).toFloat(), on ? theme().text : theme().textSecondary, 18.0f, 1.8f);
         content.removeFromLeft (10);
-        g.setColour (on ? colour::text : colour::textMenu);
+        g.setColour (on ? theme().text : theme().textMenu);
         g.setFont (on ? fonts::uiSemiBold (textSize::lg) : fonts::ui (textSize::lg));
         g.drawText (getName(), content, juce::Justification::centredLeft);
 
@@ -223,7 +224,7 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     addAndMakeVisible (*newNav);
     addAndMakeVisible (*recentNav);
 
-    openOtherButton.setColours (IconButton::ghostColours());
+    openOtherButton.setColours (IconButton::ghostColours);
     openOtherButton.onClick = [this]
     {
         auto onOpenOther = callbacks.onOpenOther;
@@ -243,7 +244,7 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     {
         auto& t = templates[i];
         auto* tile = templateTiles.add (new Tile (t.name, t.description));
-        tile->setTemplateArt (t.icon, t.colour);
+        tile->setTemplateArt (t.icon, t.family);
         tile->onClick = [this, i] { select (i); };
         tile->onDoubleClick = [this, i] { select (i); choose(); };
         tileHolder.addChildComponent (tile);
@@ -299,13 +300,11 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     keyModeBox.setTitle ("Major or minor");
     addChildComponent (keyModeBox);
 
-    auto cancelColours = IconButton::raisedColours();
-    cancelColours.border = colour::border;
-    cancelButton.setColours (cancelColours);
+    cancelButton.setColours (IconButton::borderedColours);
     cancelButton.onClick = [this] { close(); };
     addAndMakeVisible (cancelButton);
 
-    chooseButton.setColours (IconButton::primaryColours());
+    chooseButton.setColours (IconButton::primaryColours);
     chooseButton.onClick = [this] { choose(); };
     addAndMakeVisible (chooseButton);
 }
@@ -445,10 +444,10 @@ bool SessionChooser::keyPressed (const juce::KeyPress& key)
 void SessionChooser::paint (juce::Graphics& g)
 {
     // Dim the app behind the chooser.
-    g.fillAll (colour::scrimStrong);
+    g.fillAll (theme().scrimStrong);
 
-    shadow::dialog.drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
 
     // Sidebar, with its own background, rounded on the left only.
@@ -457,18 +456,18 @@ void SessionChooser::paint (juce::Graphics& g)
         juce::Path shape;
         shape.addRoundedRectangle (panel.toFloat(), size::radiusPill);
         g.reduceClipRegion (shape);
-        g.setColour (colour::sidebarBg);
+        g.setColour (theme().dialogSidebarBg);
         g.fillRect (sidebar);
-        g.setColour (colour::divider);
+        g.setColour (theme().divider);
         g.fillRect (sidebar.getRight(), sidebar.getY(), 1, sidebar.getHeight());
-        g.setColour (colour::borderSoft);
+        g.setColour (theme().borderSoft);
         g.fillRect (footer.getX(), footer.getY(), footer.getWidth(), 1);
     }
 
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
-    g.setColour (colour::text);
+    g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::md));
     g.drawText ("Ikaros Studio", sidebar.reduced (20, 0).withHeight (headerHeight).withY (sidebar.getY()),
                 juce::Justification::centredLeft);
@@ -479,7 +478,7 @@ void SessionChooser::paint (juce::Graphics& g)
 
     if (page == Page::recent && recentSessions.empty())
     {
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::lg));
         g.drawFittedText ("Sessions you save or open will show up here.\nUse \"Open Other...\" to find one on your computer.",
                           viewport.getBounds().withHeight (80), juce::Justification::centred, 3);
@@ -488,7 +487,7 @@ void SessionChooser::paint (juce::Graphics& g)
     if (page == Page::newSession)
     {
         // Labels for the detail fields.
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
 
         auto label = [&g] (const juce::String& text, juce::Component& field)

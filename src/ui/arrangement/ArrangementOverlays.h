@@ -77,7 +77,7 @@ public:
     struct Ghost
     {
         juce::Rectangle<float> area;
-        juce::Colour colour;
+        tokens::Family family;   // the colour is looked up when painting
         juce::String name;
     };
 

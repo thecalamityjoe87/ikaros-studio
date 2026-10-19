@@ -232,8 +232,11 @@ namespace
     constexpr int interfaceSizes[] { 100, 125, 150, 175, 200 };   // percent
 }
 
-AppearancePage::AppearancePage (AudioEngine& e) : engine (e)
+AppearancePage::AppearancePage (AudioEngine& e) : engine (e), themePicker (e.getPreferences())
 {
+    addRow ("Theme", themePicker, 0, "Match system follows your computer's light or dark mode. "
+                                     "The tracks and regions stay dark in every theme.");
+
     // The nearest size on offer, in case the file holds something else.
     const int current = engine.getPreferences().get (settings::interfaceScale);
     int nearest = 0;
@@ -310,7 +313,7 @@ public:
             if (line.heading)
             {
                 auto r = juce::Rectangle<int> (0, y, getWidth(), headingHeight).withTrimmedTop (10);
-                g.setColour (colour::textSecondary);
+                g.setColour (theme().textSecondary);
                 g.setFont (fonts::uiSemiBold (textSize::smPlus));
                 g.drawText (line.name.toUpperCase(), r, juce::Justification::centredLeft);
                 y += headingHeight;
@@ -318,10 +321,10 @@ public:
             }
 
             auto r = juce::Rectangle<int> (0, y, getWidth(), lineHeight);
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.setFont (fonts::ui (textSize::mdPlus));
             g.drawText (line.name, r, juce::Justification::centredLeft);
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.setFont (fonts::mono (textSize::smPlus));
             g.drawText (line.keys, r, juce::Justification::centredRight);
             y += lineHeight;
