@@ -83,6 +83,7 @@ namespace
         p.lcdBorder           = none;
         p.lcdLabel            = hex (0xff8f98a6);
         p.lcdValue            = hex (0xffffaa2b);   // the playhead's amber
+        p.lcdInTune           = hex (0xff4fd18b);
 
         // Text
         p.text                = hex (0xffeef1f5);
@@ -297,6 +298,7 @@ namespace
         p.lcdBorder           = hex (0xffd5d9df);
         p.lcdLabel            = hex (0xff5f6672);
         p.lcdValue            = hex (0xffb86e00);   // the playhead's amber, deeper: #ffaa2b is too pale on white
+        p.lcdInTune           = hex (0xff1f8f4e);
 
         // Text
         p.text                = hex (0xff1a1d22);

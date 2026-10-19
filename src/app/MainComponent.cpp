@@ -12,6 +12,7 @@
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
 #include "engine/TrackController.h"
+#include "engine/Tuner.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/AutomationHint.h"
 
@@ -401,7 +402,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
                                    CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleInspector,
                                    CommandIDs::toggleFullScreen, CommandIDs::manageSounds, CommandIDs::freesoundKey, CommandIDs::about,
-                                   CommandIDs::showPlugins, juce::StandardApplicationCommandIDs::quit };
+                                   CommandIDs::showPlugins, CommandIDs::toggleTuner, CommandIDs::closeTuner,
+                                   juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
 
@@ -676,6 +678,18 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Show Tempo Lane", "Show the tempo and time-signature changes under the ruler", "View", 0);
             info.setTicked (arrangement.isTempoLaneShown());
             break;
+        case CommandIDs::toggleTuner:
+            info.setInfo ("Tuner", "Turn the transport readout into a tuner for the selected track's input", "View", 0);
+            info.setTicked (engine.getTuner().isActive());
+            info.addDefaultKeypress ('k', cmd);
+            break;
+        case CommandIDs::closeTuner:
+            // Disabled while the tuner is off, so Escape goes on to whatever
+            // else uses it.
+            info.setInfo ("Close Tuner", "Back to the position and session settings", "View", 0);
+            info.setActive (engine.getTuner().isActive());
+            info.addDefaultKeypress (juce::KeyPress::escapeKey, 0);
+            break;
         case CommandIDs::toggleAutomation:
             // No shortcut: plain A (GarageBand's) plays a note on the computer keyboard here.
             info.setInfo ("Show Automation", "Show every track's automation", "View", 0);
@@ -852,6 +866,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
         case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
         case CommandIDs::zoomReset:       arrangement.resetZoom(); break;
+        case CommandIDs::toggleTuner:     engine.getTuner().setActive (! engine.getTuner().isActive()); break;
+        case CommandIDs::closeTuner:      engine.getTuner().setActive (false); break;
         case CommandIDs::snapToBar:       arrangement.setSnap (ArrangementView::Snap::bar); break;
         case CommandIDs::snapToBeat:      arrangement.setSnap (ArrangementView::Snap::beat); break;
         case CommandIDs::snapOff:         arrangement.setSnap (ArrangementView::Snap::off); break;

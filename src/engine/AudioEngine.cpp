@@ -18,6 +18,7 @@
 #include "engine/FlexHelpers.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
+#include "engine/Tuner.h"
 #include "platform/AppFolders.h"
 #include "platform/FileLock.h"
 
@@ -792,6 +793,7 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                                  &storage.getPropertiesFile());
 
     recordingGuard = std::make_unique<RecordingGuard> (*this);
+    tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
     deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
     sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
@@ -803,6 +805,10 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
     exporter = std::make_unique<SongExporter> (*this);
+
+    // Turning the tuner on or off mutes or unmutes the input it listens to.
+    tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+
     preferences->addListener (this);
     newSession();
 }
@@ -820,6 +826,7 @@ AudioEngine::~AudioEngine()
         impl->edit->getTransport().stop (false, true);
 
     recordingGuard.reset();
+    tuner.reset();
 
     impl->detachMasterMeter();
     preview.reset();
@@ -1982,6 +1989,9 @@ void AudioEngine::preferenceChanged (const juce::String& key)
 
     if (all || key == settings::pluginFolders.key || key == settings::disabledPluginFormats.key)
         plugins->preferencesChanged();
+
+    if ((all || key == settings::muteWhileTuning.key) && tuner->isActive())
+        trackController->inputs().routeAudioInputs();
 }
 
 //==============================================================================
@@ -2434,6 +2444,7 @@ void AudioEngine::reattachAudioCallbacks()
 {
     preview->reattach();
     recordingGuard->reattach();
+    tuner->reattach();
 
     if (impl->realtimeThread != nullptr)
         impl->realtimeThread->reattach();

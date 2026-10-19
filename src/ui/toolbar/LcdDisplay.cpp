@@ -571,6 +571,60 @@ LcdDisplay::LcdDisplay()
 
     for (auto* c : std::initializer_list<juce::Component*> { &tempoField, &timeSigField, &keyField })
         addAndMakeVisible (c);
+
+    // A real button, so it can be reached with the keyboard too.
+    tunerMuteButton.setColours (IconButton::ghostColours);
+    tunerMuteButton.setCornerRadius (size::radiusSmall);
+    tunerMuteButton.setIconSize (13.0f);
+    tunerMuteButton.setTooltip ("Mute while tuning is on: you don't hear the input (click to hear it)");
+    tunerMuteButton.onClick = [this]
+    {
+        if (onTunerMuteClicked)
+            onTunerMuteClicked();
+    };
+    addChildComponent (tunerMuteButton);   // added hidden: shown with the tuner
+}
+
+void LcdDisplay::setTunerShown (bool shouldShow)
+{
+    if (shouldShow == tunerShown)
+        return;
+
+    tunerShown = shouldShow;
+
+    for (auto* c : std::initializer_list<juce::Component*> { &tempoField, &timeSigField, &keyField })
+        c->setVisible (! tunerShown);
+
+    tunerMuteButton.setVisible (tunerShown);
+    setTitle (tunerShown ? "Tuner" : "Playhead position and session settings");
+    repaint();
+}
+
+void LcdDisplay::setTunerState (const TunerReading& r, bool hasInput, bool muting)
+{
+    if (muting != tunerMuting)
+    {
+        tunerMuting = muting;
+        tunerMuteButton.setIcon (muting ? Icon::mute : Icon::speaker);
+        tunerMuteButton.setTooltip (muting ? "Mute while tuning is on: you don't hear the input (click to hear it)"
+                                           : "Mute while tuning is off: you hear the input (click to mute it)");
+    }
+
+    // Repaint only when what's shown changes (this is called 30 times a second).
+    auto same = [] (const TunerReading& a, const TunerReading& b)
+    {
+        return a.hasPitch == b.hasPitch && a.note.midiNote == b.note.midiNote
+                 && std::abs (a.note.cents - b.note.cents) < 0.05f;
+    };
+
+    if (! same (r, tunerReading) || hasInput != tunerHasInput)
+    {
+        tunerReading = r;
+        tunerHasInput = hasInput;
+
+        if (tunerShown)
+            repaint();
+    }
 }
 
 void LcdDisplay::setState (const TransportState& s, const juce::String& key)
@@ -608,6 +662,12 @@ void LcdDisplay::paint (juce::Graphics& g)
     g.setColour (theme().lcdBorder);
     g.drawRoundedRectangle (bounds.reduced (0.5f), size::radiusLarge, 1.0f);
 
+    if (tunerShown)
+    {
+        paintTuner (g);
+        return;
+    }
+
     // The position isn't editable, so it has no field: same rows as the fields.
     g.setColour (theme().lcdValue);
     g.setFont (fonts::monoBold (textSize::lcd));
@@ -638,6 +698,154 @@ void LcdDisplay::resized()
     timeSigField.setBounds (r.removeFromLeft (timeWidth));
     r.removeFromLeft (smallGap);
     keyField.setBounds (r.removeFromLeft (keyWidth));
+
+    // The tuner: note | scale | cents, and the mute button in the top-right
+    // corner. The scale takes the room that's left.
+    auto t = getLocalBounds().reduced (12, 3);
+    tunerMuteButton.setBounds (getLocalBounds().removeFromRight (26).removeFromTop (24).reduced (2).translated (-4, 2));
+    noteArea = t.removeFromLeft (52);
+    t.removeFromRight (20);   // under the mute button
+    centsArea = t.removeFromRight (52);
+    scaleArea = t.reduced (juce::jmin (12, t.getWidth() / 12), 0);
+}
+
+void LcdDisplay::paintTuner (juce::Graphics& g)
+{
+    const auto& r = tunerReading;
+    const bool inTune = r.isInTune();
+    const auto valueColour = inTune ? theme().lcdInTune : theme().lcdValue;
+    const auto captionFont = fonts::mono (textSize::caption).withExtraKerningFactor (0.1f);
+
+    auto captionRow = [] (juce::Rectangle<int> area) { return area.withTrimmedTop (valueRowHeight).withTrimmedBottom (1); };
+    auto valueRow = [] (juce::Rectangle<int> area) { return area.withHeight (valueRowHeight); };
+
+    // A short bar where a value would be, when there's nothing to show.
+    auto drawBlank = [&] (juce::Rectangle<int> area, float width)
+    {
+        const auto row = valueRow (area).toFloat();
+        g.setColour (theme().lcdLabel);
+        g.fillRoundedRectangle (juce::Rectangle<float> (row.getX() + 1.0f, row.getBottom() - 9.0f, width, 2.5f), 1.0f);
+    };
+
+    // Note: "E" and a smaller "2" beside it, on the same baseline.
+    if (r.hasPitch)
+    {
+        const auto name = r.note.getNoteName();
+        const auto nameFont = fonts::monoBold (textSize::lcd);
+        const auto octaveFont = fonts::monoBold (textSize::md);
+        const auto nameWidth = juce::GlyphArrangement::getStringWidthInt (nameFont, name);
+        auto row = valueRow (noteArea);
+
+        g.setColour (valueColour);
+        g.setFont (nameFont);
+        g.drawText (name, row, juce::Justification::bottomLeft, false);
+        g.setFont (octaveFont);
+        g.drawText (juce::String (r.note.getOctave()), row.withTrimmedLeft (nameWidth + 1).withTrimmedBottom (1),
+                    juce::Justification::bottomLeft, false);
+    }
+    else
+    {
+        drawBlank (noteArea, 11.0f);
+    }
+
+    g.setColour (theme().lcdLabel);
+    g.setFont (captionFont);
+    g.drawText ("NOTE", captionRow (noteArea), juce::Justification::centredLeft);
+
+    // Cents: "0", "+9", "-18".
+    if (r.hasPitch)
+    {
+        const auto cents = (int) std::lround (r.note.cents);
+        g.setColour (valueColour);
+        g.setFont (fonts::monoBold (textSize::xl));
+        g.drawText (cents > 0 ? "+" + juce::String (cents) : juce::String (cents),
+                    valueRow (centsArea), juce::Justification::bottomLeft, false);
+    }
+    else
+    {
+        drawBlank (centsArea, 7.0f);
+    }
+
+    g.setColour (theme().lcdLabel);
+    g.setFont (captionFont);
+    g.drawText ("CENTS", captionRow (centsArea), juce::Justification::centredLeft);
+
+    // The scale, from 50 cents flat (left) to 50 sharp (right): tall ticks
+    // at the ends, small ones every 10 cents, and the in-tune zone in the middle.
+    const auto scale = valueRow (scaleArea).toFloat();
+    const auto midY = scale.getCentreY() + 1.0f;
+    const auto left = scale.getX(), right = scale.getRight(), centreX = scale.getCentreX();
+    auto xForCents = [&] (float cents) { return centreX + juce::jlimit (-50.0f, 50.0f, cents) / 50.0f * (right - left) * 0.5f; };
+
+    for (int c = -50; c <= 50; c += 10)
+    {
+        if (c == 0)
+            continue;
+
+        const bool end = std::abs (c) == 50;
+        const auto h = end ? 13.0f : 6.0f;
+        g.setColour (theme().lcdLabel.withAlpha (end ? 0.8f : 0.45f));
+        g.fillRect (juce::Rectangle<float> (end ? 1.5f : 1.0f, h).withCentre ({ xForCents ((float) c), midY }));
+    }
+
+    const auto zoneWidth = xForCents (TunerReading::inTuneCents) - xForCents (-TunerReading::inTuneCents) + 4.0f;
+    const auto zone = juce::Rectangle<float> (zoneWidth, 19.0f).withCentre ({ centreX, midY });
+    g.setColour (theme().lcdInTune.withAlpha (0.2f));
+    g.fillRoundedRectangle (zone, 2.0f);
+    g.setColour (theme().lcdInTune.withAlpha (0.35f));
+    g.fillRect (juce::Rectangle<float> (1.0f, zone.getHeight() - 4.0f).withCentre (zone.getCentre()));
+
+    if (r.hasPitch)
+    {
+        // The needle, with a soft glow round it.
+        const auto needle = juce::Rectangle<float> (3.0f, 21.0f).withCentre ({ xForCents (r.note.cents), midY });
+        g.setColour (valueColour.withAlpha (0.25f));
+        g.fillRoundedRectangle (needle.expanded (2.0f, 1.0f), 2.5f);
+        g.setColour (valueColour);
+        g.fillRoundedRectangle (needle, 1.5f);
+    }
+    else
+    {
+        g.setColour (theme().lcdLabel);
+        g.setFont (fonts::mono (textSize::sm));
+        g.drawText (tunerHasInput ? "Play a string" : "Select an audio track", scale.toNearestInt(),
+                    juce::Justification::centred, false);
+    }
+
+    // Under the scale: flat, 0, sharp. The side the needle is on lights up.
+    // (The flat and sharp signs are drawn: the readout's font hasn't got them.)
+    const auto captions = captionRow (scaleArea).toFloat();
+    const auto signY = captions.getCentreY();
+    const bool flat = r.hasPitch && ! inTune && r.note.cents < 0.0f;
+    const bool sharp = r.hasPitch && ! inTune && r.note.cents > 0.0f;
+
+    g.setColour (theme().lcdLabel);
+    g.setFont (captionFont);
+    g.drawText ("0", juce::Rectangle<float> (20.0f, captions.getHeight()).withCentre ({ centreX + 0.5f, signY }),
+                juce::Justification::centred, false);
+
+    {
+        // A flat: a stem with a rounded bowl at its foot.
+        juce::Path p;
+        const auto x = left - 1.5f, top = signY - 4.5f, bottom = signY + 3.5f;
+        p.startNewSubPath (x, top);
+        p.lineTo (x, bottom);
+        p.cubicTo (x + 4.5f, bottom - 1.5f, x + 4.5f, bottom - 5.0f, x, bottom - 3.0f);
+        g.setColour (flat ? theme().lcdValue : theme().lcdLabel);
+        g.strokePath (p, juce::PathStrokeType (1.0f));
+    }
+
+    {
+        // A sharp: two upright strokes crossed by two rising bars.
+        juce::Path p;
+        const auto x = right - 2.0f;
+        p.startNewSubPath (x + 1.2f, signY - 3.5f);  p.lineTo (x + 1.2f, signY + 3.5f);
+        p.startNewSubPath (x + 2.8f, signY - 4.0f);  p.lineTo (x + 2.8f, signY + 3.0f);
+        p.startNewSubPath (x, signY - 0.8f);         p.lineTo (x + 4.0f, signY - 1.6f);
+        p.startNewSubPath (x, signY + 1.6f);         p.lineTo (x + 4.0f, signY + 0.8f);
+        g.setColour (sharp ? theme().lcdValue : theme().lcdLabel);
+        g.strokePath (p, juce::PathStrokeType (0.8f));
+    }
 }
 
 void LcdDisplay::showTimeSignatureEditor()

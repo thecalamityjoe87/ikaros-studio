@@ -28,6 +28,7 @@ class AudioPreview;
 class SongExporter;
 class RecordingGuard;
 class AudioDeviceWatcher;
+class Tuner;
 
 //==============================================================================
 /** What the engine hands the UI when a third-party plug-in's window should
@@ -376,6 +377,11 @@ public:
     /** Renders the song (or one file per track) to WAV/FLAC/OGG. */
     SongExporter& getExporter() noexcept        { return *exporter; }
 
+    /** The guitar tuner. It listens to the selected track's input; while
+        it's on, that input's monitoring is off if the preference
+        settings::muteWhileTuning says so. */
+    Tuner& getTuner() noexcept                  { return *tuner; }
+
     /** Sets how plug-in windows are framed (see PluginWindowRequest). Without
         one, plug-in windows don't open. */
     void setPluginWindowFactory (PluginWindowFactory);
@@ -464,6 +470,7 @@ private:
     std::unique_ptr<TrackController> trackController;
     std::unique_ptr<SongExporter> exporter;
     std::unique_ptr<RecordingGuard> recordingGuard;
+    std::unique_ptr<Tuner> tuner;
     std::unique_ptr<AudioDeviceWatcher> deviceWatcher;
     juce::Component::SafePointer<juce::Component> audioSettings;
 

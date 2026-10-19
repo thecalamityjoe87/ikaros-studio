@@ -94,6 +94,9 @@ struct ThemePalette
     // whose position it shows. The one exception to "the accent only means
     // on" below: it's the playhead's colour, not an "on" state.
     juce::Colour lcdValue;
+    // The tuner's note, needle and cents once the string is in tune (they're
+    // lcdValue's amber until then).
+    juce::Colour lcdInTune;
 
     // Text
     juce::Colour text, textSecondary;

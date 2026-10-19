@@ -12,6 +12,7 @@
 #include "engine/SessionRecovery.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
+#include "engine/Tuner.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -24,6 +25,7 @@
 #include <cstdlib>                                    // setenv
 #include <functional>                                  // std::function
 #include <map>
+#include <set>
 #include <tuple>
 #include <iostream>
 
@@ -3388,6 +3390,348 @@ static void runQuantizeSection (const juce::File& dir)
     pumpMessages();
 }
 
+//==============================================================================
+// The tuner: the pitch detector on generated guitar notes, the steadying,
+// and the engine side (which input it listens to, Mute while tuning).
+static void runTunerSection()
+{
+    using juce::MathConstants;
+
+    // A note as a frequency, `cents` away from in tune.
+    auto noteHz = [] (int midiNote, double cents = 0.0) { return 440.0 * std::pow (2.0, (midiNote - 69 + cents / 100.0) / 12.0); };
+
+    // A sine, or a sawtooth (every harmonic, like a bright pickup), starting
+    // at sample `start`. The sawtooth is band-limited (harmonics summed up
+    // to 10 kHz) so it doesn't alias, as a real one through a sound card wouldn't.
+    auto toneSample = [] (double hz, double rate, juce::int64 i, bool saw) -> float
+    {
+        const auto phase = 2.0 * MathConstants<double>::pi * hz * (double) i / rate;
+
+        if (! saw)
+            return 0.4f * (float) std::sin (phase);
+
+        double v = 0.0;
+
+        for (int h = 1; h * hz < 10000.0; ++h)
+            v += std::sin (h * phase) / h;
+
+        return (float) (0.25 * v);
+    };
+
+    // Plays `seconds` of a tone into a tuner (as the audio thread would, in
+    // 256-sample blocks), analysing every 50 ms (as its thread would), and
+    // returns every reading.
+    auto listen = [&] (Tuner& tuner, double rate, double seconds, const std::function<float (juce::int64)>& source)
+    {
+        std::vector<TunerReading> readings;
+        std::vector<float> block (256);
+        const auto total = (juce::int64) (seconds * rate);
+        const auto analyseEvery = (juce::int64) (rate * 0.05);
+        juce::int64 sinceAnalysis = 0;
+
+        for (juce::int64 done = 0; done < total; done += (juce::int64) block.size())
+        {
+            for (size_t i = 0; i < block.size(); ++i)
+                block[i] = source (done + (juce::int64) i);
+
+            const float* channels[] = { block.data() };
+            tuner.pushInput (channels, 1, (int) block.size());
+            sinceAnalysis += (juce::int64) block.size();
+
+            if (sinceAnalysis >= analyseEvery)
+            {
+                sinceAnalysis -= analyseEvery;
+                tuner.analyse();
+                readings.push_back (tuner.getReading());
+            }
+        }
+
+        return readings;
+    };
+
+    juce::AudioDeviceManager noDevice;     // never opened: the test feeds the tuner itself
+
+    std::cout << "Tuner: the pitch detector\n";
+    {
+        // Open strings in standard tuning, drop D and drop C, a 7-string's
+        // low B, and some fretted notes up to the high E string's 24th fret.
+        const int notes[] = { 40, 45, 50, 55, 59, 64,    // E2 A2 D3 G3 B3 E4
+                              38, 36, 35,                // D2 (drop D), C2 (drop C), B1
+                              52, 69, 76, 88 };          // E3, A4, E5, E6 (1319 Hz)
+        const double detunings[] = { 0.0, -18.0, 9.0, -45.0, 33.0 };
+
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            PitchDetector detector;
+            detector.prepare (rate);
+            std::vector<float> samples ((size_t) detector.getWindowSize());
+            double worstCents = 0.0;
+            bool allFound = true;
+
+            for (bool saw : { false, true })
+                for (int note : notes)
+                    for (double detune : detunings)
+                    {
+                        const auto hz = noteHz (note, detune);
+
+                        for (size_t i = 0; i < samples.size(); ++i)
+                            samples[i] = toneSample (hz, rate, (juce::int64) i + 1000, saw);
+
+                        auto found = detector.detect (samples.data(), (int) samples.size());
+                        allFound = allFound && found.has_value();
+
+                        if (found)
+                        {
+                            const auto p = NotePitch::fromFrequency (found->frequency);
+                            const auto centsOff = (p.midiNote - note) * 100.0 + p.cents - detune;
+                            worstCents = juce::jmax (worstCents, std::abs (centsOff));
+                        }
+                    }
+
+            std::cout << "    (" << rate << " Hz: worst error " << juce::String (worstCents, 2) << " cents)\n";
+            check (allFound, "every guitar note is found, sine and sawtooth, in tune and detuned");
+            check (worstCents < 1.0, "...to within a cent, with no octave errors");
+        }
+
+        PitchDetector detector;
+        detector.prepare (48000.0);
+        std::vector<float> samples ((size_t) detector.getWindowSize(), 0.0f);
+        check (! detector.detect (samples.data(), (int) samples.size()), "silence has no pitch");
+
+        juce::Random random (1);
+
+        for (auto& s : samples)
+            s = random.nextFloat() * 0.5f - 0.25f;
+
+        check (! detector.detect (samples.data(), (int) samples.size()), "nor does noise");
+
+        // An E minor chord (E2, B2, E3, G3, B3, E4) is several notes at once.
+        const int chord[] = { 40, 47, 52, 55, 59, 64 };
+
+        for (size_t i = 0; i < samples.size(); ++i)
+        {
+            float v = 0.0f;
+
+            for (int n : chord)
+                v += toneSample (noteHz (n, n == 55 ? 14.0 : -7.0), 48000.0, (juce::int64) i, true) / 4.0f;
+
+            samples[i] = v;
+        }
+
+        auto chordPitch = detector.detect (samples.data(), (int) samples.size());
+        check (! chordPitch || NotePitch::fromFrequency (chordPitch->frequency).getNoteName() == "E",
+               "a strummed chord shows nothing, or its root");
+
+        auto e2 = NotePitch::fromFrequency (82.4069);
+        check (e2.getNoteName() == "E" && e2.getOctave() == 2 && std::abs (e2.cents) < 0.1f, "82.4 Hz is E2");
+        auto sharpA = NotePitch::fromFrequency (noteHz (45, 30.0));
+        check (sharpA.getNoteName() == "A" && sharpA.getOctave() == 2 && std::abs (sharpA.cents - 30.0f) < 0.01f, "...and A2 30 cents sharp is A2 +30");
+        check (NotePitch::fromFrequency (noteHz (61)).getNoteName() == "C#", "sharps are named with #");
+    }
+
+    std::cout << "Tuner: steady readings\n";
+    {
+        const double rate = 48000.0;
+
+        // A plucked string: a sawtooth that fades away over two seconds,
+        // then silence.
+        auto pluck = [&] (int note, double cents)
+        {
+            const auto hz = noteHz (note, cents);
+            return [=] (juce::int64 i) -> float
+            {
+                const auto t = (double) i / rate;
+                return t < 2.0 ? (float) std::exp (-1.5 * t) * toneSample (hz, rate, i, true) : 0.0f;
+            };
+        };
+
+        struct Case { int note; double cents; const char* what; };
+
+        for (auto c : { Case { 40, 0.0, "low E" }, Case { 40, -18.0, "low E, 18 cents flat" },
+                        Case { 38, -5.0, "drop D, 5 cents flat" }, Case { 36, 2.0, "drop C" },
+                        Case { 55, 9.0, "G string, 9 cents sharp" } })
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            auto readings = listen (tuner, rate, 2.6, pluck (c.note, c.cents));
+
+            // While the note sounds (after the first 150 ms): the right note,
+            // the right cents, and a needle that holds still.
+            bool rightNote = true;
+            float lowest = 100.0f, highest = -100.0f;
+
+            for (size_t i = 3; i < 40; ++i)
+            {
+                auto& r = readings[i];
+                rightNote = rightNote && r.hasPitch && r.note.midiNote == c.note;
+                lowest = juce::jmin (lowest, r.note.cents);
+                highest = juce::jmax (highest, r.note.cents);
+            }
+
+            const auto label = juce::String (c.what);
+            check (rightNote, (label + ": the right note the whole time").toRawUTF8());
+            check (std::abs (lowest - c.cents) < 1.5 && std::abs (highest - c.cents) < 1.5,
+                   (label + ": cents right to within 1.5, needle steady").toRawUTF8());
+            check (readings[38].isInTune() == (std::abs (c.cents) <= TunerReading::inTuneCents),
+                   (label + ": shows in tune only when within 3 cents").toRawUTF8());
+            check (! readings.back().hasPitch, (label + ": blank once the string stops").toRawUTF8());
+        }
+
+        // A single wrong reading (a pick scratch) doesn't move the display.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            const auto a = noteHz (45), e = noteHz (64);
+
+            // A2, with 45 ms of high E in the middle (less than one reading apart).
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64 i)
+            {
+                const bool glitch = i >= (juce::int64) (0.5 * rate) && i < (juce::int64) (0.545 * rate);
+                return toneSample (glitch ? e : a, rate, i, true);
+            });
+
+            bool held = true;
+
+            for (size_t i = 3; i < readings.size(); ++i)
+                held = held && readings[i].hasPitch && readings[i].note.midiNote == 45;
+
+            check (held, "a moment of another pitch doesn't flicker the note");
+        }
+
+        // A string that's a quarter-tone out doesn't flicker between names.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            const auto hz = noteHz (50, 50.0);    // halfway between D3 and D#3
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64 i)
+            {
+                // ...and wavering 3 cents either side, 3 times a second.
+                // (The phase is the frequency added up over time.)
+                const auto t = (double) i / rate, depth = 0.0017, wobbleHz = 3.0;
+                const auto phase = 2.0 * MathConstants<double>::pi * hz * t
+                                     - hz * depth / wobbleHz * std::cos (2.0 * MathConstants<double>::pi * wobbleHz * t);
+                return 0.4f * (float) std::sin (phase);
+            });
+
+            std::set<int> namesShown;
+
+            for (size_t i = 3; i < readings.size(); ++i)
+                if (readings[i].hasPitch)
+                    namesShown.insert (readings[i].note.midiNote);
+
+            check (namesShown.size() == 1, "a note between two others keeps one name");
+        }
+
+        // Noise shows nothing at all.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            juce::Random random (7);
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64) { return random.nextFloat() * 0.4f - 0.2f; });
+            check (std::none_of (readings.begin(), readings.end(), [] (auto& r) { return r.hasPitch; }), "noise shows nothing");
+        }
+
+        // A stereo input: both sides are heard (here the note is only on the right).
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, 1);
+            std::vector<float> left (256, 0.0f), right (256);
+
+            for (juce::int64 done = 0; done < (juce::int64) rate / 2; done += 256)
+            {
+                for (size_t i = 0; i < right.size(); ++i)
+                    right[i] = toneSample (noteHz (45), rate, done + (juce::int64) i, false);
+
+                const float* channels[] = { left.data(), right.data() };
+                tuner.pushInput (channels, 2, 256);
+
+                if (done % 2304 == 0)
+                    tuner.analyse();
+            }
+
+            check (tuner.getReading().hasPitch && tuner.getReading().note.midiNote == 45, "a stereo input is heard on either side");
+
+            tuner.setInputChannels (-1, -1);
+            check (! tuner.hasInput(), "no input channels: nothing to listen to");
+        }
+    }
+
+    std::cout << "Tuner: in the engine\n";
+    {
+        AudioEngine engine { testSettings, false };
+        TestAudioDevice::Settings settings;
+        auto device = std::make_unique<TestAudioDevice> (engine, settings);
+        auto& tracks = engine.getTracks();
+        auto& tuner = engine.getTuner();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        runAudio (*device, 0.2);
+
+        const auto midi = tracks.getTracks().front().id;
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (inputs.size() == 3, "(the device's inputs: 1, 2, 1+2)");
+
+        if (inputs.size() < 3)
+            return;
+
+        auto guitar = tracks.addAudioTrack();
+        tracks.inputs().setTrackInput (guitar, inputs[0].id);
+        tracks.inputs().setMonitoring (guitar, true);
+        tracks.setSelectedTrack (guitar);
+        runAudio (*device, 0.2);
+        check (tuner.hasInput(), "it listens to the selected audio track's input");
+
+        tracks.setSelectedTrack (midi);
+        check (! tuner.hasInput(), "an instrument track has no input for it");
+        tracks.setSelectedTrack (guitar);
+
+        auto heard = [&] { runAudio (*device, 0.2); return peakOf (device->process (tone (*device, 0.5f) (0, (int) settings.sampleRate / 2))); };
+        check (heard() > 0.1f, "(the monitored input is heard)");
+
+        // Turning the tuner on is a listening change, not an edit: nothing to undo or save.
+        const auto before = engine.getStateSnapshot();
+        const auto undoBefore = engine.getUndoDescription();
+        tuner.setActive (true);
+        check (tuner.isActive() && heard() < 0.001f, "while tuning, the input is muted (the default)");
+        check (engine.getStateSnapshot() == before && engine.getUndoDescription() == undoBefore,
+               "turning the tuner on doesn't change the session or add an undo step");
+
+        engine.getPreferences().set (settings::muteWhileTuning, false);
+        check (heard() > 0.1f, "with Mute while tuning off, it's heard while tuning");
+        engine.getPreferences().set (settings::muteWhileTuning, true);
+        check (heard() < 0.001f, "(muted again)");
+
+        // Its own thread reads the notes (fed here straight into the tuner:
+        // the test device shares its input and output buffers, so a callback
+        // after Tracktion's sees the output, see AudioEngine::reattachAudioCallbacks).
+        std::vector<float> block (256);
+        juce::int64 done = 0;
+        const auto until = juce::Time::getMillisecondCounter() + 2000;
+
+        while (! tuner.getReading().hasPitch && juce::Time::getMillisecondCounter() < until)
+        {
+            for (size_t i = 0; i < block.size(); ++i)
+                block[i] = toneSample (noteHz (50), settings.sampleRate, done + (juce::int64) i, true);
+
+            done += (juce::int64) block.size();
+            const float* channels[] = { block.data() };
+            tuner.pushInput (channels, 1, (int) block.size());
+            juce::Thread::sleep (5);   // about real time
+        }
+
+        check (tuner.getReading().hasPitch && tuner.getReading().note.midiNote == 50, "its thread finds the note (D3)");
+
+        tuner.setActive (false);
+        check (! tuner.getReading().hasPitch, "off, it shows nothing");
+        check (heard() > 0.1f, "and the input is heard again");
+        check (engine.getStateSnapshot() == before, "the session is as it was");
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -6252,6 +6596,9 @@ int main (int argc, char* argv[])
 
     if (runs ("quantize"))
         runQuantizeSection (dir);
+
+    if (runs ("tuner"))
+        runTunerSection();
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

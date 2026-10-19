@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/Tuner.h"
 #include "ui/widgets/IconButton.h"
 
 namespace ikaros
@@ -18,6 +19,14 @@ namespace ikaros
       - BPM: click to type, drag up/down, scroll, or use the small steppers.
       - Time signature: opens a small editor (beats per bar, beat value).
       - Key: opens a key picker (major/minor, then the root note).
+
+    While the tuner is on, it shows the tuner instead:
+
+      E2    |  '  '  ' [|] '  '  '  |    0      [mute]
+      NOTE  ♭           0           ♯    CENTS
+
+    The note and cents are amber, and green once in tune (within 3 cents);
+    the needle moves along the scale from 50 cents flat to 50 sharp.
 */
 class LcdDisplay  : public juce::Component
 {
@@ -36,6 +45,17 @@ public:
 
     std::function<void (int numerator, int denominator)> onTimeSignatureChanged;
     std::function<void (int root, bool minor)> onKeyChanged;
+
+    /** Shows the tuner instead of the position and session settings. */
+    void setTunerShown (bool);
+    bool isTunerShown() const noexcept      { return tunerShown; }
+
+    /** What the tuner shows: its reading, whether the selected track has an
+        audio input to listen to, and whether Mute while tuning is on. */
+    void setTunerState (const TunerReading&, bool hasInput, bool muting);
+
+    /** The mute button in the tuner: turn Mute while tuning on or off. */
+    std::function<void()> onTunerMuteClicked;
 
     /** The width this component wants, given its content. */
     static constexpr int preferredWidth = 328;
@@ -125,6 +145,14 @@ private:
 
     juce::Rectangle<int> positionArea;
 
+    // The tuner
+    IconButton tunerMuteButton { "Mute while tuning", Icon::mute };
+    bool tunerShown = false;
+    TunerReading tunerReading;
+    bool tunerHasInput = false, tunerMuting = true;
+    juce::Rectangle<int> noteArea, scaleArea, centsArea;
+
+    void paintTuner (juce::Graphics&);
     void showTimeSignatureEditor();
     void showKeyPicker();
 

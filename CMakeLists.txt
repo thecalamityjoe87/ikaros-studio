@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 7)
+set(IKAROS_MILESTONE 8)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -276,6 +276,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RecordingTypes.h
     src/engine/Preferences.h        src/engine/Preferences.cpp
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
+    src/engine/PitchDetector.h      src/engine/PitchDetector.cpp
+    src/engine/Tuner.h              src/engine/Tuner.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
 
@@ -562,7 +564,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -598,6 +600,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Flex PROPERTIES LABELS "flex")
     add_test(NAME EngineSmokeTest.Quantize COMMAND IkarosEngineSmokeTest --only=quantize)
     set_tests_properties(EngineSmokeTest.Quantize PROPERTIES LABELS "quantize")
+    add_test(NAME EngineSmokeTest.Tuner COMMAND IkarosEngineSmokeTest --only=tuner)
+    set_tests_properties(EngineSmokeTest.Tuner PROPERTIES LABELS "tuner")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
