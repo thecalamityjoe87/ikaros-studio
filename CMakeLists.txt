@@ -11,6 +11,12 @@ cmake_minimum_required(VERSION 3.22)
 
 project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 
+# The version people see (About, splash, saved sessions): the release number
+# plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
+# Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
+set(IKAROS_MILESTONE 7)
+set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -383,7 +389,7 @@ target_include_directories(IkarosStudio PRIVATE src)
 
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_VERSION>"
+    JUCE_APPLICATION_VERSION_STRING="${IKAROS_VERSION_STRING}"
     JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -392,7 +398,7 @@ target_compile_definitions(IkarosStudio PRIVATE
     ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
 # The version, as the engine records it in saved sessions.
-target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${IKAROS_VERSION_STRING}")
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
 # (see src/engine/PackStore.h): a web address or a file path, in the app's own
@@ -516,7 +522,7 @@ if(IKAROS_BUILD_TESTS)
 
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
-        IKAROS_VERSION="${PROJECT_VERSION}"
+        IKAROS_VERSION="${IKAROS_VERSION_STRING}"
         IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
         IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
         IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")

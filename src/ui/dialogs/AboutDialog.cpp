@@ -144,7 +144,7 @@ void AboutDialog::fillCredits()
 
 void AboutDialog::fillReleaseNotes()
 {
-    addHeading (text, "0.0.1 (alpha): first release");
+    addHeading (text, juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha): first release");
     addBody (text, "The first release of Ikaros Studio. It's alpha software: ready to try, but expect rough "
                    "edges, and keep a copy of any session you care about.\n");
 
