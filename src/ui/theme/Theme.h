@@ -90,7 +90,10 @@ struct ThemePalette
 
     // The transport readout
     juce::Colour lcdBg, lcdBorder, lcdLabel;
-    juce::Colour lcdValue;            // the bar · beat position
+    // The bar · beat position: amber in both themes, like the playhead
+    // whose position it shows. The one exception to "the accent only means
+    // on" below: it's the playhead's colour, not an "on" state.
+    juce::Colour lcdValue;
 
     // Text
     juce::Colour text, textSecondary;
@@ -131,7 +134,8 @@ struct ThemePalette
 
     // The accent only ever means "on": active toggles (cycle, metronome,
     // count-in, a muted track's Mute, Flex, open automation), Play while
-    // playing. Nothing else uses it.
+    // playing. Nothing else uses it, except the playhead's colour (the
+    // playhead, and the position readout: see lcdValue).
     juce::Colour accent, accentLight, accentBorder;
     juce::Colour record, warning, solo;
     juce::Colour meterGreen, meterYellow, meterRed;

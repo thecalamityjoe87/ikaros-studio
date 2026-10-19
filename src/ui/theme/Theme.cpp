@@ -82,7 +82,7 @@ namespace
         p.lcdBg               = hex (0xff050607);
         p.lcdBorder           = none;
         p.lcdLabel            = hex (0xff8f98a6);
-        p.lcdValue            = hex (0xffeef1f5);
+        p.lcdValue            = hex (0xffffaa2b);   // the playhead's amber
 
         // Text
         p.text                = hex (0xffeef1f5);
@@ -296,7 +296,7 @@ namespace
         p.lcdBg               = hex (0xffffffff);
         p.lcdBorder           = hex (0xffd5d9df);
         p.lcdLabel            = hex (0xff5f6672);
-        p.lcdValue            = hex (0xffb86e00);   // accent text: #ffaa2b is too pale on white
+        p.lcdValue            = hex (0xffb86e00);   // the playhead's amber, deeper: #ffaa2b is too pale on white
 
         // Text
         p.text                = hex (0xff1a1d22);
@@ -383,12 +383,12 @@ namespace
 
         // The arrangement stays dark, a little lighter than in dark mode.
         auto& a = p.arrangement;
-        a.laneBg              = hex (0xff34373d);
-        a.laneDivider         = hex (0xff2a2d32);
+        a.laneBg              = hex (0xff3e4249);
+        a.laneDivider         = hex (0xff33363c);
         a.gridBar             = juce::Colours::white.withAlpha (0.08f);
         a.gridBeat            = juce::Colours::white.withAlpha (0.03f);
         a.selectedLane        = juce::Colours::white.withAlpha (0.05f);
-        a.strip               = hex (0xff2a2d32);
+        a.strip               = hex (0xff33363c);
         a.playhead            = hex (0xfff09a14);
         a.cycle               = hex (0xfff09a14);
         a.scrollbar           = hex (0xff5a5e66);
