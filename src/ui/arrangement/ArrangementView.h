@@ -18,14 +18,14 @@ namespace ikaros
 
     Layout:
         ┌─────────── 320 ───────────┬──────────── lanes ────────────┐
-        │ TRACKS [Snap: Beat] ⟋ ◷ ⌕─○│ ruler  1   2   3   4 ...      │  30px
+        │ TRACKS [Snap] ⟋ ◷     [+] │ ruler  1   2   3   4 ...      │  30px
         │ TEMPO                     │ tempo lane (when shown) ▔▔╲▁▁ │  44px
-        │ SECTIONS              [+] │ [Intro   ][Verse      ][Cho.. │  24px
+        │ SECTIONS              [⚑] │ [Intro   ][Verse      ][Cho.. │  24px
         ├───────────────────────────┼───────────────────────────────┤
-        │ TrackHeader               │ lane  [region] [region]       │ 100px
-        │ TrackHeader               │ lane                          │ (118 w/ automation)
-        │                           │ ┌ drop zone ┐                 │
-        │                           │ ◀═══════ scroll bar ═══════▶  │  12px
+        │ TrackHeader               │ lane  [region] [region]       │ 84px (Tall: 100)
+        │ TrackHeader               │ lane                          │ (+18 w/ automation)
+        │ ┌╌╌╌╌╌ + Add track ╌╌╌╌╌┐ │ ┌ drop zone ┐                 │
+        │ ⌕ ───── zoom ───○ [⊖|↺|⊕] │ ◀═══════ scroll bar ═══════▶  │  26px
         └───────────────────────────┴───────────────────────────────┘
     Headers + lanes scroll vertically together inside a Viewport. Time
     (horizontal zoom and scroll) is handled here instead: the ruler, lanes and
@@ -98,8 +98,17 @@ public:
     void setTempoLaneShown (bool);
     bool isTempoLaneShown() const noexcept       { return tempoLaneShown; }
 
+    /** View > Compact Tracks (84px rows, the default) or Tall Tracks (100px).
+        Saved in the Preferences. */
+    void setTracksTall (bool);
+    bool areTracksTall() const noexcept          { return tracksTall; }
+
     void zoomIn();
     void zoomOut();
+
+    /** Back to the starting zoom (16 bars across when the view first had
+        room), where tracks are their normal height. */
+    void resetZoom();
 
     /** Shows the rename field on a region (scrolling it into view first). */
     void startRenaming (RegionId);
@@ -114,6 +123,7 @@ public:
     std::function<void (RegionId)> onOpenRegionInEditor;
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
     std::function<void()> onTempoLaneToggled;                     // the same, for Show Tempo Lane
+    std::function<void()> onAddTrack;                             // the "Add track" row under the tracks
 
     //==============================================================================
     void paint (juce::Graphics&) override;
@@ -148,7 +158,7 @@ public:
         double pixelsPerBeat = 20.0;
         TempoMap tempo;                // where the bars are (they can differ in length)
         double scrollBeats = 0.0;      // the beat at the left edge of the lanes
-        int rowHeight = tokens::size::trackRowHeight;   // track height: grows when zoomed in (see setZoom)
+        int rowHeight = tokens::size::trackRowCompact;   // track height: grows when zoomed in (see setZoom)
 
         float beatToX (double beat) const          { return (float) ((beat - scrollBeats) * pixelsPerBeat); }
         double xToBeat (float x) const             { return x / pixelsPerBeat + scrollBeats; }
@@ -161,6 +171,7 @@ private:
     class SectionStrip;
     class Lane;
     class DropZone;
+    class AddTrackButton;
     class Playhead;
     class Overlay;
     class Content;
@@ -176,6 +187,7 @@ private:
     std::unique_ptr<Ruler> ruler;
     std::unique_ptr<TempoLane> tempoLane;
     bool tempoLaneShown = false;
+    bool tracksTall = false;
     std::unique_ptr<SectionStrip> sectionStrip;
     std::unique_ptr<Content> content;
     std::unique_ptr<Overlay> overlay;
@@ -186,8 +198,13 @@ private:
     IconButton snapButton { "Snap to grid", std::nullopt, "Snap: Beat" };
     IconButton automationButton { "Show automation", Icon::automation };
     IconButton tempoLaneButton { "Show tempo lane", Icon::clock };
+    IconButton newTrackButton { "Add track", Icon::plus };   // the tracks bar's "+", always in view
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Rectangle<int> zoomIconArea;
+    juce::Rectangle<int> zoomIconArea;                       // the magnifier in front of the zoom slider
+    IconButton zoomOutButton { "Zoom out", Icon::zoomOut };   // the "zoom out | reset | zoom in" group beside the zoom slider
+    IconButton zoomResetButton { "Reset zoom", Icon::reset };
+    IconButton zoomInButton { "Zoom in", Icon::zoomIn };
+    juce::Rectangle<int> zoomButtonsArea;                   // their shared outline (drawn in paint)
 
     std::vector<TrackInfo> tracks;
     double contentEndBeat = 0.0;
@@ -201,6 +218,7 @@ private:
     double getVisibleBeats() const;
     double getTotalBeats() const;
     void setZoom (double pixelsPerBeat, float anchorX);
+    int getBaseRowHeight() const noexcept;   // a track's height when not zoomed in: compact or tall
     float getZoomAnchorX (float fallbackX) const;   // where a zoom should stay put, in lane x
     void scrollToBeat (double beat);
     void timelineChanged();
@@ -237,7 +255,6 @@ private:
     void showTrackMenu();
     void showLaneMenu (TrackId, double beat);
     juce::PopupMenu createTrackMenu();
-    juce::PopupMenu createColourMenu (TrackId);
 
     /** Playhead dragging: moves it to an x-position in the lanes, scrolling
         the timeline when that's past either edge. */

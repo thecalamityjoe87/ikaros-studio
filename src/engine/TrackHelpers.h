@@ -61,11 +61,6 @@ inline bool isEqPlugin (const te::Plugin& p)         { return (bool) p.state.get
 // plugin type is expected; anything else is one of Tracktion's built-in types.
 inline const juce::String thirdPartyPrefix ("plugin:");
 
-// Track colours from the design tokens: blue, orange, green, purple, yellow.
-// They live here (not in the UI tokens) because a track's colour is part of
-// the saved session.
-inline const std::array<juce::uint32, 5> trackPalette { 0xff5aa9ff, 0xffff8f5a, 0xff4fd18b, 0xffc78bff, 0xffffd25a };
-
 inline te::AudioTrack* asAudioTrack (te::Track* t)   { return dynamic_cast<te::AudioTrack*> (t); }
 
 inline te::FourOscPlugin* findSynth (te::AudioTrack& t)
@@ -91,6 +86,43 @@ inline te::AudioTrack* findTrack (te::Edit* edit, TrackId id)
 
     auto* track = asAudioTrack (te::findTrackForID (*edit, te::EditItemID::fromRawID (id)));
     return track != nullptr && ! isBusTrack (*track) ? track : nullptr;
+}
+
+// A track name nobody else has: `name` itself if it's free, or else it with
+// the next free number: "Solo Violin 2", "Solo Violin 3"... A name that
+// already ends in a number counts on from it ("Audio 2" → "Audio 3").
+// `except` (e.g. the track being named) doesn't count as having a name.
+inline juce::String uniqueTrackName (te::Edit& edit, const juce::String& name, const te::Track* except = nullptr)
+{
+    auto isTaken = [&] (const juce::String& candidate)
+    {
+        for (auto* t : getUserTracks (edit))
+            if (t != except && t->getName() == candidate)
+                return true;
+
+        return false;
+    };
+
+    if (! isTaken (name))
+        return name;
+
+    auto base = name;
+    int number = 1;
+    const auto lastWord = name.fromLastOccurrenceOf (" ", false, false);
+
+    if (name.containsChar (' ') && lastWord.isNotEmpty() && lastWord.containsOnly ("0123456789"))
+    {
+        base = name.upToLastOccurrenceOf (" ", false, false);
+        number = lastWord.getIntValue();
+    }
+
+    juce::String candidate;
+
+    do
+        candidate = base + " " + juce::String (++number);
+    while (isTaken (candidate));
+
+    return candidate;
 }
 
 // The plugins a track runs, or for masterTrackId the master channel's

@@ -44,10 +44,8 @@ FolderField::FolderField (const juce::String& n) : name (n)
 
     for (auto* b : { &chooseButton, &defaultButton })
     {
-        auto colours = IconButton::raisedColours();
-        colours.border = colour::border;
-        b->setColours (colours);
-        b->setFont (fonts::ui (13.0f));
+        b->setColours (IconButton::borderedColours);
+        b->setFont (fonts::ui (textSize::md));
         addAndMakeVisible (b);
     }
 
@@ -84,16 +82,16 @@ void FolderField::chooseFolder()
 
 void FolderField::paint (juce::Graphics& g)
 {
-    g.setColour (colour::wellBg);
+    g.setColour (theme().wellBg);
     g.fillRoundedRectangle (pathArea.toFloat(), size::radiusSmall);
-    g.setColour (colour::borderSoft);
+    g.setColour (theme().borderSoft);
     g.drawRoundedRectangle (pathArea.toFloat().reduced (0.5f), size::radiusSmall, 1.0f);
 
     const bool isDefault = chosenFolder == juce::File();
-    const auto font = fonts::ui (13.0f);
+    const auto font = fonts::ui (textSize::md);
     const auto text = describe (isDefault ? defaultFolder : chosenFolder);
 
-    g.setColour (isDefault ? colour::textSecondary : colour::text);
+    g.setColour (isDefault ? theme().textSecondary : theme().text);
     g.setFont (font);
     g.drawText (fitFromStart (text, font, (float) pathArea.getWidth() - 20.0f), pathArea.reduced (10, 0),
                 juce::Justification::centredLeft);

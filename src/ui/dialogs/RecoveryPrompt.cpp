@@ -1,4 +1,5 @@
 #include "ui/dialogs/RecoveryPrompt.h"
+#include "ui/dialogs/AlertDialog.h"
 
 namespace ikaros
 {
@@ -38,7 +39,6 @@ namespace
     {
         const auto session = remaining.front();
         auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::WarningIcon)
                            .withTitle ("Discard unsaved work?")
                            .withMessage ("The unsaved work in \"" + session.name + "\" will be deleted. This can't be undone.")
                            .withButton ("Discard")
@@ -46,7 +46,7 @@ namespace
                            .withAssociatedComponent (parent);
 
         // 1 = Discard, 0 = Cancel (or Escape): back to the first question.
-        juce::AlertWindow::showAsync (options, [parent, &engine, remaining, done] (int result) mutable
+        AlertDialog::show (options, [parent, &engine, remaining, done] (int result) mutable
         {
             if (parent == nullptr)
                 return;
@@ -74,7 +74,6 @@ namespace
 
         const auto session = remaining.front();
         auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
                            .withTitle ("Recover unsaved work?")
                            .withMessage ("Ikaros Studio quit unexpectedly while \"" + session.name + "\" was open. "
                                          "Its work was saved automatically " + describeTime (session.savedAt) + ".\n\n"
@@ -84,7 +83,7 @@ namespace
                            .withAssociatedComponent (parent);
 
         // 1 = Recover, 0 = Discard (or Escape, so Discard asks again first).
-        juce::AlertWindow::showAsync (options, [parent, &engine, remaining, done] (int result) mutable
+        AlertDialog::show (options, [parent, &engine, remaining, done] (int result) mutable
         {
             if (parent == nullptr)
                 return;
@@ -103,14 +102,13 @@ namespace
 
             // Couldn't be read: say so, and keep it (maybe a later version can).
             auto failed = juce::MessageBoxOptions()
-                              .withIconType (juce::MessageBoxIconType::WarningIcon)
                               .withTitle ("Couldn't recover \"" + remaining.front().name + "\"")
                               .withMessage ("Its autosaved copy couldn't be read.")
                               .withButton ("OK")
                               .withAssociatedComponent (parent);
 
             remaining.erase (remaining.begin());
-            juce::AlertWindow::showAsync (failed, [parent, &engine, remaining, done] (int)
+            AlertDialog::show (failed, [parent, &engine, remaining, done] (int)
             {
                 ask (parent, engine, remaining, done);
             });

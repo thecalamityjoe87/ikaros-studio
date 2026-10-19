@@ -44,21 +44,16 @@ AboutDialog::AboutDialog (AudioEngine& e)
     text.setReadOnly (true);
     text.setCaretVisible (false);
     text.setScrollbarsShown (true);
-    text.setColour (juce::TextEditor::backgroundColourId, colour::wellBg);
-    text.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
-    text.setColour (juce::TextEditor::focusedOutlineColourId, colour::borderSoft);
-    text.setColour (juce::TextEditor::textColourId, colour::textSecondary);
+    applyTextColours();
     text.setBorder ({ 12, 14, 12, 14 });
     addChildComponent (text);
 
     // The chosen tab is a rounded pill inside the shared background drawn in paint().
-    const auto tabColours = IconButton::Colours { juce::Colours::transparentBlack, colour::text,
-                                                  colour::accent, colour::textOnAccent };
     int index = 0;
 
     for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
     {
-        b->setColours (tabColours);
+        b->setColours (IconButton::segmentColours);
         b->setCornerRadius (segmentRadius);
         b->setFont (fonts::uiBold (tabFontSize));
         b->setRadioGroupId (1);   // radio group: turning one on turns the others off
@@ -67,11 +62,26 @@ AboutDialog::AboutDialog (AudioEngine& e)
         ++index;
     }
 
-    doneButton.setColours (IconButton::accentColours());
+    doneButton.setColours (IconButton::primaryColours);
     doneButton.onClick = [this] { close(); };
     addAndMakeVisible (doneButton);
 
     showPage (Page::about);
+}
+
+void AboutDialog::applyTextColours()
+{
+    text.setColour (juce::TextEditor::focusedOutlineColourId, theme().borderSoft);
+    text.setColour (juce::TextEditor::textColourId, theme().textSecondary);
+}
+
+void AboutDialog::lookAndFeelChanged()
+{
+    // JUCE calls lookAndFeelChanged() on every component when the theme
+    // changes. A TextEditor keeps the colour each piece of text was added
+    // with, so set the colours again and refill the page.
+    applyTextColours();
+    showPage (page);
 }
 
 void AboutDialog::showPage (Page newPage)
@@ -102,15 +112,15 @@ namespace
 {
     void addHeading (juce::TextEditor& t, const juce::String& s)
     {
-        t.setFont (fonts::uiBold (14.0f));
-        t.setColour (juce::TextEditor::textColourId, colour::text);
+        t.setFont (fonts::uiBold (textSize::lg));
+        t.setColour (juce::TextEditor::textColourId, theme().text);
         t.insertTextAtCaret (s + "\n");
     }
 
     void addBody (juce::TextEditor& t, const juce::String& s)
     {
-        t.setFont (fonts::ui (13.0f));
-        t.setColour (juce::TextEditor::textColourId, colour::textSecondary);
+        t.setFont (fonts::ui (textSize::md));
+        t.setColour (juce::TextEditor::textColourId, theme().textSecondary);
         t.insertTextAtCaret (s + "\n");
     }
 }
@@ -134,7 +144,7 @@ void AboutDialog::fillCredits()
 
 void AboutDialog::fillReleaseNotes()
 {
-    addHeading (text, "0.0.1 (alpha): first release");
+    addHeading (text, juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha): first release");
     addBody (text, "The first release of Ikaros Studio. It's alpha software: ready to try, but expect rough "
                    "edges, and keep a copy of any session you care about.\n");
 
@@ -152,7 +162,7 @@ void AboutDialog::fillReleaseNotes()
                               "folder show up in the library\n");
 
     addHeading (text, "Not yet");
-    addBody (text, bullet + "Downloadable sound packs: More Sounds has nothing to offer until they're hosted");
+    addBody (text, bullet + "Downloadable sound packs: Manage Sounds has nothing to offer until they're hosted");
 }
 
 void AboutDialog::fillAcknowledgements()
@@ -221,19 +231,22 @@ void AboutDialog::mouseDown (const juce::MouseEvent& e)
 
 void AboutDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (theme().scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     // The tabs' shared background and outline.
-    g.setColour (colour::cardBg);
+    g.setColour (theme().segmentWell);
     g.fillRoundedRectangle (tabsArea.toFloat(), segmentOutlineRadius);
-    g.setColour (colour::border);
+    g.setColour (theme().segmentWellBorder);
     g.drawRoundedRectangle (tabsArea.toFloat().reduced (0.5f), segmentOutlineRadius, 1.0f);
+
+    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
+        IconButton::drawSegmentShadow (g, *b);
 
     if (page != Page::about)
         return;
@@ -246,25 +259,25 @@ void AboutDialog::paint (juce::Graphics& g)
     g.drawImage (icon, r.removeFromTop (112).toFloat(), juce::RectanglePlacement::centred);
     r.removeFromTop (10);
 
-    g.setColour (colour::text);
-    g.setFont (fonts::uiBold (26.0f));
+    g.setColour (theme().text);
+    g.setFont (fonts::uiBold (textSize::hero));
     g.drawText ("Ikaros Studio", r.removeFromTop (34), juce::Justification::centred);
 
-    g.setColour (colour::accent);
-    g.setFont (fonts::uiSemiBold (13.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::uiSemiBold (textSize::md));
     g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha)",
                 r.removeFromTop (22), juce::Justification::centred);
     r.removeFromTop (14);
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (14.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::lg));
     g.drawFittedText ("A digital audio workstation for Linux, Windows, and macOS. Record instruments and vocals, "
                   "play virtual instruments, arrange tracks, add effects, mix, and export your music. "
                   "Everything you need to make a song, without the unnecessary complexity.",
                   r.removeFromTop (110), juce::Justification::centredTop, 6, 1.0f);
     r.removeFromTop (8);
 
-    g.setFont (fonts::ui (12.5f));
+    g.setFont (fonts::ui (textSize::smPlus));
     g.drawFittedText ("This is the first alpha release: expect rough edges, and keep a copy of any session you care about.",
                       r.removeFromTop (40), juce::Justification::centredTop, 2, 1.0f);
 }

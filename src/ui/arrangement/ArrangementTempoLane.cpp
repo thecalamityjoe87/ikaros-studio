@@ -1,6 +1,7 @@
 #include "ui/arrangement/ArrangementTempoLane.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/theme/Fonts.h"
+#include "ui/theme/IkarosLookAndFeel.h"
 
 namespace ikaros
 {
@@ -34,13 +35,11 @@ ArrangementView::TempoLane::TempoLane (ArrangementView& o) : owner (o)
                 "double-click a point to type its tempo. Click a time signature to change it.");
     setWantsKeyboardFocus (true);   // for Delete on a clicked point
 
-    tempoField.setFont (fonts::mono (12.0f));
+    tempoField.setFont (fonts::mono (textSize::sm));
     tempoField.setJustification (juce::Justification::centred);
     tempoField.setInputRestrictions (5, "0123456789.");
     tempoField.setTitle ("Tempo in BPM");
-    tempoField.setColour (juce::TextEditor::backgroundColourId, colour::raised);
-    tempoField.setColour (juce::TextEditor::outlineColourId, colour::accent);
-    tempoField.setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
+    IkarosLookAndFeel::styleInlineEditor (tempoField);
     tempoField.onReturnKey = [this] { commitTempoField(); };
     tempoField.onEscapeKey = [this] { hideTempoField(); };
     tempoField.onFocusLost = [this] { commitTempoField(); };
@@ -96,7 +95,7 @@ juce::Point<float> ArrangementView::TempoLane::laneXY (const juce::MouseEvent& e
 juce::Rectangle<float> ArrangementView::TempoLane::signatureBounds (int index) const
 {
     const auto& sig = owner.geometry.tempo.getTimeSignatureChanges()[(size_t) index];
-    const float width = juce::GlyphArrangement::getStringWidth (fonts::mono (10.0f), signatureText (sig)) + 10.0f;
+    const float width = juce::GlyphArrangement::getStringWidth (fonts::mono (textSize::tiny), signatureText (sig)) + 10.0f;
     return { beatToLaneX (sig.beat) + 3.0f, signatureTop, width, signatureHeight };
 }
 
@@ -132,22 +131,24 @@ ArrangementView::TempoLane::Hit ArrangementView::TempoLane::findHit (juce::Point
 void ArrangementView::TempoLane::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds();
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().rulerBg);
+    g.setColour (theme().divider);
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (label.removeFromRight (1));
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText ("TEMPO", label.withTrimmedLeft (12), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
     juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (r);
     g.setOrigin (r.getX(), 0);
-    g.setColour (colour::windowBg);
+    // The lane part is part of the arrangement: dark in both themes.
+    const auto& colours = theme().arrangement;
+    g.setColour (colours.laneBg);
     g.fillRect (r.withX (0));
 
     auto& geo = owner.geometry;
@@ -155,7 +156,7 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
     const float width = (float) r.getWidth();
 
     // Faint bar lines, as in the lanes.
-    g.setColour (colour::divider);
+    g.setColour (colours.laneDivider);
     forEachVisibleBar (geo, r.getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
 
     // The tempo line: flat from each change to the next, then a step.
@@ -180,13 +181,13 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
     fill.lineTo (width + 10.0f, (float) r.getHeight());
     fill.lineTo (-10.0f, (float) r.getHeight());
     fill.closeSubPath();
-    g.setColour (colour::accent.withAlpha (0.1f));
+    g.setColour (colours.tempoCurve.withAlpha (0.1f));
     g.fillPath (fill);
-    g.setColour (colour::accent.withAlpha (hover.kind == Hit::Kind::line ? 1.0f : 0.8f));
+    g.setColour (hover.kind == Hit::Kind::line ? colours.text : colours.tempoCurve);
     g.strokePath (line, juce::PathStrokeType (1.5f));
 
     // A point and its tempo at each change (the first one at the song's start).
-    g.setFont (fonts::mono (10.0f));
+    g.setFont (fonts::mono (textSize::tiny));
 
     for (size_t i = 0; i < tempos.size(); ++i)
     {
@@ -195,7 +196,7 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
                           || (selected.kind == Hit::Kind::point && selected.index == (int) i);
         const float radius = lit ? pointRadius + 1.0f : pointRadius;
 
-        g.setColour (selected.kind == Hit::Kind::point && selected.index == (int) i ? colour::text : colour::accent);
+        g.setColour (selected.kind == Hit::Kind::point && selected.index == (int) i ? colours.text : colours.tempoCurve);
         g.fillEllipse (x - radius, y - radius, radius * 2.0f, radius * 2.0f);
 
         // The number goes above the line, or below it near the top.
@@ -204,7 +205,7 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
 
         if (nextX - x > 30.0f)
         {
-            g.setColour (lit ? colour::text : colour::textSecondary);
+            g.setColour (lit ? colours.text : colours.textSecondary);
             g.drawText (bpmText (tempos[i].bpm), juce::Rectangle<float> (x + 6.0f, textY, 50.0f, 11.0f), juce::Justification::centredLeft);
         }
     }
@@ -217,11 +218,11 @@ void ArrangementView::TempoLane::paint (juce::Graphics& g)
         const auto box = signatureBounds (i);
         const bool lit = hover.kind == Hit::Kind::signature && hover.index == i;
 
-        g.setColour (colour::borderStrong);
+        g.setColour (colours.chipBorder);
         g.fillRect (beatToLaneX (sigs[(size_t) i].beat), 0.0f, 1.0f, signatureTop + signatureHeight);
-        g.setColour (lit ? colour::controlFill : colour::raised);
-        g.fillRoundedRectangle (box, 3.0f);
-        g.setColour (lit ? colour::text : colour::textSecondary);
+        g.setColour (lit ? colours.chipLitFill : colours.chipFill);
+        g.fillRoundedRectangle (box, size::radiusTiny);
+        g.setColour (lit ? colours.text : colours.textSecondary);
         g.drawText (signatureText (sigs[(size_t) i]), box, juce::Justification::centred);
     }
 }

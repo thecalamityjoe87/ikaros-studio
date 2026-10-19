@@ -122,10 +122,9 @@ struct TrackInfo
     juce::String name;
     juce::String soundName;        // e.g. "Soft Piano" (the sound shown in the library)
     juce::String soundId;          // the library sound (SoundInfo::id), empty for audio tracks
-    juce::String category;         // library category, used to pick the icon
+    juce::String category;         // library category: picks the icon and the colour (the UI colours tracks by family)
     juce::String icon;             // the icon the user chose ("guitar", "drums"...), or empty for automatic
     juce::String soundIcon;        // the icon the track's sound suggests (used when icon is empty), or empty
-    juce::Colour colour;
     bool muted = false;
     bool solo = false;
     bool silencedBySolo = false;   // another track is soloed, so this one is quiet
@@ -304,7 +303,7 @@ struct SoundPackInfo
     bool bundled = false;          // installed with the app: always there, can't be removed
 };
 
-// A sound pack as the "More Sounds" window shows it: what the pack index
+// A sound pack as the "Manage Sounds" window shows it: what the pack index
 // offers (see PackStore), what's installed, or both.
 struct StorePack
 {

@@ -34,16 +34,18 @@ void ArrangementView::Ruler::setLoop (bool on, double start, double end)
 void ArrangementView::Ruler::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds();
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().rulerBg);
+    g.setColour (theme().divider);
     g.fillRect (r.removeFromBottom (1));
 
     auto label = r.removeFromLeft (headerWidth);
-    g.setColour (colour::divider);
+    g.setColour (theme().tracksBarBg);
+    g.fillRect (label);
+    g.setColour (theme().divider);
     g.fillRect (label.removeFromRight (1));
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (11.0f).withExtraKerningFactor (0.1f));
-    g.drawText ("TRACKS", label.withTrimmedLeft (12), juce::Justification::centredLeft);
+    g.setColour (theme().textSecondary);
+    g.setFont (columnLabelFont());
+    g.drawText ("TRACKS", label.withTrimmedLeft (columnPadding), juce::Justification::centredLeft);
 
     // Everything below scrolls with the timeline; keep it out of the header part.
     juce::Graphics::ScopedSaveState save (g);
@@ -51,30 +53,34 @@ void ArrangementView::Ruler::paint (juce::Graphics& g)
     g.setOrigin (r.getX(), 0);
     auto& geo = owner.geometry;
 
-    // Loop range: an amber bar along the top.
+    // Cycle range: an amber bar along the top (the accent: cycle is on).
     if (looping && loopEnd > loopStart)
     {
-        auto x1 = geo.beatToX (loopStart);
-        auto x2 = geo.beatToX (loopEnd);
-        g.setColour (colour::accent.withAlpha (0.4f));
-        g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, 3.5f);
+        // Rounded to whole pixels the same way forEachVisibleBar places the
+        // bar lines, so the range starts exactly on its bar's line (and ends
+        // on the far side of the end bar's 1px line). A hairline corner
+        // radius keeps the ends from looking inset from the lines.
+        const auto x1 = (float) juce::roundToInt (geo.beatToX (loopStart));
+        const auto x2 = (float) juce::roundToInt (geo.beatToX (loopEnd)) + 1.0f;
+        g.setColour (theme().arrangement.cycle.withAlpha (0.4f));
+        g.fillRoundedRectangle (x1, 4.0f, x2 - x1, 7.0f, size::radiusHair);
     }
 
     // Bar numbers with a tick on the left of each. Zoomed out, only every
     // 2nd/4th/... bar gets a number so they don't overlap.
     const int labelStride = barStride (geo, 36.0);
     const int bottom = getHeight() - 1;
-    g.setFont (fonts::mono (11.0f));
+    g.setFont (fonts::mono (textSize::xs));
 
     forEachVisibleBar (geo, r.getWidth(), barStride (geo, 6.0), [&] (int bar, int x)
     {
         const bool labelled = bar % labelStride == 0;
-        g.setColour (colour::borderStrong);
+        g.setColour (theme().borderStrong);
         g.fillRect (x, bottom - (labelled ? 16 : 7), 1, labelled ? 14 : 5);
 
         if (labelled)
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.drawText (juce::String (bar + 1), x + 4, bottom - 16, 40, 14, juce::Justification::centredLeft);
         }
     });

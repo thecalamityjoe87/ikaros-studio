@@ -14,8 +14,8 @@ using namespace tokens;
 class NewTrackDialog::Card  : public juce::Button
 {
 public:
-    Card (Icon i, const juce::String& title, const juce::String& text, juce::Colour c)
-        : juce::Button (title), icon (i), description (text), iconColour (c)
+    Card (Icon i, const juce::String& title, const juce::String& text, Family f)
+        : juce::Button (title), icon (i), description (text), family (f)
     {
         setTitle (title);
         setDescription (text);
@@ -42,35 +42,35 @@ public:
         auto r = getLocalBounds().toFloat().reduced (1.0f);
         const bool on = getToggleState();
 
-        g.setColour (on ? colour::selectedRow : (over ? colour::raised : colour::cardBg));
-        g.fillRoundedRectangle (r, 12.0f);
-        g.setColour (on ? colour::accent : colour::borderSoft);
-        g.drawRoundedRectangle (r, 12.0f, on ? 2.0f : 1.0f);
+        g.setColour (on ? theme().selectedRow : (over ? theme().raised : theme().cardBg));
+        g.fillRoundedRectangle (r, size::radiusCard);
+        g.setColour (on ? theme().selectedBorder : theme().borderSoft);
+        g.drawRoundedRectangle (r, size::radiusCard, on ? 2.0f : 1.0f);
 
         auto content = getLocalBounds().reduced (20);
         auto iconArea = content.removeFromTop (64);
-        g.setColour (colour::wellBg);
-        g.fillRoundedRectangle (iconArea.withSizeKeepingCentre (64, 64).toFloat(), 14.0f);
-        icons::draw (g, icon, iconArea.toFloat(), iconColour, 36.0f, 1.6f);
+        g.setColour (theme().wellBg);
+        g.fillRoundedRectangle (iconArea.withSizeKeepingCentre (64, 64).toFloat(), size::radiusPill);
+        icons::draw (g, icon, iconArea.toFloat(), theme().family (family), 36.0f, 1.6f);
 
         content.removeFromTop (14);
-        g.setColour (colour::text);
-        g.setFont (fonts::uiBold (16.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::uiBold (textSize::xxl));
         g.drawText (getName(), content.removeFromTop (22), juce::Justification::centred);
 
         content.removeFromTop (6);
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (description, content, juce::Justification::centredTop, 3, 1.0f);
 
         if (hasKeyboardFocus (false))
-            IkarosLookAndFeel::drawFocusRing (g, r, 12.0f);
+            IkarosLookAndFeel::drawFocusRing (g, r, size::radiusCard);
     }
 
 private:
     Icon icon;
     juce::String description;
-    juce::Colour iconColour;
+    Family family;   // the icon's colour, looked up when painting
 };
 
 //==============================================================================
@@ -92,10 +92,10 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
 
     instrumentCard = std::make_unique<Card> (Icon::keyboards, "Software Instrument",
                                              "Play and record with a MIDI keyboard, your computer keyboard or the on-screen keyboard.",
-                                             colour::trackBlue);
+                                             Family::keys);
     audioCard = std::make_unique<Card> (Icon::mic, "Real Instrument",
                                         "Record a microphone, guitar or anything plugged into your audio interface.",
-                                        colour::trackOrange);
+                                        Family::audio);   // audio tracks are always the audio blue
 
     for (auto* card : { instrumentCard.get(), audioCard.get() })
     {
@@ -136,13 +136,11 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
         });
     };
 
-    auto cancelColours = IconButton::raisedColours();
-    cancelColours.border = colour::border;
-    cancelButton.setColours (cancelColours);
+    cancelButton.setColours (IconButton::borderedColours);
     cancelButton.onClick = [this] { close(); };
     addAndMakeVisible (cancelButton);
 
-    createButton.setColours (IconButton::accentColours());
+    createButton.setColours (IconButton::primaryColours);
     createButton.onClick = [this] { create(); };
     addAndMakeVisible (createButton);
 
@@ -224,23 +222,23 @@ void NewTrackDialog::mouseDown (const juce::MouseEvent& e)
 void NewTrackDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the dialog.
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (theme().scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
-    g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setColour (theme().text);
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText ("Choose a track type", r.removeFromTop (26), juce::Justification::centredLeft);
 
     if (audioChosen)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("Input", audioOptionsArea.withWidth (60), juce::Justification::centredLeft);
 
         if (inputs.empty())

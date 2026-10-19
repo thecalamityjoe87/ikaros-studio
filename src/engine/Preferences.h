@@ -68,7 +68,11 @@ namespace settings
     }
 
     // Appearance
+    namespace ThemeChoice { enum { light, dark, matchSystem }; }
+    inline constexpr IntSetting  themeChoice         { "theme", ThemeChoice::matchSystem };   // Preferences > Appearance > Theme
     inline constexpr IntSetting  interfaceScale      { "interfaceScale", 100 };       // percent
+    namespace TrackHeight { enum { compact, tall }; }
+    inline constexpr IntSetting  trackHeight         { "trackHeight", TrackHeight::compact };   // View > Compact/Tall Tracks
 }
 
 //==============================================================================

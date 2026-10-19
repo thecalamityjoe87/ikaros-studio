@@ -10,10 +10,10 @@ namespace ikaros
     The 30px strip at the top. It doubles as the window's title bar, because
     the app draws its own (no OS title bar or window buttons).
 
-      [File Edit Track ...]      ● Session name · Ikaros Studio      [– □ ×]
+      [File Edit Track ...]     [logo] Ikaros Studio · Session name ●     [– □ ×]
 
-    The centred title shows the session name, with an amber dot when it has
-    unsaved changes, followed by the app name.
+    The centred branding is the app logo and name, then the session name in
+    muted text, followed by a small dot while it has unsaved changes.
 
     Drag the empty parts to move the window; double-click to maximise/restore.
     On macOS the menus move to the system menu bar and the window buttons sit
@@ -57,6 +57,7 @@ private:
     juce::String sessionName;
     bool unsavedChanges = false;
     juce::Rectangle<int> freeArea;   // between the menus and the window buttons
+    juce::Image logo;                // the app icon, drawn small beside the name
 
     int getMenusWidth();
     juce::Component* getWindow() const   { return getTopLevelComponent(); }

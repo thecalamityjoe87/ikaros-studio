@@ -6,7 +6,7 @@ namespace ikaros
 {
 
 MainWindow::MainWindow (const juce::String& name, AudioEngine& engine)
-    : juce::DocumentWindow (name, tokens::colour::windowBg, juce::DocumentWindow::allButtons)
+    : juce::DocumentWindow (name, theme().windowBg, juce::DocumentWindow::allButtons)
 {
     // No OS title bar and no JUCE title bar either: the app's MenuBar strip
     // is the title bar, with its own window buttons (see ui/titlebar).

@@ -74,7 +74,7 @@ private:
 
     std::optional<Drag> drag;
 
-    IconButton addButton { "Add section", Icon::plus };
+    IconButton addButton { "Add section", Icon::flag };   // a flag, not a "+": "+" above it adds a track
 
     // The name field, shown over a section while it's renamed.
     juce::TextEditor nameField;

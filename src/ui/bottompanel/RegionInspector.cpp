@@ -3,6 +3,7 @@
 #include "engine/TrackController.h"
 #include "ui/widgets/IconButton.h"
 #include "ui/theme/Fonts.h"
+#include "ui/theme/IkarosLookAndFeel.h"
 
 namespace ikaros
 {
@@ -17,13 +18,6 @@ namespace
     constexpr int labelWidth = 64;
 
     const juce::String minusSign = juce::String::fromUTF8 ("\xe2\x88\x92");
-
-    IconButton::Colours raisedWithBorder()
-    {
-        auto c = IconButton::raisedColours();
-        c.border = colour::border;
-        return c;
-    }
 }
 
 //==============================================================================
@@ -63,8 +57,8 @@ public:
 
         for (auto* b : { &pitchDown, &pitchUp })
         {
-            b->setColours (raisedWithBorder());
-            b->setFont (fonts::uiBold (15.0f));
+            b->setColours (IconButton::borderedColours);
+            b->setFont (fonts::uiBold (textSize::xl));
             b->setCornerRadius (size::radiusSmall);
             addAndMakeVisible (b);
         }
@@ -76,8 +70,8 @@ public:
         pitchUp.onClick = [this] { transposeBy (1); };
 
         // Like the Monitoring button: green while it's on.
-        reverse.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
-        reverse.setFont (fonts::uiSemiBold (12.0f));
+        reverse.setColours (IconButton::powerColours);
+        reverse.setFont (fonts::uiSemiBold (textSize::sm));
         reverse.setCornerRadius (6.0f);
         reverse.setTooltip ("Play the region backwards");
         reverse.onClick = [this]
@@ -90,8 +84,8 @@ public:
         // Flex belongs to the track (as in GarageBand), so this switches it
         // for every region on the region's track. Amber while it's on, like
         // the track header's Flex button.
-        flex.setColours ({ colour::controlFill, colour::textSecondary, colour::accent, colour::textOnAccent });
-        flex.setFont (fonts::uiSemiBold (12.0f));
+        flex.setColours ([] { return IconButton::Colours { theme().controlFill, theme().textSecondary, theme().accent, theme().textOnAccent }; });
+        flex.setFont (fonts::uiSemiBold (textSize::sm));
         flex.setCornerRadius (6.0f);
         flex.onClick = [this]
         {
@@ -100,8 +94,8 @@ public:
         };
         addAndMakeVisible (flex);
 
-        resetFlex.setColours (raisedWithBorder());
-        resetFlex.setFont (fonts::ui (12.0f));
+        resetFlex.setColours (IconButton::borderedColours);
+        resetFlex.setFont (fonts::ui (textSize::sm));
         resetFlex.setCornerRadius (size::radiusSmall);
         resetFlex.setTooltip ("Put every hit back where it was recorded");
         resetFlex.onClick = [this]
@@ -113,14 +107,14 @@ public:
     }
 
     /** Shows the region's settings (it's an audio region). */
-    void refresh (const RegionInfo& r, juce::Colour trackColour)
+    void refresh (const RegionInfo& r, Family family)
     {
         // dontSendNotification: showing the region's value isn't a change to
         // make. (Not during a drag: the drag is ahead of the session.)
         if (! dragging)
             gain.setValue (r.gainDb, juce::dontSendNotification);
 
-        gain.setColour (juce::Slider::trackColourId, trackColour);
+        IkarosLookAndFeel::setFamilyColour (gain, family);
         pitchDown.setEnabled (r.transposeSemitones > -RegionEditor::maxTransposeSemitones);
         pitchUp.setEnabled (r.transposeSemitones < RegionEditor::maxTransposeSemitones);
         reverse.setToggleState (r.reversed, juce::dontSendNotification);
@@ -149,8 +143,8 @@ public:
         if (! owner.region.has_value())
             return;
 
-        g.setFont (fonts::ui (13.0f));
-        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (textSize::md));
+        g.setColour (theme().textSecondary);
         g.drawText ("Gain", gainRow, juce::Justification::centredLeft);
         g.drawText ("Pitch", pitchRow, juce::Justification::centredLeft);
         g.drawText ("Direction", reverseRow, juce::Justification::centredLeft);
@@ -160,19 +154,19 @@ public:
         const auto db = gain.getValue();
         const auto gainText = std::abs (db) < 0.05 ? juce::String ("0.0 dB")
                                                    : (db > 0.0 ? "+" : minusSign) + juce::String (std::abs (db), 1) + " dB";
-        g.setColour (colour::text);
-        g.setFont (fonts::mono (12.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::mono (textSize::sm));
         g.drawText (gainText, gainValue, juce::Justification::centredRight);
 
         // Semitones in a little well between the buttons.
         const int pitch = owner.region->transposeSemitones;
-        g.setColour (colour::wellBg);
+        g.setColour (theme().wellBg);
         g.fillRoundedRectangle (pitchValue.toFloat(), size::radiusSmall);
-        g.setColour (colour::text);
+        g.setColour (theme().text);
         g.drawText (pitch == 0 ? juce::String ("0") : (pitch > 0 ? "+" : minusSign) + juce::String (std::abs (pitch)),
                     pitchValue, juce::Justification::centred);
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::sm));
         g.drawText ("semitones", pitchUnits, juce::Justification::centredLeft);
 
         if (showsKeyNote())
@@ -254,8 +248,8 @@ public:
     {
         for (auto* b : { &gridButton, &quantizeButton })
         {
-            b->setColours (raisedWithBorder());
-            b->setFont (fonts::ui (12.0f));
+            b->setColours (IconButton::borderedColours);
+            b->setFont (fonts::ui (textSize::sm));
             b->setCornerRadius (size::radiusSmall);
             addAndMakeVisible (b);
         }
@@ -303,14 +297,14 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setFont (fonts::ui (13.0f));
-        g.setColour (colour::textSecondary);
+        g.setFont (fonts::ui (textSize::md));
+        g.setColour (theme().textSecondary);
         g.drawText ("Grid", gridRow, juce::Justification::centredLeft);
         g.drawText ("Strength", strengthRow, juce::Justification::centredLeft);
         g.drawText ("Swing", swingRow, juce::Justification::centredLeft);
 
-        g.setColour (colour::text);
-        g.setFont (fonts::mono (12.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::mono (textSize::sm));
         g.drawText (juce::String (juce::roundToInt (strength.getValue())) + "%", strengthValue, juce::Justification::centredRight);
         g.drawText (juce::String (juce::roundToInt (swing.getValue())) + "%", swingValue, juce::Justification::centredRight);
     }
@@ -359,7 +353,6 @@ private:
         slider.setRange (0.0, 100.0, 1.0);
         slider.setValue (initial, juce::dontSendNotification);
         slider.setDoubleClickReturnValue (true, initial);
-        slider.setColour (juce::Slider::trackColourId, colour::accent);
         slider.onValueChange = [this]
         {
             if (owner.onQuantizeFeelChanged)
@@ -394,7 +387,7 @@ RegionInspector::RegionInspector (AudioEngine& e) : engine (e)
 
 RegionInspector::~RegionInspector() = default;
 
-void RegionInspector::setRegion (std::optional<RegionInfo> r, juce::Colour trackColour)
+void RegionInspector::setRegion (std::optional<RegionInfo> r, Family family)
 {
     region = std::move (r);
     const bool audio = region.has_value() && ! region->isMidi;
@@ -403,7 +396,7 @@ void RegionInspector::setRegion (std::optional<RegionInfo> r, juce::Colour track
     editingSection->setVisible (region.has_value());
 
     if (audio)
-        audioControls->refresh (*region, trackColour);
+        audioControls->refresh (*region, family);
 
     if (region.has_value())
         editingControls->refresh (*region);
@@ -464,14 +457,14 @@ void RegionInspector::layoutSections()
 
 void RegionInspector::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().inspectorBg);
+    g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
 
     if (! region.has_value())
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Select a region to see its settings here.", getLocalBounds().reduced (padding),
                           juce::Justification::centred, 3);
     }

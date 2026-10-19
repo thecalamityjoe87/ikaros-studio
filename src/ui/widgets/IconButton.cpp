@@ -9,7 +9,7 @@ namespace ikaros
 using namespace tokens;
 
 IconButton::IconButton (const juce::String& accessibleName, std::optional<Icon> i, const juce::String& t)
-    : juce::Button (accessibleName), icon (i), text (t), font (fonts::uiSemiBold (14.0f))
+    : juce::Button (accessibleName), icon (i), text (t), font (fonts::uiSemiBold (textSize::lg))
 {
     // Accessibility: setTitle is what screen readers announce. For icon-only
     // buttons we also show it as a tooltip so sighted users can discover it.
@@ -28,49 +28,100 @@ IconButton::IconButton (const juce::String& accessibleName, std::optional<Icon> 
 
 void IconButton::setIcon (std::optional<Icon> i)    { icon = i; repaint(); }
 void IconButton::setText (const juce::String& t)    { text = t; repaint(); }
-void IconButton::setColours (Colours c)             { colours = c; repaint(); }
+void IconButton::setColours (ColourScheme c)        { colourScheme = std::move (c); repaint(); }
 
 IconButton::Colours IconButton::raisedColours()
 {
-    return { colour::raised, colour::text, colour::accent, colour::textOnAccent };
+    return { theme().raised, theme().text, theme().accent, theme().textOnAccent, theme().raisedBorder,
+             std::nullopt, std::nullopt, theme().accentBorder };
 }
 
 IconButton::Colours IconButton::accentColours()
 {
-    return { colour::accent, colour::textOnAccent, colour::accentLight, colour::textOnAccent };
+    return { theme().accent, theme().textOnAccent, theme().accentLight, theme().textOnAccent, theme().accentBorder };
 }
 
 IconButton::Colours IconButton::ghostColours()
 {
-    return { juce::Colours::transparentBlack, colour::textMenu, colour::raised, colour::text };
+    return { juce::Colours::transparentBlack, theme().textMenu, theme().raised, theme().text };
+}
+
+IconButton::Colours IconButton::neutralToggleColours()
+{
+    return { theme().raised, theme().text, theme().neutralActive, theme().text, theme().border,
+             std::nullopt, std::nullopt, theme().neutralActiveBorder };
+}
+
+IconButton::Colours IconButton::segmentColours()
+{
+    return { juce::Colours::transparentBlack, theme().textSecondary, theme().segmentSelected, theme().text };
+}
+
+IconButton::Colours IconButton::primaryColours()
+{
+    // Neutral, like everything that isn't "on"; the light border and bold
+    // text are what mark it as the main action.
+    return { theme().neutralActive, theme().text, theme().neutralActive, theme().text, theme().selectedBorder };
+}
+
+IconButton::Colours IconButton::borderedColours()
+{
+    auto c = raisedColours();
+    c.border = theme().border;
+    c.borderOn.reset();   // the same border when on
+    return c;
+}
+
+void IconButton::drawSegmentShadow (juce::Graphics& g, const IconButton& segment)
+{
+    if (! segment.isVisible() || ! segment.getToggleState())
+        return;
+
+    // A static member function can read the button's private cornerRadius.
+    juce::Path pill;
+    pill.addRoundedRectangle (segment.getBounds().toFloat(), segment.cornerRadius);
+    juce::DropShadow (theme().segmentShadow, 2, { 0, 1 }).drawForPath (g, pill);
+}
+
+IconButton::Colours IconButton::powerColours()
+{
+    return { theme().controlFill, theme().textSecondary, theme().effectOn, theme().textOnAccent };
 }
 
 void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
 {
     auto r = getLocalBounds().toFloat();
     const bool on = getToggleState();
+    const auto colours = colourScheme();   // asked afresh every paint, so they follow the theme
 
     auto bg = on ? colours.backgroundOn : colours.background;
     auto fg = on ? colours.foregroundOn : colours.foreground;
 
+    auto border = on ? colours.borderOn.value_or (colours.border) : colours.border;
+
     if (! isEnabled())
-        fg = fg.withMultipliedAlpha (0.4f);
+    {
+        // Clearly "not now": grey icon/text, and a flatter, fainter button.
+        fg = theme().textDisabled;
+        bg = bg.withMultipliedAlpha (0.5f);
+        border = border.withMultipliedAlpha (0.5f);
+    }
     else if ((over || down) && colours.hoverBackground.has_value())
     {
         bg = down ? colours.hoverBackground->darker (0.15f) : *colours.hoverBackground;
         fg = colours.hoverForeground.value_or (fg);
     }
     else if (down)
-        bg = (bg.isTransparent() ? colour::raised : bg).brighter (0.12f);
+        bg = (bg.isTransparent() ? theme().raised : bg).brighter (0.12f);
     else if (over)
-        bg = (bg.isTransparent() ? colour::raised : bg).brighter (0.06f);
+        bg = (bg.isTransparent() ? theme().raised : bg).brighter (0.06f);
 
     g.setColour (bg);
     g.fillRoundedRectangle (r, cornerRadius);
 
-    if (! colours.border.isTransparent())
+    if (! border.isTransparent())
     {
-        g.setColour (colours.border);
+        g.setColour (border);
         g.drawRoundedRectangle (r.reduced (0.5f), cornerRadius, 1.0f);
     }
 

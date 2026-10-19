@@ -3,6 +3,7 @@
 #include "ui/state/Selection.h"
 #include "ui/widgets/IconButton.h"
 #include "ui/widgets/Knob.h"
+#include "ui/theme/Family.h"
 
 namespace ikaros
 {
@@ -21,7 +22,7 @@ class PluginEditor  : public juce::Component,
                       private juce::Timer
 {
 public:
-    PluginEditor (AudioEngine&, TrackId, PluginId, juce::Colour accent);
+    PluginEditor (AudioEngine&, TrackId, PluginId, tokens::Family);
 
     TrackId getTrackId() const noexcept     { return trackId; }
     PluginId getPluginId() const noexcept   { return pluginId; }

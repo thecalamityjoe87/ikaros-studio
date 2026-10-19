@@ -2,7 +2,9 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/widgets/IconButton.h"
 #include <array>
 #include <tuple>
 
@@ -24,6 +26,8 @@ namespace
     constexpr int captionHeight = 30;        // a caption under a knob
     constexpr int stripGap = 10;
     constexpr int masterStripWidth = 110;
+    constexpr int nameRowHeight = 20;        // the strip's name, with M and S beside it
+    constexpr int muteSoloWidth = 20;
 }
 
 //==============================================================================
@@ -89,6 +93,31 @@ public:
 
         for (int bus = 0; bus < SendBuses::numBuses; ++bus)
             guard (sendKnobs[(size_t) bus], automationTargets::send (bus));
+
+        // M and S beside the name, the same as the track header's Mute and
+        // Solo: both just ask the engine, and the model change it reports
+        // updates the header and this strip alike (see update).
+        // onColour is a function, called when the button paints, so it
+        // picks up the current theme's colour.
+        auto setupToggle = [this] (IconButton& b, juce::Colour (*onColour)())
+        {
+            b.setColours ([onColour]
+            {
+                return IconButton::Colours { theme().buttonFill, theme().buttonIcon, onColour(), theme().textOnAccent,
+                                             theme().buttonBorder, std::nullopt, std::nullopt, onColour() };
+            });
+            b.setCornerRadius (size::radiusXs);
+            b.setFont (fonts::uiBold (textSize::xs));
+            addAndMakeVisible (b);
+        };
+
+        // A lambda with no captures converts to a plain function pointer.
+        setupToggle (muteButton, [] { return theme().accent; });   // a muted track's Mute is "on"
+        setupToggle (soloButton, [] { return theme().solo; });
+        muteButton.setTooltip ("Mute");
+        soloButton.setTooltip ("Solo");
+        muteButton.onClick = [this] { engine.getTracks().setMute (trackId, ! muted); };
+        soloButton.onClick = [this] { engine.getTracks().setSolo (trackId, ! soloed); };
     }
 
     // "C", or how far left/right, e.g. "L 30".
@@ -111,7 +140,7 @@ public:
 
     // What paint() draws as text and colour, to tell whether a repaint is due.
     // (The fader and knobs redraw themselves when their values change.)
-    auto drawnState() const   { return std::make_tuple (name, colour, selected, dbText, panText, sendTexts); }
+    auto drawnState() const   { return std::make_tuple (name, family, selected, dbText, panText, sendTexts); }
 
     void update (const TrackInfo& t, bool isSelected)
     {
@@ -124,13 +153,19 @@ public:
             setAutomatedLook (sendKnobs[(size_t) bus], automated.contains (automationTargets::send (bus)));
 
         name = t.name;
-        colour = t.colour;
+        muted = t.muted;
+        soloed = t.solo;
+        muteButton.setToggleState (muted, juce::dontSendNotification);
+        soloButton.setToggleState (soloed, juce::dontSendNotification);
+        muteButton.setTitle ((muted ? "Unmute " : "Mute ") + t.name);   // what a screen reader says
+        soloButton.setTitle ((soloed ? "Unsolo " : "Solo ") + t.name);
+        family = colour::familyOf (t);
         selected = isSelected;
         dbText = describeDb (t.volumeDb);
         panText = describePan (t.pan);
         fader.setTitle (t.name + " volume");
         pan.setTitle (t.name + " pan");
-        pan.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+        IkarosLookAndFeel::setFamilyColour (pan, family, IkarosLookAndFeel::FamilyShade::ink);
 
         const float sends[] { t.reverbSend, t.delaySend };
 
@@ -138,7 +173,7 @@ public:
         {
             auto& knob = sendKnobs[(size_t) bus];
             knob.setTitle (t.name + " " + SendBuses::getBusName (bus).toLowerCase() + " send");
-            knob.setColour (IkarosLookAndFeel::knobArcColourId, t.colour);
+            IkarosLookAndFeel::setFamilyColour (knob, family, IkarosLookAndFeel::FamilyShade::ink);
 
             if (! knob.isMouseButtonDown())
                 knob.setValue (sends[bus], juce::dontSendNotification);
@@ -167,25 +202,35 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (selected ? colour::selectedRow : colour::cardBg);
-        g.fillRoundedRectangle (r, 12.0f);
+        g.setColour (selected ? theme().selectedBg : theme().cardBg);
+        g.fillRoundedRectangle (r, size::radiusCard);
 
         // Coloured top edge, as in the design (inset 3px shadow).
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (r, 12.0f);
+        shape.addRoundedRectangle (r, size::radiusCard);
         g.reduceClipRegion (shape);
-        g.setColour (colour);
+        g.setColour (theme().family (family));
         g.fillRect (r.removeFromTop (3.0f));
 
-        auto area = getLocalBounds().reduced (10);
-        g.setColour (colour::text);
-        g.setFont (fonts::uiBold (13.0f));
-        g.drawText (name, area.removeFromTop (18), juce::Justification::centred, true);
+        // The selected strip's outline, drawn over the top edge. It's inset
+        // by half its width: a stroke is centred on the edge, and the half
+        // outside would be clipped away.
+        if (selected)
+        {
+            constexpr float width = 1.5f;
+            g.setColour (theme().selectedOutline);
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (width * 0.5f), size::radiusCard - width * 0.5f, width);
+        }
 
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::mono (12.0f));
-        g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
+        g.setColour (theme().text);
+        g.setFont (fonts::uiBold (textSize::md));
+        g.drawText (name, nameArea, juce::Justification::centredLeft, true);
+
+        // The dB readout, under the fader.
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::mono (textSize::sm));
+        g.drawText (dbText, dbArea, juce::Justification::centred);
 
         // Each knob's caption: its name, and its setting underneath.
         const juce::String names[] { "Pan", SendBuses::getBusName (SendBuses::reverb), SendBuses::getBusName (SendBuses::delay) };
@@ -196,11 +241,11 @@ public:
         for (int i = 0; i < 3; ++i)
         {
             auto caption = captionAreas[(size_t) i];
-            g.setColour (colour::textSecondary);
-            g.setFont (fonts::ui (11.0f));
+            g.setColour (theme().textSecondary);
+            g.setFont (fonts::ui (textSize::xs));
             g.drawText (names[i], caption.removeFromTop (14), justification);
-            g.setColour (colour::text);
-            g.setFont (fonts::mono (12.0f));
+            g.setColour (theme().text);
+            g.setFont (fonts::mono (textSize::sm));
             g.drawText (values[i], caption, justification);
         }
 
@@ -209,8 +254,17 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (10);
-        area.removeFromTop (22);
-        area.removeFromBottom (24);
+
+        // The top row: the name, then M and S on the right.
+        auto nameRow = area.removeFromTop (nameRowHeight);
+        soloButton.setBounds (nameRow.removeFromRight (muteSoloWidth));
+        nameRow.removeFromRight (4);
+        muteButton.setBounds (nameRow.removeFromRight (muteSoloWidth));
+        nameRow.removeFromRight (6);
+        nameArea = nameRow;
+        area.removeFromTop (2);
+
+        auto bottomRow = area.removeFromBottom (24);
 
         // Pan, Reverb and Delay go right of the fader, either stacked in a
         // column with captions beside them, or side by side with captions
@@ -252,6 +306,7 @@ public:
         area.removeFromTop (4);
 
         auto meterArea = area.withSizeKeepingCentre (64, area.getHeight());
+        dbArea = bottomRow.withX (meterArea.getX()).withWidth (meterArea.getWidth()).withTrimmedTop (8);
         meter.setBounds (meterArea.removeFromLeft (24));
         meterArea.removeFromLeft (6);
         fader.setBounds (meterArea.withTrimmedTop (-7).withTrimmedBottom (-7));
@@ -267,10 +322,14 @@ private:
     std::array<juce::Slider, SendBuses::numBuses> sendKnobs { juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox },
                                                               juce::Slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox } };
     juce::String name, dbText, panText { "C" };
+    IconButton muteButton { "Mute", std::nullopt, "M" };
+    IconButton soloButton { "Solo", std::nullopt, "S" };
+    bool muted = false, soloed = false;
+    juce::Rectangle<int> nameArea, dbArea;              // see resized
     std::array<juce::Rectangle<int>, 3> captionAreas;   // pan, reverb, delay
     bool captionsBelow = false;                         // knobs side by side, captions under them
     std::array<juce::String, SendBuses::numBuses> sendTexts { "0%", "0%" };
-    juce::Colour colour;
+    Family family = Family::loops;   // the track's; its colour is looked up when painting
     bool selected = false;
     juce::StringArray automated;                        // what the track's automation moves (TrackInfo::automated)
 };
@@ -315,24 +374,24 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (colour::cardBg);
-        g.fillRoundedRectangle (r, 12.0f);
+        g.setColour (theme().cardBg);
+        g.fillRoundedRectangle (r, size::radiusCard);
 
-        // An accent top edge, like the track strips' coloured one.
+        // A neutral top edge, like the track strips' coloured one.
         juce::Graphics::ScopedSaveState save (g);
         juce::Path shape;
-        shape.addRoundedRectangle (r, 12.0f);
+        shape.addRoundedRectangle (r, size::radiusCard);
         g.reduceClipRegion (shape);
-        g.setColour (colour::accent);
+        g.setColour (theme().family (Family::master));
         g.fillRect (r.removeFromTop (3.0f));
 
         auto area = getLocalBounds().reduced (10);
-        g.setColour (colour::text);
-        g.setFont (fonts::uiBold (13.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::uiBold (textSize::md));
         g.drawText ("Master", area.removeFromTop (18), juce::Justification::centred, true);
 
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::mono (12.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::mono (textSize::sm));
         g.drawText (dbText, area.removeFromBottom (16), juce::Justification::centred);
     }
 

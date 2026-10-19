@@ -2,7 +2,7 @@
 #include <map>
 
 /*
-    The keyboard (piano), drums, bass (bass clef) and guitar icons are from
+    The keyboard (piano), drums, bass (bass clef), guitar, package, flag, reset (rotate-ccw), zoom-in and zoom-out icons are from
     Lucide 1.55.0 (https://lucide.dev), converted to plain SVG paths:
 
     ISC License
@@ -33,6 +33,11 @@ namespace
         {
             case Icon::library:   return "M4 4v16 M8 8v12 M12 6v14 M16 6l4 14";   // books on a shelf, one leaning
             case Icon::plus:      return "M12 5v14 M5 12h14";
+            // Lucide "zoom-in" / "zoom-out": a magnifier with + or − inside.
+            case Icon::zoomIn:    return "M11 3a8 8 0 1 1 0 16a8 8 0 1 1 0-16z M21 21l-4.35-4.35 M11 8v6 M8 11h6";
+            case Icon::zoomOut:   return "M11 3a8 8 0 1 1 0 16a8 8 0 1 1 0-16z M21 21l-4.35-4.35 M8 11h6";
+            // Lucide "rotate-ccw": a circular arrow, for putting something back (Reset Zoom).
+            case Icon::reset:     return "M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5";
             case Icon::undo:      return "M9 14L4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-3";
             case Icon::redo:      return "M15 14l5-5-5-5 M20 9H9a5 5 0 0 0 0 10h3";   // undo, mirrored
             case Icon::toStart:   return "M6 5v14 M19 5l-9 7 9 7z";
@@ -52,6 +57,12 @@ namespace
             // and a second guitar would be hard to tell apart.)
             case Icon::bass:      return "M19 11h.01 M19 6h.01 M5 8c0-4 4-4 4-4 6 0 6 6 6 6 0 7-10 11-10 11 "
                                          "M5 8a2 2 0 1 0 4 0a2 2 0 1 0-4 0z";
+            // Lucide "flag": a marker flag, for song sections.
+            case Icon::flag:      return "M4 15s1-1 4-1s5 2 8 2s4-1 4-1V3s-1 1-4 1s-5-2-8-2s-4 1-4 1z M4 22v-7";
+            // Lucide "package": a box, for sound packs (Manage Sounds).
+            case Icon::package:   return "M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4"
+                                         "A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z M12 22V12 "
+                                         "M3.3 7l7.703 4.734a2 2 0 0 0 1.994 0L20.7 7 M7.5 4.27l9 5.15";
             case Icon::synths:    return "M5 20V4 M10 20V4 M15 20V4 M20 20V4 M3 8h4 M8 15h4 M13 10h4 M18 13h4";
             // Lucide "guitar": an acoustic guitar with its headstock.
             case Icon::guitar:    return "M11.9 12.1l4.514-4.514 M6 16l2 2 "
@@ -80,6 +91,8 @@ namespace
             case Icon::clock:          return "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3.5 2";
             case Icon::headphones:     return "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z";
             case Icon::waveform:       return "M4 10v4 M8 7v10 M12 4v16 M16 7v10 M20 10v4";
+            case Icon::speaker:        return "M3 9h4l5-4v14l-5-4H3z M16 9.5a3.5 3.5 0 0 1 0 5 M18.5 7a7 7 0 0 1 0 10";   // speaker with sound waves
+            case Icon::timer:          return "M12 6a7.5 7.5 0 1 0 0 15a7.5 7.5 0 1 0 0-15 M12 10v3.5l2.5 1.5 M9.5 2.5h5 M12 2.5V6";   // a stopwatch
             case Icon::mute:           return "M3 9h4l5-4v14l-5-4H3z M16 9l5 6 M21 9l-5 6";   // speaker with a cross
             case Icon::plugin:         return "M9 3v5 M15 3v5 M6 8h12v4a6 6 0 0 1-12 0z M12 18v3";   // a mains plug
             case Icon::folder:         return "M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z";

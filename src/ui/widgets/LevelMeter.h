@@ -35,7 +35,8 @@ public:
     static float fallTowards (float current, float target);
 
     /** Draws one bar showing `value` (0..1), green to yellow to red along it. */
-    static void paintBar (juce::Graphics&, juce::Rectangle<float>, float value, Orientation);
+    /** One bar: `unlit` behind it, then the level in green → yellow → red. */
+    static void paintBar (juce::Graphics&, juce::Rectangle<float>, float value, Orientation, juce::Colour unlit);
 
 private:
     Orientation orientation;

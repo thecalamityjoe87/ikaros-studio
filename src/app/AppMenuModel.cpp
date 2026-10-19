@@ -103,10 +103,11 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::showMixerTab);
         add (CommandIDs::toggleAutomation);
+        add (CommandIDs::showPlugins);
     }
     else if (name == "Sounds")
     {
-        add (CommandIDs::moreSounds);
+        add (CommandIDs::manageSounds);
         m.addSeparator();
         add (CommandIDs::freesoundKey);
     }
@@ -117,6 +118,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::zoomIn);
         add (CommandIDs::zoomOut);
+        add (CommandIDs::zoomReset);
         m.addSeparator();
         add (CommandIDs::snapToBar);
         add (CommandIDs::snapToBeat);
@@ -124,12 +126,15 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         m.addSeparator();
         add (CommandIDs::toggleTempoLane);
         m.addSeparator();
+        add (CommandIDs::compactTracks);
+        add (CommandIDs::tallTracks);
+        m.addSeparator();
         add (CommandIDs::showSoundTab);
         add (CommandIDs::showEditorTab);
         add (CommandIDs::showEqTab);
         add (CommandIDs::showMixerTab);
         m.addSeparator();
-        add (CommandIDs::toggleDetails);
+        add (CommandIDs::toggleInspector);
     }
     else if (name == "Window")
     {

@@ -2,7 +2,9 @@
 
 #include "app/MainWindow.h"
 #include "platform/ExternalDrops.h"
+#include "ui/dialogs/StartupSplash.h"
 #include "ui/theme/IkarosLookAndFeel.h"
+#include "ui/theme/ThemeManager.h"
 
 namespace ikaros
 {
@@ -33,7 +35,18 @@ public:
         lookAndFeel = std::make_unique<IkarosLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
+        // Starting the engine takes a moment and blocks the message loop, so
+        // put the splash on screen first and do the rest once it has drawn.
+        splash = std::make_unique<StartupSplash> ([this, commandLine] { finishStarting (commandLine); });
+    }
+
+    void finishStarting (const juce::String& commandLine)
+    {
         engine = std::make_unique<AudioEngine>();
+
+        // The saved theme (Preferences > Appearance), before the window
+        // exists so it opens in the right colours.
+        themeManager = std::make_unique<ThemeManager> (engine->getPreferences(), *lookAndFeel);
 
         // The saved interface size, before the window exists (Preferences > Appearance
         // changes it later without a restart; see MainComponent).
@@ -44,13 +57,20 @@ public:
 
         // Started by double-clicking a session (or "ikaros-studio My Song.iksession").
         openSessionsIn (commandLine);
+
+        // The window is up behind the splash; close the splash once it has
+        // been seen. The app object outlives the message loop, so `this` is
+        // safe here.
+        juce::Timer::callAfterDelay (splash->getRemainingMilliseconds(), [this] { splash.reset(); });
     }
 
     void shutdown() override
     {
         // Destroy in reverse order of creation: UI first (it references the
         // engine), then the engine, then the LookAndFeel.
+        splash.reset();
         mainWindow.reset();
+        themeManager.reset();   // it listens to the engine's preferences
         engine.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         lookAndFeel.reset();
@@ -105,7 +125,9 @@ private:
     }
 
     std::unique_ptr<IkarosLookAndFeel> lookAndFeel;
+    std::unique_ptr<StartupSplash> splash;   // only while starting
     std::unique_ptr<AudioEngine> engine;
+    std::unique_ptr<ThemeManager> themeManager;   // after engine: members are destroyed in reverse order
     std::unique_ptr<MainWindow> mainWindow;
 };
 

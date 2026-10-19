@@ -59,7 +59,7 @@ PreferencesDialog::PreferencesDialog (AudioEngine& e, juce::ApplicationCommandMa
     pageList.setTitle ("Sections");
     addAndMakeVisible (pageList);
 
-    doneButton.setColours (IconButton::accentColours());
+    doneButton.setColours (IconButton::primaryColours);
     doneButton.onClick = [this] { close(); };
     addAndMakeVisible (doneButton);
 }
@@ -169,14 +169,14 @@ void PreferencesDialog::paintListBoxItem (int row, juce::Graphics& g, int width,
 
     if (selected)
     {
-        g.setColour (colour::selectedRow);
+        g.setColour (theme().selectedRow);
         g.fillRoundedRectangle (r, size::radiusSmall);
-        g.setColour (colour::accent);
+        g.setColour (theme().highlight);
         g.fillRoundedRectangle (r.withWidth (3.0f).reduced (0.0f, 8.0f), 1.5f);
     }
 
-    g.setColour (selected ? colour::text : colour::textMenu);
-    g.setFont (selected ? fonts::uiSemiBold (14.5f) : fonts::ui (14.5f));
+    g.setColour (selected ? theme().text : theme().textMenu);
+    g.setFont (selected ? fonts::uiSemiBold (textSize::lgPlus) : fonts::ui (textSize::lgPlus));
     g.drawText (pageNames[row], 16, 0, width - 24, height, juce::Justification::centredLeft);
 }
 
@@ -190,31 +190,31 @@ void PreferencesDialog::selectedRowsChanged (int row)
 void PreferencesDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the window.
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (theme().scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
 
     // The list of sections: darker, with the panel's rounded corners on its left.
     juce::Path sidebarShape;
     sidebarShape.addRoundedRectangle ((float) sidebar.getX(), (float) sidebar.getY(), (float) sidebar.getWidth(),
                                       (float) sidebar.getHeight(), 14.0f, 14.0f, true, false, true, false);
-    g.setColour (colour::sidebarBg);
+    g.setColour (theme().dialogSidebarBg);
     g.fillPath (sidebarShape);
-    g.setColour (colour::border);
+    g.setColour (theme().border);
     g.fillRect (sidebar.getRight() - 1, sidebar.getY(), 1, sidebar.getHeight());
 
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
-    g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setColour (theme().text);
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText (getName(), sidebar.getX() + 26, sidebar.getY() + 22, sidebar.getWidth() - 40, 30, juce::Justification::centredLeft);
 
     if (juce::isPositiveAndBelow (currentPage, getNumRows()))
     {
-        g.setFont (fonts::uiBold (20.0f));
+        g.setFont (fonts::uiBold (textSize::display));
         g.drawText (pageNames[currentPage], titleArea, juce::Justification::centredLeft);
     }
 }

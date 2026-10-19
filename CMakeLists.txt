@@ -11,6 +11,12 @@ cmake_minimum_required(VERSION 3.22)
 
 project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 
+# The version people see (About, splash, saved sessions): the release number
+# plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
+# Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
+set(IKAROS_MILESTONE 7)
+set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -279,17 +285,21 @@ set(IKAROS_PLATFORM_SOURCES
     src/platform/ExternalDrops.h       src/platform/ExternalDrops.cpp
     src/platform/AppFolders.h          src/platform/AppFolders.cpp
     src/platform/FileLock.h            src/platform/FileLock.cpp
-    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp)
+    src/platform/AudioHardware.h       src/platform/AudioHardware.cpp
+    src/platform/SystemAppearance.h    src/platform/SystemAppearance.cpp)
 
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
-    src/ui/theme/Tokens.h
+    src/ui/theme/Tokens.h                   src/ui/theme/Family.h
+    src/ui/theme/Theme.h                    src/ui/theme/Theme.cpp
+    src/ui/theme/ThemeManager.h             src/ui/theme/ThemeManager.cpp
     src/ui/theme/Fonts.h                    src/ui/theme/Fonts.cpp
     src/ui/theme/IkarosLookAndFeel.h        src/ui/theme/IkarosLookAndFeel.cpp
 
     # widgets: small reusable controls
     src/ui/widgets/Icons.h                  src/ui/widgets/Icons.cpp
     src/ui/widgets/IconButton.h             src/ui/widgets/IconButton.cpp
+    src/ui/widgets/Decibels.h
     src/ui/widgets/ResizeHandle.h           src/ui/widgets/ResizeHandle.cpp
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
@@ -305,17 +315,20 @@ set(IKAROS_UI_SOURCES
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
+    src/ui/dialogs/StartupSplash.h          src/ui/dialogs/StartupSplash.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
     src/ui/dialogs/ExportDialog.h           src/ui/dialogs/ExportDialog.cpp
     src/ui/dialogs/RecoveryPrompt.h         src/ui/dialogs/RecoveryPrompt.cpp
     src/ui/dialogs/MonitoringWarning.h      src/ui/dialogs/MonitoringWarning.cpp
     src/ui/dialogs/DeviceChangePrompt.h     src/ui/dialogs/DeviceChangePrompt.cpp
+    src/ui/dialogs/AlertDialog.h            src/ui/dialogs/AlertDialog.cpp
 
     # the Preferences window and its pages
     src/ui/preferences/PreferencesDialog.h  src/ui/preferences/PreferencesDialog.cpp
     src/ui/preferences/PreferencesPage.h    src/ui/preferences/PreferencesPage.cpp
     src/ui/preferences/PreferencesPages.h   src/ui/preferences/PreferencesPages.cpp
+    src/ui/preferences/ThemePicker.h        src/ui/preferences/ThemePicker.cpp
     src/ui/preferences/SoundsPluginsPage.cpp
     src/ui/preferences/AudioSettingsPanel.h src/ui/preferences/AudioSettingsPanel.cpp
 
@@ -329,7 +342,8 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
-    src/ui/library/MoreSoundsDialog.h       src/ui/library/MoreSoundsDialog.cpp
+    src/ui/library/PreviewButton.h          src/ui/library/PreviewButton.cpp
+    src/ui/library/ManageSoundsDialog.h       src/ui/library/ManageSoundsDialog.cpp
     src/ui/library/FreesoundSetupDialog.h   src/ui/library/FreesoundSetupDialog.cpp
     src/ui/library/LoopBrowser.h            src/ui/library/LoopBrowser.cpp
     src/ui/arrangement/ArrangementView.h    src/ui/arrangement/ArrangementView.cpp
@@ -375,7 +389,7 @@ target_include_directories(IkarosStudio PRIVATE src)
 
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_VERSION>"
+    JUCE_APPLICATION_VERSION_STRING="${IKAROS_VERSION_STRING}"
     JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -384,7 +398,7 @@ target_compile_definitions(IkarosStudio PRIVATE
     ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
 # The version, as the engine records it in saved sessions.
-target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${IKAROS_VERSION_STRING}")
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
 # (see src/engine/PackStore.h): a web address or a file path, in the app's own
@@ -432,8 +446,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(X11 REQUIRED)
     target_link_libraries(IkarosStudio PRIVATE X11::X11)
 
-    # sd-bus (part of libsystemd) for src/platform/AudioHardware: it asks
-    # RealtimeKit for a real-time audio thread.
+    # sd-bus (part of libsystemd) for src/platform/AudioHardware, which asks
+    # RealtimeKit for a real-time audio thread, and SystemAppearance, which
+    # asks the desktop portal whether dark mode is on.
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(IKAROS_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
     target_link_libraries(IkarosStudio PRIVATE PkgConfig::IKAROS_SYSTEMD)
@@ -507,7 +522,7 @@ if(IKAROS_BUILD_TESTS)
 
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
-        IKAROS_VERSION="${PROJECT_VERSION}"
+        IKAROS_VERSION="${IKAROS_VERSION_STRING}"
         IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
         IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
         IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")

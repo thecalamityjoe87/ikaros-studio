@@ -10,6 +10,20 @@ namespace ikaros
 using namespace tokens;
 using namespace arrangement;
 
+namespace
+{
+    /** The outline for one of this lane's regions: white on the selected
+        track, fainter on the regions left out while some are picked. */
+    RegionComponent::Outline outlineFor (const Selection& selection, bool trackSelected, RegionId region)
+    {
+        if (! trackSelected)
+            return RegionComponent::Outline::normal;
+
+        return selection.hasRegions() && ! selection.isSelected (region) ? RegionComponent::Outline::selectedTrackFaint
+                                                                         : RegionComponent::Outline::selectedTrack;
+    }
+}
+
 ArrangementView::Lane::Lane (ArrangementView& o, TrackId id) : owner (o), trackId (id)
 {
     setTitle ("Track lane");
@@ -33,7 +47,7 @@ void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
     if (isSelected != selected)
         repaint();
 
-    colour = t.colour;
+    family = colour::familyOf (t);
     selected = isSelected;
     isAudio = t.kind == TrackKind::audio;
     // Quieter when muted; fainter still under automation, so the curve stands out.
@@ -48,14 +62,14 @@ void ArrangementView::Lane::updateTrack (const TrackInfo& t, bool isSelected)
 
     // The regions keep what they show; only the colour and selection may differ.
     for (auto& [id, comp] : regions)
-        comp->update (comp->getInfo(), colour, owner.selection.isSelected (id));
+        comp->update (comp->getInfo(), family, owner.selection.isSelected (id), outlineFor (owner.selection, selected, id));
 }
 
 void ArrangementView::Lane::updateRegion (const RegionInfo& info)
 {
     if (auto* comp = findRegion (info.id))
     {
-        comp->update (info, colour, owner.selection.isSelected (info.id));
+        comp->update (info, family, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         resized();   // it may have moved or changed length
     }
 }
@@ -89,7 +103,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
         }
         else
         {
-            comp = std::make_unique<RegionComponent> (info, colour);
+            comp = std::make_unique<RegionComponent> (info, family);
             addAndMakeVisible (*comp);
 
             // The arrangement handles the gestures: it knows about the
@@ -112,7 +126,7 @@ void ArrangementView::Lane::update (const TrackInfo& t, const std::vector<Region
             };
         }
 
-        comp->update (info, colour, owner.selection.isSelected (info.id));
+        comp->update (info, family, owner.selection.isSelected (info.id), outlineFor (owner.selection, selected, info.id));
         next[info.id] = std::move (comp);
     }
 
@@ -147,12 +161,12 @@ void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
     auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
     auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
 
-    g.setColour (colour::record.withAlpha (0.25f));
-    g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (colour::record);
-    g.drawRoundedRectangle (r, 8.0f, 1.5f);
+    g.setColour (theme().arrangement.record.withAlpha (0.25f));
+    g.fillRoundedRectangle (r, size::radius);
+    g.setColour (theme().arrangement.record);
+    g.drawRoundedRectangle (r, size::radius, 1.5f);
 
-    g.setFont (fonts::uiBold (11.0f));
+    g.setFont (fonts::uiBold (textSize::xs));
     g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
 }
 
@@ -161,28 +175,28 @@ void ArrangementView::Lane::paint (juce::Graphics& g)
     auto r = getLocalBounds();
 
     if (selected)
-        g.fillAll (colour::accent.withAlpha (0.05f));
+        g.fillAll (theme().arrangement.selectedLane);
 
     // Beat lines (faint), when zoomed in enough for them to be useful...
     auto& geo = owner.geometry;
 
     if (geo.pixelsPerBeat >= 6.0)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.025f));
+        g.setColour (theme().arrangement.gridBeat);
 
         for (double beat = std::ceil (geo.scrollBeats); geo.beatToX (beat) <= (float) getWidth(); beat += 1.0)
             g.fillRect (juce::roundToInt (geo.beatToX (beat)), 0, 1, r.getHeight());
     }
 
     // ...and bar lines (stronger).
-    g.setColour (juce::Colours::white.withAlpha (0.05f));
+    g.setColour (theme().arrangement.gridBar);
     forEachVisibleBar (geo, getWidth(), barStride (geo, 8.0), [&] (int, int x) { g.fillRect (x, 0, 1, r.getHeight()); });
 
-    g.setColour (colour::divider);
+    g.setColour (theme().arrangement.laneDivider);
     g.fillRect (r.removeFromBottom (1));
 
     if (showFocusRing && hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), 4.0f);
+        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().reduced (1.0f), size::radiusXs);
 }
 
 void ArrangementView::Lane::resized()

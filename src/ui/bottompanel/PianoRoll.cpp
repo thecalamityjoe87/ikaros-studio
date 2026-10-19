@@ -45,7 +45,7 @@ PianoRoll::PianoRoll (AudioEngine& e) : engine (e)
         addAndMakeVisible (bar);
     }
 
-    setRegion (std::nullopt, colour::accent, TempoMap());
+    setRegion (std::nullopt, Family::master, TempoMap());
 }
 
 PianoRoll::~PianoRoll()
@@ -55,8 +55,13 @@ PianoRoll::~PianoRoll()
     noteScroll.removeListener (this);
 }
 
+juce::Colour PianoRoll::trackColour() const
+{
+    return theme().family (family);
+}
+
 //==============================================================================
-void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, const TempoMap& t)
+void PianoRoll::setRegion (std::optional<RegionInfo> r, Family f, const TempoMap& t)
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
@@ -85,7 +90,7 @@ void PianoRoll::setRegion (std::optional<RegionInfo> r, juce::Colour c, const Te
     }
 
     region = std::move (r);
-    colour = c;
+    family = f;
     tempo = t;
 
     const bool editable = region.has_value() && region->isMidi;

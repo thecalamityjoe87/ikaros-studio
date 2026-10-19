@@ -10,6 +10,13 @@ using namespace arrangement;
 ArrangementView::Content::Content (ArrangementView& o) : owner (o)
 {
     addAndMakeVisible (dropZone);
+
+    addTrackButton.onClick = [this]
+    {
+        if (owner.onAddTrack)
+            owner.onAddTrack();
+    };
+    addAndMakeVisible (addTrackButton);
 }
 
 void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
@@ -176,15 +183,17 @@ void ArrangementView::Content::setRecording (TrackId track, double startBeat, do
 
 int ArrangementView::Content::getIdealHeight() const
 {
-    return owner.getTracksHeight() + dropZoneHeight + dropZoneMargin * 2;
+    return owner.getTracksHeight() + juce::jmax (dropZoneHeight + dropZoneMargin * 2, size::addTrackHeight + addTrackGap * 2);
 }
 
 void ArrangementView::Content::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
-    g.setColour (colour::sidebarBg);
+    // The lanes are part of the arrangement (dark in both themes); the
+    // track headers column on the left is chrome.
+    g.fillAll (theme().arrangement.laneBg);
+    g.setColour (theme().trackColumnBg);
     g.fillRect (0, 0, headerWidth - 1, getHeight());
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (headerWidth - 1, 0, 1, getHeight());
 }
 
@@ -202,6 +211,7 @@ void ArrangementView::Content::resized()
         y += height;
     }
 
+    addTrackButton.setBounds (columnPadding, y + addTrackGap, columnRight - columnPadding, size::addTrackHeight);
     dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,
                         getWidth() - headerWidth - dropZoneMargin * 2, dropZoneHeight);
 }

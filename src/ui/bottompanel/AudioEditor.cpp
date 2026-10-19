@@ -44,7 +44,7 @@ AudioEditor::AudioEditor (AudioEngine& e) : engine (e)
     timeScroll.addListener (this);
     addAndMakeVisible (timeScroll);
 
-    setRegion (std::nullopt, colour::accent, TempoMap());
+    setRegion (std::nullopt, Family::master, TempoMap());
 }
 
 AudioEditor::~AudioEditor()
@@ -52,8 +52,13 @@ AudioEditor::~AudioEditor()
     timeScroll.removeListener (this);
 }
 
+juce::Colour AudioEditor::trackColour() const
+{
+    return theme().family (family);
+}
+
 //==============================================================================
-void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, const TempoMap& t)
+void AudioEditor::setRegion (std::optional<RegionInfo> r, Family f, const TempoMap& t)
 {
     const bool sameRegion = r.has_value() && region.has_value() && r->id == region->id;
 
@@ -75,7 +80,7 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, juce::Colour c, const 
         waveformDirty = true;
 
     region = std::move (r);
-    colour = c;
+    family = f;
     tempo = t;
     refreshFlex();
 
@@ -710,12 +715,13 @@ void AudioEditor::showMenu()
 // Painting
 void AudioEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
+    // The waveform is part of the arrangement: dark in both themes.
+    g.fillAll (theme().arrangement.laneBg);
 
     if (! hasRegion())
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setColour (theme().arrangement.textSecondary);
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText ("Select an audio region to edit it here. Record onto an audio track, or drag in a loop or an audio file.",
                     getLocalBounds().reduced (12, 0), juce::Justification::centred);
         return;
@@ -728,13 +734,13 @@ void AudioEditor::paint (juce::Graphics& g)
 
 void AudioEditor::paintToolbar (juce::Graphics& g)
 {
-    g.setColour (colour::toolbarBg);
+    g.setColour (theme().bottomPanelBg);
     g.fillRect (toolbarArea);
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (toolbarArea.withTop (toolbarArea.getBottom() - 1));
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::sm));
     // With Flex on: how it's getting on, or how to use it.
     auto hint = juce::String::fromUTF8 ("Drag the edges to trim \xc2\xb7 Drag the dots to fade \xc2\xb7 Click to move the playhead");
 
@@ -751,14 +757,14 @@ void AudioEditor::paintToolbar (juce::Graphics& g)
 
     g.drawFittedText (hint, hintArea, juce::Justification::centredLeft, 1, 1.0f);
 
-    icons::draw (g, Icon::search, timeZoomIcon.toFloat(), colour::textSecondary, 13.0f, 1.6f);
+    icons::draw (g, Icon::search, timeZoomIcon.toFloat(), theme().textSecondary, 13.0f, 1.6f);
 }
 
 void AudioEditor::paintRuler (juce::Graphics& g)
 {
-    g.setColour (colour::sidebarBg);
+    g.setColour (theme().rulerBg);
     g.fillRect (rulerArea);
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (rulerArea.withTop (rulerArea.getBottom() - 1));
 
     juce::Graphics::ScopedSaveState save (g);
@@ -771,7 +777,7 @@ void AudioEditor::paintRuler (juce::Graphics& g)
     // Beats: small ticks, when they're far enough apart to see.
     if (pixelsPerBeat >= 8.0)
     {
-        g.setColour (colour::textSecondary.withAlpha (0.4f));
+        g.setColour (theme().textSecondary.withAlpha (0.4f));
 
         for (double beat = std::ceil (first); beat <= last; beat += 1.0)
             g.fillRect (beatToX (beat - start), area.getBottom() - 5.0f, 1.0f, 4.0f);
@@ -781,7 +787,7 @@ void AudioEditor::paintRuler (juce::Graphics& g)
     // Bars can differ in length: the tempo map knows where each one starts.
     const double barPixels = tempo.shortestBar() * pixelsPerBeat;
     const int labelEvery = juce::jmax (1, (int) std::ceil (36.0 / barPixels));
-    g.setFont (fonts::mono (11.0f));
+    g.setFont (fonts::mono (textSize::xs));
 
     tempo.forEachBar (first, last, 1, [&] (int bar, double barBeat)
     {
@@ -791,16 +797,16 @@ void AudioEditor::paintRuler (juce::Graphics& g)
         if (number % labelEvery != 0 && labelEvery > 1)
             return;
 
-        g.setColour (colour::textSecondary.withAlpha (0.6f));
+        g.setColour (theme().textSecondary.withAlpha (0.6f));
         g.fillRect (x, area.getY() + 4.0f, 1.0f, area.getHeight() - 4.0f);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.drawText (juce::String (number), juce::Rectangle<float> (x + 4.0f, area.getY(), 40.0f, area.getHeight()),
                     juce::Justification::centredLeft);
     });
 
     if (playheadBeat >= 0.0)
     {
-        g.setColour (colour::accent);
+        g.setColour (theme().arrangement.playhead);
         g.fillRect (beatToX (playheadBeat - start) - 1.0f, area.getY(), 2.0f, area.getHeight());
     }
 }
@@ -824,7 +830,7 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
         if (step * pixelsPerBeat < 6.0)
             return;
 
-        g.setColour (juce::Colours::white.withAlpha (alpha));
+        g.setColour (theme().arrangement.tintLight.withAlpha (alpha));
 
         for (double beat = std::ceil ((start + scrollBeats) / step) * step; beat - start <= scrollBeats + visibleBeats(); beat += step)
             g.fillRect (beatToX (beat - start), area.getY(), 1.0f, area.getHeight());
@@ -834,22 +840,22 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
 
     if (tempo.shortestBar() * pixelsPerBeat >= 6.0)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.1f));
+        g.setColour (theme().arrangement.tintLight.withAlpha (0.1f));
         tempo.forEachBar (start + scrollBeats, start + scrollBeats + visibleBeats(), 1, [&] (int, double barBeat)
         {
             g.fillRect (beatToX (barBeat - start), area.getY(), 1.0f, area.getHeight());
         });
     }
 
-    g.setColour (colour.withAlpha (0.1f));
+    g.setColour (trackColour().withAlpha (0.1f));
     g.fillRect (regionArea);
 
     // The waveform: one column per pixel, from its quietest to its loudest sample.
     const float mid = area.getCentreY();
     const float halfHeight = area.getHeight() * 0.45f;
-    g.setColour (juce::Colours::white.withAlpha (0.08f));
+    g.setColour (theme().arrangement.tintLight.withAlpha (0.08f));
     g.fillRect (area.getX(), mid, area.getWidth(), 1.0f);
-    g.setColour (colour);
+    g.setColour (trackColour());
 
     for (size_t i = 0; i < columns.size(); ++i)
     {
@@ -865,16 +871,16 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
     if (selection.has_value())
     {
         const float from = beatToX (selection->getStart()), to = beatToX (selection->getEnd());
-        g.setColour (colour::accent.withAlpha (0.14f));
+        g.setColour (theme().arrangement.highlight.withAlpha (0.1f));
         g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, area.getY(), to, area.getBottom()));
-        g.setColour (colour::accent.withAlpha (0.6f));
+        g.setColour (theme().arrangement.highlight.withAlpha (0.6f));
         g.fillRect (from, area.getY(), 1.0f, area.getHeight());
         g.fillRect (to - 1.0f, area.getY(), 1.0f, area.getHeight());
     }
 
     // Outside the region (the rest of the recording, or the loop going
     // round again): dimmed.
-    g.setColour (colour::windowBg.withAlpha (0.7f));
+    g.setColour (theme().arrangement.laneBg.withAlpha (0.7f));
     g.fillRect (area.withRight (left));
     g.fillRect (area.withLeft (right));
 
@@ -884,7 +890,7 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
         const double loop = region->loopLengthBeats;
         const double contentStart = -region->loopOffsetBeats;   // where the first loop starts, from the region's start
         const float dashes[] = { 3.0f, 3.0f };
-        g.setColour (juce::Colours::white.withAlpha (0.3f));
+        g.setColour (theme().arrangement.tintLight.withAlpha (0.3f));
 
         for (double b = contentStart + std::ceil ((scrollBeats - contentStart) / loop) * loop; b <= scrollBeats + visibleBeats(); b += loop)
         {
@@ -910,30 +916,30 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
             faded.lineTo (edge, area.getBottom());
             faded.closeSubPath();
 
-            g.setColour (colour::windowBg.withAlpha (0.5f));
+            g.setColour (theme().arrangement.laneBg.withAlpha (0.5f));
             g.fillPath (faded);
-            g.setColour (colour);
+            g.setColour (trackColour());
             g.drawLine (edge, area.getBottom(), end, area.getY(), 1.5f);
         }
 
         const auto dot = juce::Rectangle<float> (9.0f, 9.0f).withCentre (fadeHandle (fadeIn));
-        g.setColour (colour::text);
+        g.setColour (theme().arrangement.text);
         g.fillEllipse (dot);
-        g.setColour (colour::windowBg);
+        g.setColour (theme().arrangement.laneBg);
         g.drawEllipse (dot, 1.0f);
     }
 
     // The region's edges, with a tab halfway down to grab.
     for (float x : { left, right })
     {
-        g.setColour (colour);
+        g.setColour (trackColour());
         g.fillRect (x - 1.0f, area.getY(), 2.0f, area.getHeight());
-        g.fillRoundedRectangle (juce::Rectangle<float> (6.0f, 28.0f).withCentre ({ x, mid }), 3.0f);
+        g.fillRoundedRectangle (juce::Rectangle<float> (6.0f, 28.0f).withCentre ({ x, mid }), size::radiusTiny);
     }
 
     if (playheadBeat >= 0.0)
     {
-        g.setColour (colour::accent);
+        g.setColour (theme().accent);
         g.fillRect (beatToX (playheadBeat - start) - 1.0f, area.getY(), 2.0f, area.getHeight());
     }
 
@@ -941,8 +947,8 @@ void AudioEditor::paintWaveform (juce::Graphics& g)
     // the waveform comes when it stops).
     if (waveformPending && ! engine.getTransportState().recording)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().arrangement.textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (juce::String::fromUTF8 ("Reading the recording\xe2\x80\xa6"), waveArea, juce::Justification::centred);
     }
 }
@@ -960,7 +966,7 @@ void AudioEditor::paintFlex (juce::Graphics& g, juce::Rectangle<float> area)
         map.push_back ({ m.sourceSeconds, m.beat });
 
     // The hits: faint lines (unless a marker's on them; tempo markers aren't drawn).
-    g.setColour (juce::Colours::white.withAlpha (0.18f));
+    g.setColour (theme().arrangement.tintLight.withAlpha (0.18f));
 
     for (auto& t : flex.transients)
     {
@@ -984,9 +990,9 @@ void AudioEditor::paintFlex (juce::Graphics& g, juce::Rectangle<float> area)
         forEachRepeat (markers[i].beat, [&] (double beat, double)
         {
             const float x = beatToX (beat - start);
-            g.setColour (colour::text.withAlpha (0.85f));
+            g.setColour (theme().arrangement.text.withAlpha (0.85f));
             g.fillRect (x - 0.75f, area.getY(), 1.5f, area.getHeight());
-            g.fillRoundedRectangle (juce::Rectangle<float> (8.0f, 12.0f).withCentre ({ x, area.getBottom() - 8.0f }), 2.0f);
+            g.fillRoundedRectangle (juce::Rectangle<float> (8.0f, 12.0f).withCentre ({ x, area.getBottom() - 8.0f }), size::radiusHair);
         });
     }
 }

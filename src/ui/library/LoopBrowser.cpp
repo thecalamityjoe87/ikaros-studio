@@ -2,6 +2,8 @@
 #include "engine/AudioPreview.h"
 #include "engine/FreesoundStore.h"
 #include "engine/SoundLibrary.h"
+#include "ui/dialogs/AlertDialog.h"
+#include "ui/library/PreviewButton.h"
 #include "ui/state/DragTypes.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -14,7 +16,7 @@ using namespace tokens;
 
 namespace
 {
-    constexpr int rowHeight = 34, rowGap = 2, actionWidth = 28, searchDelayMs = 600;
+    constexpr int rowGap = 2, actionWidth = 28, searchDelayMs = 600;
 
     struct TempoRange { const char* label; int min, max; };   // 0: no limit at that end
 
@@ -103,57 +105,86 @@ public:
         setMouseClickGrabsKeyboardFocus (false);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
 
+        if (item.kind != Item::Kind::more)
+        {
+            // The round preview button, the same as the sidebar's (see
+            // PreviewButton). It plays or stops the loop, like clicking the row.
+            previewButton = std::make_unique<PreviewButton> (i.name);
+            previewButton->onClick = [this] { owner.activate (item); };
+
+            // Leaving the preview button doesn't send the row a mouseExit,
+            // so the button tells the row whenever its own hover state changes.
+            previewButton->onStateChange = [this] { updatePreviewButton(); };
+            addChildComponent (*previewButton);
+            updatePreviewButton();
+        }
+
         onClick = [this]
         {
             if (dragged)
                 return;
 
-            if (hasAction() && getMouseXYRelative().x >= getWidth() - actionWidth - 10)
+            if (isOverAction())
                 owner.runAction (item);
             else
                 owner.activate (item);
         };
     }
 
-    int getPreferredHeight() const    { return rowHeight; }
+    int getPreferredHeight() const    { return size::libraryRowHeight; }
+
+    /** Shows the preview button while the row is hovered, or while its loop
+        plays (with a stop icon then). */
+    void updatePreviewButton()
+    {
+        if (previewButton == nullptr)
+            return;
+
+        previewButton->setState (owner.playingFile == item.file);
+        previewButton->updateVisibility (*this);
+        repaint();
+    }
+
+    void mouseEnter (const juce::MouseEvent& e) override    { juce::Button::mouseEnter (e); updatePreviewButton(); }
+    void mouseExit (const juce::MouseEvent& e) override     { juce::Button::mouseExit (e); updatePreviewButton(); }
+
+    void resized() override
+    {
+        if (previewButton != nullptr)
+            previewButton->setBounds (PreviewButton::getBoundsIn (getLocalBounds()));
+    }
 
     juce::String getTooltip() override
     {
         if (item.kind == Item::Kind::more)
             return "Show more loops";
 
-        if (hasAction() && getMouseXYRelative().x >= getWidth() - actionWidth - 10)
+        if (isOverAction())
             return item.removable ? "Remove this loop from your library" : "Add this loop to your library";
 
         return item.kind == Item::Kind::loop || item.added ? "Click to listen. Drag onto the timeline to use it."
                                                            : "Click to listen. Press + to add it to your library.";
     }
 
-    void paintButton (juce::Graphics& g, bool over, bool down) override
+    void paintButton (juce::Graphics& g, bool, bool down) override
     {
         auto r = getLocalBounds().toFloat();
+        const bool over = isMouseOver (true);   // true over the preview button too
 
         if (item.kind == Item::Kind::more)
         {
-            g.setColour (over ? colour::text : colour::textSecondary);
-            g.setFont (fonts::uiSemiBold (13.0f));
+            g.setColour (over ? theme().text : theme().textSecondary);
+            g.setFont (fonts::uiSemiBold (textSize::md));
             g.drawText (item.name, getLocalBounds(), juce::Justification::centred);
             return;
         }
 
-        const bool playing = owner.playingFile == item.file;
-
-        if (playing)
-            g.setColour (colour::accent.withAlpha (0.14f));
-        else
-            g.setColour (over ? colour::raised.withAlpha (down ? 1.0f : 0.6f) : juce::Colours::transparentBlack);
-
+        // Playing is shown by the preview button's stop icon, as in the
+        // sidebar, so the row itself only lights up under the mouse.
+        g.setColour (over ? (down ? theme().rowPressed : theme().rowHover) : juce::Colours::transparentBlack);
         g.fillRoundedRectangle (r, size::radius);
 
-        auto content = getLocalBounds().reduced (10, 0);
-        icons::draw (g, playing ? Icon::stop : Icon::play, content.removeFromLeft (16).toFloat(),
-                     playing ? colour::accent : colour::textSecondary, 12.0f);
-        content.removeFromLeft (8);
+        auto content = getContentArea();
 
         // In your own loops only some rows have a bin, so it shows on hover and the details stay lined up.
         const bool busy = hasAction() && owner.engine.getFreesound().isBusy (item.id);
@@ -161,32 +192,32 @@ public:
         if (hasAction() && (over || busy || item.kind == Item::Kind::result))
         {
             auto zone = content.removeFromRight (actionWidth).toFloat();
-            const bool onAction = over && getMouseXYRelative().x >= getWidth() - actionWidth - 10;
+            const bool onAction = isOverAction();
 
             if (busy)
             {
-                g.setColour (colour::textSecondary);
-                g.setFont (fonts::ui (14.0f));
+                g.setColour (theme().textSecondary);
+                g.setFont (fonts::ui (textSize::lg));
                 g.drawText ("...", zone.toNearestInt(), juce::Justification::centredRight);
             }
             else if (item.removable)
             {
-                icons::draw (g, Icon::trash, zone.removeFromRight (15.0f), onAction ? colour::record : colour::textSecondary, 15.0f);
+                icons::draw (g, Icon::trash, zone.removeFromRight (15.0f), onAction ? theme().record : theme().textSecondary, 15.0f);
             }
             else
             {
-                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? colour::accent : colour::textSecondary, 14.0f);
+                icons::draw (g, Icon::plus, zone.removeFromRight (14.0f), onAction ? theme().text : theme().textSecondary, 14.0f);
             }
         }
 
-        g.setFont (fonts::ui (12.0f));
+        g.setFont (fonts::ui (textSize::sm));
         auto detailWidth = juce::jmin (content.getWidth() / 2,
                                        (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), item.detail)) + 4);
-        g.setColour (item.added ? colour::effectOn : colour::textSecondary);
+        g.setColour (item.added ? theme().effectOn : theme().textSecondary);
         g.drawText (item.detail, content.removeFromRight (detailWidth), juce::Justification::centredRight, true);
 
-        g.setFont (fonts::ui (14.0f));
-        g.setColour (colour::text);
+        g.setFont (fonts::ui (textSize::lg));
+        g.setColour (theme().text);
         g.drawText (item.name, content.withTrimmedRight (6), juce::Justification::centredLeft, true);
 
         if (hasKeyboardFocus (false))
@@ -231,7 +262,27 @@ private:
     LoopBrowser& owner;
     bool dragged = false;
 
+    std::unique_ptr<PreviewButton> previewButton;   // not on the "more" row
+
     bool hasAction() const    { return item.kind == Item::Kind::result || item.removable; }
+
+    // Where the name, details and + or bin go: inset like the sidebar's rows,
+    // and left of the preview button while it shows.
+    juce::Rectangle<int> getContentArea() const
+    {
+        auto content = getLocalBounds().reduced (size::libraryRowInset, 0);
+
+        if (previewButton != nullptr && previewButton->isVisible())
+            content.setRight (PreviewButton::getBoundsIn (getLocalBounds()).getX() - 8);
+
+        return content;
+    }
+
+    bool isOverAction() const
+    {
+        const auto zone = getContentArea().removeFromRight (actionWidth).expanded (5, 0);
+        return hasAction() && isMouseOver (true) && zone.contains (getMouseXYRelative());
+    }
 };
 
 //==============================================================================
@@ -242,14 +293,12 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     setOpaque (true);
     setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
-
+    // Tabs and filter chips are choices, not "on" states: neutral when chosen.
     for (auto* b : { &backButton, &mineTab, &freesoundTab, &tempoButton })
     {
-        b->setColours (grey);
+        b->setColours (IconButton::neutralToggleColours);
         b->setCornerRadius (6.0f);
-        b->setFont (fonts::uiSemiBold (12.0f));
+        b->setFont (fonts::uiSemiBold (textSize::sm));
         b->setIconSize (14.0f);
         addAndMakeVisible (b);
     }
@@ -258,9 +307,9 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     {
         const char* name = filterGroups()[(size_t) i].name;
         auto* tab = filterTabs.add (new IconButton (name, std::nullopt, name));
-        tab->setColours (grey);
+        tab->setColours (IconButton::neutralToggleColours);
         tab->setCornerRadius (6.0f);
-        tab->setFont (fonts::uiSemiBold (11.0f));
+        tab->setFont (fonts::uiSemiBold (textSize::xs));
         tab->setTooltip (juce::String ("Choose a ") + juce::String (name).toLowerCase() + " to narrow the loops. Click again to fold it away.");
         tab->onClick = [this, i]
         {
@@ -275,15 +324,15 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
 
     buildChips();
 
-    clearButton.setColours (grey);
+    clearButton.setColours (IconButton::neutralToggleColours);
     clearButton.setCornerRadius (6.0f);
     clearButton.setIconSize (12.0f);
     clearButton.setTooltip ("Clear all filters: instrument, genre, mood, tempo and search");
     clearButton.onClick = [this] { clearFilters(); };
     addAndMakeVisible (clearButton);
 
-    setupButton.setColours (IconButton::accentColours());
-    setupButton.setFont (fonts::uiSemiBold (13.0f));
+    setupButton.setColours (IconButton::primaryColours);
+    setupButton.setFont (fonts::uiSemiBold (textSize::md));
     addChildComponent (setupButton);
 
     backButton.onClick = [this] { close(); };
@@ -295,10 +344,9 @@ LoopBrowser::LoopBrowser (AudioEngine& e)
     tempoButton.setTooltip ("Only show loops at a tempo");
     tempoButton.onClick = [this] { showTempoMenu(); };
 
-    searchField.setFont (fonts::ui (14.0f));
+    searchField.setFont (fonts::ui (textSize::lg));
     searchField.setTitle ("Search loops");
     searchField.setIndents (36, 9);   // room for the magnifier (see paintOverChildren)
-    searchField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     searchField.onTextChange = [this]
     {
         if (scope == Scope::mine)
@@ -388,7 +436,7 @@ void LoopBrowser::update()
         playingFile = playing;
 
         for (auto* row : rows)
-            row->repaint();
+            row->updatePreviewButton();
     }
 }
 
@@ -410,7 +458,7 @@ void LoopBrowser::setScope (Scope s)
     freesoundTab.setToggleState (scope == Scope::freesound, juce::dontSendNotification);
     searchField.setText (scope == Scope::mine ? mineQuery : freesoundQuery, false);
     searchField.setTextToShowWhenEmpty (scope == Scope::mine ? "Search your loops" : "Search Freesound loops",
-                                        colour::textSecondary);
+                                        theme().textSecondary);
 
     if (scope == Scope::freesound && freesoundNeedsSearch())
         searchFreesound();   // the most downloaded, to start with
@@ -480,17 +528,16 @@ void LoopBrowser::buildChips()
     if (filterTab < 0)
         return;
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
+    // Tabs and filter chips are choices, not "on" states: neutral when chosen.
     auto& options = filterGroups()[(size_t) filterTab].options;
 
     for (int i = 0; i < (int) options.size(); ++i)
     {
         const char* label = options[(size_t) i].label;
         auto* chip = chips.add (new IconButton (label, std::nullopt, label));
-        chip->setColours (grey);
+        chip->setColours (IconButton::neutralToggleColours);
         chip->setCornerRadius (6.0f);
-        chip->setFont (fonts::ui (12.0f));
+        chip->setFont (fonts::ui (textSize::sm));
         chip->setToggleState (chosen[filterTab] == i, juce::dontSendNotification);
         chip->onClick = [this, i]
         {
@@ -740,7 +787,6 @@ void LoopBrowser::runAction (const Item& item)
 void LoopBrowser::confirmRemove (const Item& item)
 {
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                        .withTitle ("Remove \"" + item.name + "\"?")
                        .withMessage ("The loop is deleted from this computer. You can add it from Freesound again.")
                        .withButton ("Remove")
@@ -748,7 +794,7 @@ void LoopBrowser::confirmRemove (const Item& item)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<LoopBrowser> (this), item] (int result)
+    AlertDialog::show (options, [safeThis = SafePointer<LoopBrowser> (this), item] (int result)
     {
         if (safeThis == nullptr || result != 1)
             return;
@@ -759,13 +805,11 @@ void LoopBrowser::confirmRemove (const Item& item)
             engine.getPreview().stop();
 
         if (! engine.getFreesound().removeFromLibrary (item.id))
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                              .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                              .withTitle ("Couldn't remove the loop")
-                                              .withMessage ("Check that its file isn't open elsewhere, then try again.")
-                                              .withButton ("OK")
-                                              .withAssociatedComponent (safeThis.getComponent()),
-                                          nullptr);
+            AlertDialog::show (juce::MessageBoxOptions()
+                               .withTitle ("Couldn't remove the loop")
+                               .withMessage ("Check that its file isn't open elsewhere, then try again.")
+                               .withButton ("OK")
+                               .withAssociatedComponent (safeThis.getComponent()));
     });
 }
 
@@ -774,29 +818,29 @@ void LoopBrowser::paintOverChildren (juce::Graphics& g)
 {
     // Magnifier inside the search field (its left indent leaves room).
     icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (34).toFloat().translated (2.0f, 0.0f),
-                 searchField.isEnabled() ? colour::textSecondary : colour::borderStrong, 15.0f, 1.8f);
+                 searchField.isEnabled() ? theme().textSecondary : theme().borderStrong, 15.0f, 1.8f);
 }
 
 void LoopBrowser::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::sidebarBg);
-    g.setColour (colour::divider);
+    g.fillAll (theme().librarySidebarBg);
+    g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::uiBold (11.0f).withExtraKerningFactor (0.1f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::uiBold (textSize::xs).withExtraKerningFactor (0.1f));
     g.drawText (heading, headingArea, juce::Justification::centredLeft, true);
 
     if (rows.isEmpty())
     {
-        g.setFont (fonts::ui (13.0f));
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText (emptyText, emptyArea, juce::Justification::topLeft, 5, 1.0f);
     }
 
     if (scope == Scope::freesound)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (11.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::xs));
         g.drawFittedText ("Loops from freesound.org, shared under CC0 or CC BY. Each one is credited to its author.",
                           footerArea, juce::Justification::centredLeft, 3, 1.0f);
     }
@@ -854,7 +898,7 @@ void LoopBrowser::resized()
     tempoButton.setBounds (r.removeFromTop (28));
     r.removeFromTop (12);
 
-    headingArea = r.removeFromTop (20).withTrimmedLeft (2);
+    headingArea = r.removeFromTop (20).withTrimmedLeft (size::libraryRowInset);   // lined up with the rows' text
 
     if (scope == Scope::freesound)
     {
@@ -864,7 +908,7 @@ void LoopBrowser::resized()
 
     r.removeFromTop (4);
     viewport.setBounds (r);
-    emptyArea = r.removeFromTop (88).withTrimmedLeft (2);
+    emptyArea = r.removeFromTop (88).withTrimmedLeft (size::libraryRowInset);
     setupButton.setBounds (r.withTrimmedTop (4).removeFromTop (34));
     layoutList();
 }

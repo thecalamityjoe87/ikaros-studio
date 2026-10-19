@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 #include "ui/widgets/Icons.h"
 
 namespace ikaros
@@ -19,8 +20,8 @@ namespace
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
 }
 
-RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
-    : info (r), colour (c)
+RegionComponent::RegionComponent (const RegionInfo& r, Family f)
+    : info (r), family (f)
 {
     setWantsKeyboardFocus (true);
     setTitle (r.name + " region");
@@ -28,7 +29,7 @@ RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
 
     // The rename field: hidden until startRenaming(). Return keeps the new
     // name, Escape cancels, clicking elsewhere keeps it.
-    nameEditor.setFont (fonts::uiBold (12.0f));
+    nameEditor.setFont (fonts::uiBold (textSize::sm));
     nameEditor.setIndents (6, 2);
     nameEditor.setJustification (juce::Justification::centredLeft);
     nameEditor.setTitle ("Region name");
@@ -38,19 +39,25 @@ RegionComponent::RegionComponent (const RegionInfo& r, juce::Colour c)
     addChildComponent (nameEditor);
 }
 
-void RegionComponent::update (const RegionInfo& r, juce::Colour c, bool isSelected)
+void RegionComponent::update (const RegionInfo& r, Family f, bool isSelected, Outline newOutline)
 {
     // Drawing thousands of notes is far slower than comparing them, so skip
     // the repaint when nothing this region shows has changed (e.g. another
     // track's knob was turned).
-    if (r == info && c == colour && isSelected == selected)
+    if (r == info && f == family && isSelected == selected && newOutline == outline)
         return;
 
     info = r;
-    colour = c;
+    family = f;
     selected = isSelected;
+    outline = newOutline;
     setTitle (r.name + " region");
     repaint();
+}
+
+juce::Colour RegionComponent::trackColour() const
+{
+    return theme().family (family);
 }
 
 //==============================================================================
@@ -109,7 +116,7 @@ juce::Rectangle<int> RegionComponent::getTakeBadgeBounds() const
         return {};
 
     const bool full = getWidth() >= fullTakeBadgeMinWidth;
-    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (10.0f), takeBadgeText (info, full));
+    const int textWidth = juce::GlyphArrangement::getStringWidthInt (fonts::uiBold (textSize::tiny), takeBadgeText (info, full));
     const int width = textWidth + (full ? 22 : 12);   // room for the arrow on the full one
     return { 6, 3, width, stripHeight - 6 };
 }
@@ -206,12 +213,19 @@ void RegionComponent::paint (juce::Graphics& g)
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (shape);
 
-        g.setColour (colour.withAlpha (selected ? 0.24f : 0.14f));
+        // The body is a faint tint of the track's family colour, the header
+        // strip the full colour, with dark or white text to suit it.
+        g.setColour (trackColour().withAlpha (selected ? theme().arrangement.regionBodySelectedAlpha : theme().arrangement.regionBodyAlpha));
         g.fillRect (r);
 
         auto strip = r.removeFromTop ((float) stripHeight);
-        g.setColour (colour::regionStrip (colour));
+        g.setColour (trackColour());
         g.fillRect (strip);
+        const auto label = colour::textOn (trackColour());
+
+        // A looped region always shows its loop arrow in the header; others
+        // only while the mouse is over them (so the handle can be found).
+        const bool showLoopIcon = getWidth() >= 32 && (hovering || loopPreview || info.isLooped());
 
         // The take badge (if any) comes first; the name follows it.
         const auto badge = getTakeBadgeBounds().toFloat();
@@ -220,22 +234,22 @@ void RegionComponent::paint (juce::Graphics& g)
         if (! badge.isEmpty())
             nameArea.setLeft (badge.getRight() + 5.0f);
 
-        if (getWidth() >= 32 && (hovering || loopPreview))
+        if (showLoopIcon)
             nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
 
-        g.setColour (colour::regionStripText (colour));
-        g.setFont (fonts::uiBold (11.0f));
+        g.setColour (label);
+        g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
 
         if (! badge.isEmpty())
         {
             const bool full = getWidth() >= fullTakeBadgeMinWidth;
-            g.setColour (colour::regionStripText (colour).withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
+            g.setColour (label.withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
             g.fillRoundedRectangle (badge, badge.getHeight() * 0.5f);
 
             auto text = badge.reduced (6.0f, 0.0f);
-            g.setColour (colour::regionStripText (colour));
-            g.setFont (fonts::uiBold (10.0f));
+            g.setColour (label);
+            g.setFont (fonts::uiBold (textSize::tiny));
 
             if (full)
             {
@@ -263,20 +277,20 @@ void RegionComponent::paint (juce::Graphics& g)
             paintFades (g, getLocalBounds().toFloat().withTrimmedTop ((float) stripHeight));
 
         // The loop handle: a small loop arrow in the top-right corner. It
-        // shows faintly while the mouse is over the region (so it can be
-        // found), and lights up over the loop zone or while dragging.
-        if (getWidth() >= 32 && (hovering || loopPreview))
+        // shows faintly (see showLoopIcon above), and lights up over the loop
+        // zone or while dragging.
+        if (showLoopIcon)
         {
             const bool active = hoveringLoopCorner || loopPreview;
             auto handle = getLocalBounds().toFloat().removeFromTop ((float) stripHeight).removeFromRight ((float) loopCornerWidth);
 
             if (active)
             {
-                g.setColour (colour::regionStrip (colour).darker (0.3f));
+                g.setColour (trackColour().darker (0.3f));
                 g.fillRect (handle);
             }
 
-            icons::draw (g, Icon::loop, handle, colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
+            icons::draw (g, Icon::loop, handle, label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
         }
 
         // The trim handle: the same, in the bottom-right corner, with a resize arrow.
@@ -284,19 +298,34 @@ void RegionComponent::paint (juce::Graphics& g)
         {
             const bool active = hoveringTrimHandle || (trimPreview.has_value() && ! loopPreview);
 
-            g.setColour (juce::Colours::black.withAlpha (active ? 0.3f : 0.15f));
+            g.setColour (theme().arrangement.tintDark.withAlpha (active ? 0.3f : 0.15f));
             g.fillRect (trimHandle);
 
             // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.
             icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
-                         colour::regionStripText (colour).withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
+                         label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
         }
     }
 
-    g.setColour (selected ? colour : colour.withAlpha (0.4f));
-    g.strokePath (shape, juce::PathStrokeType (selected ? 2.0f : 1.0f));
+    if (outline == Outline::normal)
+    {
+        g.setColour (trackColour().withAlpha (0.4f));
+        g.strokePath (shape, juce::PathStrokeType (1.0f));
+    }
+    else
+    {
+        // A stroke is centred on the path, and the component clips whatever
+        // falls outside its bounds, so the path is inset by half the width
+        // to keep the whole 1.5px inside.
+        constexpr float width = 1.5f;
+        juce::Path inset;
+        inset.addRoundedRectangle (getLocalBounds().toFloat().reduced (width * 0.5f), corner - width * 0.5f);
 
-    if (hasKeyboardFocus (false))
+        g.setColour (theme().arrangement.selectionOutline.withAlpha (outline == Outline::selectedTrack ? 1.0f : 0.35f));
+        g.strokePath (inset, juce::PathStrokeType (width));
+    }
+
+    if (showFocusRing && hasKeyboardFocus (false))
         IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat(), corner);
 }
 
@@ -359,7 +388,7 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
     for (size_t i = 0; i < cycleStarts.size(); ++i)
     {
         // The first pass is the original; the repeats are fainter.
-        g.setColour (i == 0 ? colour : colour.withAlpha (repeatAlpha));
+        g.setColour (i == 0 ? trackColour() : trackColour().withAlpha (repeatAlpha));
 
         for (auto& n : info.notes)
         {
@@ -401,9 +430,9 @@ void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area
             faded.lineTo (edge, area.getBottom());
             faded.closeSubPath();
 
-            g.setColour (colour::windowBg.withAlpha (0.5f));   // dimmed: quieter there
+            g.setColour (theme().arrangement.laneBg.withAlpha (0.5f));   // dimmed: quieter there
             g.fillPath (faded);
-            g.setColour (colour);
+            g.setColour (trackColour());
             g.drawLine (edge, area.getBottom(), end, area.getY(), 1.5f);
         }
 
@@ -412,9 +441,9 @@ void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area
         {
             const auto handle = getFadeHandle (fadeIn);
             const auto dot = juce::Rectangle<float> (8.0f, 8.0f).withCentre (handle);
-            g.setColour (colour::text);
+            g.setColour (theme().arrangement.text);
             g.fillEllipse (dot);
-            g.setColour (colour::windowBg);
+            g.setColour (theme().arrangement.laneBg);
             g.drawEllipse (dot, 1.0f);
         }
     }
@@ -479,14 +508,14 @@ void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> a
 
     if (! repeat.looping)
     {
-        g.setColour (colour);
+        g.setColour (trackColour());
         g.fillPath (wave);
         return;
     }
 
     // Looped: the repeats faint, then the original (up to the end of the
     // first loop) drawn again over them at full strength.
-    g.setColour (colour.withAlpha (repeatAlpha));
+    g.setColour (trackColour().withAlpha (repeatAlpha));
     g.fillPath (wave);
 
     const double firstEnd = repeat.length - repeat.offset;   // beats from the region start
@@ -494,7 +523,7 @@ void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> a
 
     juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (area.withRight (juce::jmin (area.getRight(), firstEndX)).toNearestInt());
-    g.setColour (colour);
+    g.setColour (trackColour());
     g.fillPath (wave);
 }
 
@@ -509,7 +538,7 @@ void RegionComponent::paintLoopDividers (juce::Graphics& g, juce::Rectangle<floa
     // A thin line where each repeat begins.
     const float pxPerBeat = area.getWidth() / (float) range.getLength();
     const double shift = info.startBeat - range.getStart();
-    g.setColour (colour.withAlpha (0.6f));
+    g.setColour (trackColour().withAlpha (0.6f));
 
     for (double c = repeat.length - repeat.offset; c + shift < range.getLength(); c += repeat.length)
     {

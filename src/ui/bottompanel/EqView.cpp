@@ -15,8 +15,10 @@ namespace
     constexpr int readoutHeight = 40;
 
     // Each band has a colour of its own, so its point and its readout match.
-    const juce::Colour bandColours[EqSettings::numBands] { colour::trackBlue, colour::trackGreen,
-                                                           colour::trackYellow, colour::trackPurple };
+    // static_assert checks at compile time that there's one colour per band.
+    static_assert (std::tuple_size_v<decltype (ThemePalette::eqBands)> == EqSettings::numBands);
+
+    juce::Colour bandColour (int band)   { return theme().eqBands[(size_t) band]; }
 }
 
 //==============================================================================
@@ -24,29 +26,27 @@ EqView::EqView (AudioEngine& e) : engine (e)
 {
     setTitle ("EQ");
 
-    auto colours = IconButton::raisedColours();
-    colours.border = colour::border;
-    powerButton.setColours (colours);
-    powerButton.setFont (fonts::uiSemiBold (13.0f));
+    powerButton.setColours (IconButton::borderedColours);
+    powerButton.setFont (fonts::uiSemiBold (textSize::md));
     powerButton.setIconSize (14.0f);
     powerButton.setTooltip ("Turn the EQ on or off, to hear the difference");
     powerButton.onClick = [this] { engine.getTracks().eq().setEnabled (target, ! settings.enabled); };
     addAndMakeVisible (powerButton);
 
-    resetButton.setColours (colours);
-    resetButton.setFont (fonts::uiSemiBold (13.0f));
+    resetButton.setColours (IconButton::borderedColours);
+    resetButton.setFont (fonts::uiSemiBold (textSize::md));
     resetButton.setTooltip ("Put every band back to 0 dB");
     resetButton.onClick = [this] { engine.getTracks().eq().reset (target); };
     addAndMakeVisible (resetButton);
 }
 
-void EqView::setTarget (TrackId id, juce::Colour c)
+void EqView::setTarget (TrackId id, Family f)
 {
     if (id != target)
         dragBand = hoverBand = -1;
 
     target = id;
-    colour = c;
+    family = f;
     refresh();
 }
 
@@ -211,21 +211,21 @@ void EqView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDe
 void EqView::paint (juce::Graphics& g)
 {
     // The graph's background and grid.
-    g.setColour (colour::wellBg);
+    g.setColour (theme().wellBg);
     g.fillRoundedRectangle (graphArea.toFloat(), size::radius);
 
-    g.setFont (fonts::mono (10.0f));
+    g.setFont (fonts::mono (textSize::tiny));
 
     for (float hz : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
     {
         const auto x = frequencyToX (hz);
         const bool labelled = hz == 100.0f || hz == 1000.0f || hz == 10000.0f;
-        g.setColour (juce::Colours::white.withAlpha (labelled ? 0.08f : 0.04f));
+        g.setColour (theme().tintLight.withAlpha (labelled ? 0.08f : 0.04f));
         g.fillRect (x, (float) graphArea.getY(), 1.0f, (float) graphArea.getHeight());
 
         if (labelled)
         {
-            g.setColour (colour::textSecondary);
+            g.setColour (theme().textSecondary);
             g.drawText (describeFrequency (hz), juce::Rectangle<float> (x + 4.0f, (float) graphArea.getBottom() - 16.0f, 60.0f, 14.0f),
                         juce::Justification::centredLeft);
         }
@@ -234,9 +234,9 @@ void EqView::paint (juce::Graphics& g)
     for (float db : { -12.0f, 0.0f, 12.0f })
     {
         const auto y = gainToY (db);
-        g.setColour (juce::Colours::white.withAlpha (db == 0.0f ? 0.12f : 0.05f));
+        g.setColour (theme().tintLight.withAlpha (db == 0.0f ? 0.12f : 0.05f));
         g.fillRect ((float) graphArea.getX(), y, (float) graphArea.getWidth(), 1.0f);
-        g.setColour (colour::textSecondary);
+        g.setColour (theme().textSecondary);
         g.drawText ((db > 0.0f ? "+" : "") + juce::String ((int) db) + " dB",
                     juce::Rectangle<float> ((float) graphArea.getX() + 6.0f, y - 14.0f, 60.0f, 12.0f),
                     juce::Justification::centredLeft);
@@ -244,14 +244,14 @@ void EqView::paint (juce::Graphics& g)
 
     if (target == 0)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (14.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::lg));
         g.drawText ("Select a track to EQ it", graphArea, juce::Justification::centred);
         return;
     }
 
     // The curve, filled down (or up) to the 0 dB line.
-    const auto curveColour = settings.enabled ? colour : colour::textSecondary;
+    const auto curveColour = settings.enabled ? theme().family (family) : theme().textSecondary;
     juce::Path line;
 
     for (size_t i = 0; i < curve.size(); ++i)
@@ -282,7 +282,7 @@ void EqView::paint (juce::Graphics& g)
     {
         const auto p = bandPoint (b);
         const bool active = b == hoverBand || b == dragBand;
-        const auto c = settings.enabled ? bandColours[b] : colour::textSecondary;
+        const auto c = settings.enabled ? bandColour (b) : theme().textSecondary;
         auto circle = juce::Rectangle<float> (pointRadius * 2.0f, pointRadius * 2.0f).withCentre (p);
 
         g.setColour (c.withAlpha (active ? 1.0f : 0.85f));
@@ -290,12 +290,12 @@ void EqView::paint (juce::Graphics& g)
 
         if (active)
         {
-            g.setColour (colour::text);
+            g.setColour (theme().text);
             g.drawEllipse (circle.expanded (2.0f), 1.5f);
         }
 
-        g.setColour (colour::textOnAccent);
-        g.setFont (fonts::uiBold (10.0f));
+        g.setColour (theme().textOnAccent);
+        g.setFont (fonts::uiBold (textSize::tiny));
         g.drawText (juce::String (b + 1), circle, juce::Justification::centred);
     }
 
@@ -307,16 +307,16 @@ void EqView::paint (juce::Graphics& g)
         const auto& band = settings.bands[(size_t) b];
         auto r = readoutArea.withX (readoutArea.getX() + b * columnWidth).withWidth (columnWidth).reduced (4, 0);
 
-        g.setColour (settings.enabled ? bandColours[b] : colour::textSecondary);
+        g.setColour (settings.enabled ? bandColour (b) : theme().textSecondary);
         g.fillEllipse (r.removeFromLeft (8).withSizeKeepingCentre (8, 8).toFloat());
         r.removeFromLeft (6);
 
-        g.setColour (colour::text);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (band.name, r.removeFromTop (readoutHeight / 2), juce::Justification::bottomLeft, true);
 
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::sm));
         const auto gain = (band.gainDb > 0.05f ? "+" : "") + juce::String (band.gainDb, 1) + " dB";
         g.drawText (describeFrequency (band.frequencyHz) + "  " + gain + "  Q " + juce::String (band.q, 1),
                     r, juce::Justification::topLeft, true);

@@ -85,9 +85,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     addChildComponent (progressBar);
     addChildComponent (revealButton);
 
-    auto cancelColours = IconButton::raisedColours();
-    cancelColours.border = colour::border;
-    cancelButton.setColours (cancelColours);
+    cancelButton.setColours (IconButton::borderedColours);
     cancelButton.onClick = [this]
     {
         if (stage == Stage::exporting)
@@ -97,7 +95,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
     };
     addAndMakeVisible (cancelButton);
 
-    revealButton.setColours (cancelColours);
+    revealButton.setColours (IconButton::borderedColours);
     revealButton.onClick = [this]
     {
         // Stems: open their folder. One file: show it in its folder.
@@ -105,7 +103,7 @@ ExportDialog::ExportDialog (AudioEngine& e, bool stems)
             (stemsToggle.getToggleState() ? result.files[0].getParentDirectory() : result.files[0]).revealToUser();
     };
 
-    exportButton.setColours (IconButton::accentColours());
+    exportButton.setColours (IconButton::primaryColours);
     exportButton.onClick = [this]
     {
         if (stage == Stage::done)
@@ -329,32 +327,32 @@ bool ExportDialog::keyPressed (const juce::KeyPress& key)
 int ExportDialog::getMessageHeight() const
 {
     // Two lines if it doesn't fit on one (a long list of stems).
-    const auto width = juce::GlyphArrangement::getStringWidth (fonts::ui (13.0f), message);
+    const auto width = juce::GlyphArrangement::getStringWidth (fonts::ui (textSize::md), message);
     return width > (float) (panelWidth - 2 * padX) ? 2 * lineHeight : lineHeight;
 }
 
 void ExportDialog::paint (juce::Graphics& g)
 {
     // Dim the app behind the dialog.
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (theme().scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (padX, padY);
-    g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setColour (theme().text);
+    g.setFont (fonts::uiBold (textSize::title));
     const auto title = stage == Stage::exporting ? "Exporting..."
                      : stage == Stage::done      ? (result.ok ? "Export finished" : "Export failed")
                      : stemsToggle.getToggleState() ? "Export Stems" : "Export Song";
     g.drawText (title, r.removeFromTop (titleHeight), juce::Justification::centredLeft);
 
     r.removeFromTop (6);
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (13.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (message, r.removeFromTop (getMessageHeight()), juce::Justification::topLeft, 2, 1.0f);
 
     if (stage == Stage::options)

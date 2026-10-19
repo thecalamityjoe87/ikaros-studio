@@ -24,6 +24,7 @@ using namespace arrangement;
 namespace
 {
     constexpr int scrollBarHeight = 12;
+    constexpr int bottomBarHeight = 26;   // the strip along the bottom: zoom under the track headers, the scroll bar beside it
 
     // Zoom range, in pixels per beat: from about 200 bars across the window
     // down to a single beat filling a large part of it.
@@ -64,23 +65,41 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
 
     timeScrollBar.setAutoHide (false);
     timeScrollBar.addListener (this);
+
+    // Both scrollbars sit on the dark arrangement, so they use its colour in
+    // either theme (read by IkarosLookAndFeel::drawScrollbar).
+    timeScrollBar.getProperties().set ("arrangement", true);
+    viewport.getVerticalScrollBar().getProperties().set ("arrangement", true);
     addAndMakeVisible (timeScrollBar);
 
-    // Snap and zoom live above the track headers, next to "TRACKS".
-    auto snapColours = IconButton::raisedColours();
-    snapColours.border = colour::border;
+    // Snap lives above the track headers, next to "TRACKS", styled like the
+    // headers' small buttons. (Zoom is in the bottom strip: see resized.)
+    // Colours are given as functions the buttons call when they paint (see
+    // IconButton::ColourScheme), so they follow the theme.
+    auto snapColours = []
+    {
+        auto c = IconButton::raisedColours();
+        c.background = theme().buttonFill;
+        c.border = theme().buttonBorder;
+        c.borderOn = theme().accent;
+        return c;
+    };
     snapButton.setColours (snapColours);
-    snapButton.setFont (fonts::ui (12.0f));
+    snapButton.setFont (fonts::ui (textSize::xs));
     snapButton.setCornerRadius (size::radiusSmall);
     snapButton.setTooltip ("Snap to grid: where moved regions and edges land");
     snapButton.onClick = [this] { showSnapMenu(); };
     addAndMakeVisible (snapButton);
 
-    // Show Automation: every track's automation at once (amber while it shows).
-    auto automationColours = snapColours;   // like the snap button, amber when on
-    automationColours.foreground = colour::textSecondary;
-    automationColours.backgroundOn = colour::accent;
-    automationColours.foregroundOn = colour::textOnAccent;
+    // Show Automation: every track's automation at once (amber while it's on).
+    auto automationColours = [snapColours]   // like the snap button, amber when on
+    {
+        auto c = snapColours();
+        c.foreground = theme().buttonIcon;
+        c.backgroundOn = theme().accent;
+        c.foregroundOn = theme().textOnAccent;
+        return c;
+    };
     automationButton.setColours (automationColours);
     automationButton.setCornerRadius (size::radiusSmall);
     automationButton.setIconSize (16.0f);
@@ -100,8 +119,47 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     tempoLaneButton.onClick = [this] { setTempoLaneShown (! tempoLaneShown); };
     addAndMakeVisible (tempoLaneButton);
 
+    // "+" at the right of the tracks bar: adds a track like the "Add track"
+    // row under the last track, but it stays in view however many tracks
+    // there are. (The Sections row's button below it is a flag, so this is
+    // the only "+" there.)
+    newTrackButton.setColours ([snapColours]
+    {
+        auto c = snapColours();
+        c.foreground = theme().buttonIcon;
+        return c;
+    });
+    newTrackButton.setCornerRadius (size::radiusSmall);
+    newTrackButton.setIconSize (14.0f);
+    newTrackButton.setTooltip ("Add track");
+    newTrackButton.onClick = [this] { if (onAddTrack) onAddTrack(); };
+    addAndMakeVisible (newTrackButton);
+
+    // Zoom out | reset | zoom in, beside the zoom slider: one step out, back
+    // to the starting zoom, one step in (like View > Zoom Out, Reset Zoom,
+    // Zoom In). The buttons are transparent; paint() draws their shared
+    // outline and the lines between them, like the app's segmented controls.
+    for (auto* b : { &zoomOutButton, &zoomResetButton, &zoomInButton })
+    {
+        b->setColours ([] { return IconButton::Colours { juce::Colours::transparentBlack, theme().buttonIcon,
+                                                         juce::Colours::transparentBlack, theme().buttonIcon }; });
+        b->setCornerRadius (size::radiusSmall);
+        b->setIconSize (13.0f);
+        addAndMakeVisible (b);
+    }
+
+    zoomOutButton.setIconSize (15.0f);   // magnifiers: a little larger, so the − and + inside them read
+    zoomInButton.setIconSize (15.0f);
+    zoomOutButton.setTooltip ("Zoom out");
+    zoomOutButton.onClick = [this] { zoomOut(); };
+    zoomResetButton.setTooltip ("Reset zoom");
+    zoomResetButton.setIconSize (12.0f);
+    zoomResetButton.onClick = [this] { resetZoom(); };
+    zoomInButton.setTooltip ("Zoom in");
+    zoomInButton.onClick = [this] { zoomIn(); };
+
     zoomSlider.setTitle ("Zoom");
-    zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel)");
+    zoomSlider.setTooltip ("Zoom (Ctrl + mouse wheel). Double-click to reset.");
     zoomSlider.setRange (0.0, 1.0);
     zoomSlider.onValueChange = [this] { setZoom (sliderToZoom (zoomSlider.getValue()), getZoomAnchorX ((float) getLaneWidth() * 0.5f)); };
     addAndMakeVisible (zoomSlider);
@@ -110,6 +168,8 @@ ArrangementView::ArrangementView (AudioEngine& e, Selection& s, juce::Applicatio
     addAndMakeVisible (*playhead);   // added last so it's drawn on top
 
     applySnapPreference();
+    tracksTall = engine.getPreferences().get (settings::trackHeight) == settings::TrackHeight::tall;
+    geometry.rowHeight = getBaseRowHeight();
     setTempoLaneShown (engine.getPreferences().get (settings::tempoLaneShown));
     refresh();
 }
@@ -223,8 +283,8 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     // header's controls need it).
     const int oldRowHeight = geometry.rowHeight;
     const double growth = std::sqrt (geometry.pixelsPerBeat / startPixelsPerBeat);
-    geometry.rowHeight = juce::jlimit (size::trackRowHeight, maxRowHeight,
-                                       juce::roundToInt (size::trackRowHeight * growth));
+    geometry.rowHeight = juce::jlimit (getBaseRowHeight(), maxRowHeight,
+                                       juce::roundToInt (getBaseRowHeight() * growth));
 
     if (geometry.rowHeight != oldRowHeight)
     {
@@ -235,6 +295,22 @@ void ArrangementView::setZoom (double pixelsPerBeat, float anchorX)
     }
 
     timelineChanged();
+}
+
+int ArrangementView::getBaseRowHeight() const noexcept
+{
+    return tracksTall ? size::trackRowTall : size::trackRowCompact;
+}
+
+void ArrangementView::setTracksTall (bool shouldBeTall)
+{
+    tracksTall = shouldBeTall;
+    engine.getPreferences().set (settings::trackHeight, shouldBeTall ? settings::TrackHeight::tall
+                                                                     : settings::TrackHeight::compact);
+
+    // setZoom works out the row height (from this and the zoom) and lays
+    // the rows out again. Anchored at the left edge: nothing scrolls.
+    setZoom (geometry.pixelsPerBeat, 0.0f);
 }
 
 float ArrangementView::getZoomAnchorX (float fallbackX) const
@@ -255,6 +331,11 @@ void ArrangementView::zoomIn()
 void ArrangementView::zoomOut()
 {
     setZoom (geometry.pixelsPerBeat / 1.5, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
+}
+
+void ArrangementView::resetZoom()
+{
+    setZoom (startPixelsPerBeat, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
 void ArrangementView::scrollToBeat (double beat)
@@ -461,19 +542,33 @@ void ArrangementView::updateTransport()
 
 void ArrangementView::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
+    g.fillAll (theme().arrangement.laneBg);   // under the lanes: the scrollbar strip
 
-    // The corner under the track headers, beside the scroll bar.
-    auto corner = getLocalBounds().removeFromBottom (scrollBarHeight).withWidth (headerWidth);
-    g.setColour (colour::sidebarBg);
+    // The bottom strip: a line along its top, and under the track headers
+    // the column's background (the zoom slider sits there), with its divider.
+    auto strip = getLocalBounds().removeFromBottom (bottomBarHeight);
+    auto corner = strip.withWidth (headerWidth);
+    g.setColour (theme().trackColumnBg);
     g.fillRect (corner.withTrimmedRight (1));
-    g.setColour (colour::divider);
+    g.setColour (theme().divider);
     g.fillRect (corner.removeFromRight (1));
+    g.setColour (theme().trackRowLine);
+    g.fillRect (strip.removeFromTop (1));
+
+    // The zoom buttons: one outline around all three, a line between each.
+    const auto group = zoomButtonsArea.toFloat();
+    g.setColour (theme().buttonFill);
+    g.fillRoundedRectangle (group, size::radiusSmall);
+    g.setColour (theme().buttonBorder);
+    g.drawRoundedRectangle (group.reduced (0.5f), size::radiusSmall, 1.0f);
+
+    for (auto* b : { &zoomResetButton, &zoomInButton })
+        g.fillRect (b->getX() - 1, zoomButtonsArea.getY() + 4, 1, zoomButtonsArea.getHeight() - 8);
 }
 
 void ArrangementView::paintOverChildren (juce::Graphics& g)
 {
-    icons::draw (g, Icon::search, zoomIconArea.toFloat(), colour::textSecondary, 13.0f, 1.6f);
+    icons::draw (g, Icon::search, zoomIconArea.toFloat(), theme().textSecondary, 13.0f, 1.6f);
 }
 
 void ArrangementView::resized()
@@ -487,14 +582,51 @@ void ArrangementView::resized()
 
     sectionStrip->setBounds (r.removeFromTop (sectionStripHeight));
 
-    // Controls in the ruler's header part: "TRACKS" | snap | automation | tempo lane | zoom.
-    snapButton.setBounds (66, top.getY() + 4, 78, top.getHeight() - 9);
-    automationButton.setBounds (150, top.getY() + 4, 28, top.getHeight() - 9);
-    tempoLaneButton.setBounds (182, top.getY() + 4, 28, top.getHeight() - 9);
-    zoomIconArea = { 216, top.getY() + 8, 14, 14 };
-    zoomSlider.setBounds (232, top.getY() + 4, headerWidth - 232 - 10, top.getHeight() - 9);
+    // The tracks bar, in the ruler's header part: "TRACKS" | snap |
+    // automation | tempo lane ... add track. It has the column's padding,
+    // and the "+" is centred in the column the track headers' arm buttons
+    // and pan knobs use (as is the Sections row's button below it). Zoom
+    // is in the bottom strip, where it has room for fine control.
+    {
+        auto bar = juce::Rectangle<int> (columnPadding, top.getY(), columnRight - columnPadding, top.getHeight() - 1)
+                       .withSizeKeepingCentre (columnRight - columnPadding, 22);
+        bar.removeFromLeft (columnLabelWidth ("TRACKS") + 12);
+        newTrackButton.setBounds (bar.removeFromRight (TrackHeader::controlColumnWidth).withSizeKeepingCentre (24, 22));
+        bar.removeFromRight (8);
+        snapButton.setBounds (bar.removeFromLeft (72));
+        bar.removeFromLeft (8);
+        automationButton.setBounds (bar.removeFromLeft (24));
+        bar.removeFromLeft (8);
+        tempoLaneButton.setBounds (bar.removeFromLeft (24));
+    }
 
-    timeScrollBar.setBounds (r.removeFromBottom (scrollBarHeight).withTrimmedLeft (headerWidth));
+    // The bottom strip: zoom under the track headers, with the column's
+    // padding so it lines up with the controls above, and the time scroll
+    // bar beside it. Zooming and scrolling the timeline live together.
+    {
+        auto strip = r.removeFromBottom (bottomBarHeight);
+        auto zoomArea = strip.removeFromLeft (headerWidth).withTrimmedTop (1);   // under the strip's top line
+        zoomArea = { columnPadding, zoomArea.getY(), columnRight - columnPadding, zoomArea.getHeight() };
+
+        // The zoom buttons on the right, ending where the controls above end;
+        // then a gap. Each button is 26 wide; the 1px lines between them
+        // come out of that width (see paint).
+        constexpr int zoomButtonWidth = 26;
+        zoomButtonsArea = zoomArea.removeFromRight (zoomButtonWidth * 3).withSizeKeepingCentre (zoomButtonWidth * 3, 22);
+        auto inside = zoomButtonsArea.reduced (1);   // inside the outline, so a hovered button doesn't cover it
+        zoomOutButton.setBounds (inside.removeFromLeft (zoomButtonWidth - 1));
+        inside.removeFromLeft (1);
+        zoomResetButton.setBounds (inside.removeFromLeft (zoomButtonWidth - 2));
+        inside.removeFromLeft (1);
+        zoomInButton.setBounds (inside);
+        zoomArea.removeFromRight (20);
+
+        zoomIconArea = zoomArea.removeFromLeft (14).withSizeKeepingCentre (14, 14);
+        zoomArea.removeFromLeft (8);
+        zoomSlider.setBounds (zoomArea.withSizeKeepingCentre (zoomArea.getWidth(), 22));
+
+        timeScrollBar.setBounds (strip.withTrimmedTop (1).withSizeKeepingCentre (strip.getWidth(), scrollBarHeight));
+    }
     viewport.setBounds (r);
 
     // The first time there's room, zoom so 16 bars fill the lanes (as milestone 1 did).
@@ -505,6 +637,10 @@ void ArrangementView::resized()
         geometry.pixelsPerBeat = juce::jlimit (minPixelsPerBeat, maxPixelsPerBeat,
                                                getLaneWidth() / geometry.tempo.barToBeat (16));
         startPixelsPerBeat = geometry.pixelsPerBeat;
+
+        // Double-clicking the slider resets it (to here). The slider runs
+        // 0..1, so the value it returns to is this zoom's slider position.
+        zoomSlider.setDoubleClickReturnValue (true, zoomToSlider (startPixelsPerBeat));
     }
 
     layoutContent();
@@ -719,7 +855,6 @@ juce::PopupMenu ArrangementView::createTrackMenu()
 
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::renameTrack);
-    menu.addSubMenu ("Track Color", createColourMenu (track), track != 0);
     menu.addSubMenu ("Track Icon", TrackHeader::createIconMenu (engine, track), track != 0);
     menu.addCommandItem (&commands, CommandIDs::moveTrackUp);
     menu.addCommandItem (&commands, CommandIDs::moveTrackDown);
@@ -730,35 +865,6 @@ juce::PopupMenu ArrangementView::createTrackMenu()
 
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::deleteTrack);
-    return menu;
-}
-
-juce::PopupMenu ArrangementView::createColourMenu (TrackId track)
-{
-    // Names for TrackController::getTrackColours(), in the same order.
-    static const juce::StringArray names { "Blue", "Orange", "Green", "Purple", "Yellow" };
-
-    juce::PopupMenu menu;
-    const auto info = engine.getTracks().getTrack (track);
-    const auto colours = TrackController::getTrackColours();
-
-    for (size_t i = 0; i < colours.size(); ++i)
-    {
-        const auto c = colours[i];
-
-        // A small rounded swatch beside each name.
-        auto swatch = std::make_unique<juce::DrawablePath>();
-        juce::Path shape;
-        shape.addRoundedRectangle (0.0f, 0.0f, 14.0f, 14.0f, 3.0f);
-        swatch->setPath (shape);
-        swatch->setFill (c);
-
-        menu.addItem (juce::PopupMenu::Item (names[(int) i].isNotEmpty() ? names[(int) i] : "Color " + juce::String (i + 1))
-                          .setImage (std::move (swatch))
-                          .setTicked (info && info->colour == c)
-                          .setAction ([this, track, c] { engine.getTracks().setTrackColour (track, c); }));
-    }
-
     return menu;
 }
 

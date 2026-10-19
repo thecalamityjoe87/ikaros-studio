@@ -1,4 +1,5 @@
 #include "ui/dialogs/MonitoringWarning.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "engine/TrackController.h"
 
 namespace ikaros
@@ -13,7 +14,6 @@ void confirmMonitoring (AudioEngine& engine, juce::Component* associatedComponen
     }
 
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::WarningIcon)
                        .withTitle ("Turn on monitoring?")
                        .withMessage ("Monitoring lets you hear your microphone or instrument as you play.\n\n"
                                      "With a microphone and speakers, the speakers' sound goes back into the "
@@ -23,9 +23,9 @@ void confirmMonitoring (AudioEngine& engine, juce::Component* associatedComponen
                        .withButton ("Cancel")
                        .withAssociatedComponent (associatedComponent);
 
-    // showAsync's callback gets 1 for the first button and 0 for the last.
+    // The callback gets 1 for the first button and 0 for the last.
     // The engine outlives every window, so capturing it by reference is safe.
-    juce::AlertWindow::showAsync (options, [&engine, then = std::move (then)] (int result)
+    AlertDialog::show (options, [&engine, then = std::move (then)] (int result)
     {
         if (result == 1)
             engine.getPreferences().set (settings::monitoringWarningShown, true);

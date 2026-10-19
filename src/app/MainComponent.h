@@ -87,7 +87,7 @@ private:
     bool libraryVisible = true;
     bool bottomPanelVisible = true;
     int libraryWidth = tokens::size::sidebarWidth;
-    int bottomPanelHeight = BottomPanel::preferredHeight;
+    int bottomPanelHeight = BottomPanel::defaultHeight;   // read from the settings in setUpResizers
     int resizeStartSize = 0;   // the panel's size when a resize drag started
 
     void refreshAll();

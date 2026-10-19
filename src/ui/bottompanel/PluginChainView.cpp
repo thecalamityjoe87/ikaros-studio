@@ -2,6 +2,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/theme/TrackColours.h"
 
 namespace ikaros
 {
@@ -24,7 +25,7 @@ public:
         setWantsKeyboardFocus (true);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
 
-        power.setColours ({ colour::controlFill, colour::textSecondary, colour::effectOn, colour::textOnAccent });
+        power.setColours (IconButton::powerColours);
         power.setCornerRadius (6.0f);
         power.setIconSize (14.0f);
         power.onClick = [this]
@@ -33,7 +34,7 @@ public:
         };
         addAndMakeVisible (power);
 
-        more.setColours (IconButton::ghostColours());
+        more.setColours (IconButton::ghostColours);
         more.setCornerRadius (6.0f);
         more.setIconSize (18.0f);
         more.onClick = [this] { owner.showRowMenu (index); };
@@ -62,13 +63,13 @@ public:
         const bool dragging = owner.dragFromIndex == index;
         const bool open = owner.openEffectId == slot.id;
 
-        g.setColour (dragging || open ? colour::selectedRow : (isMouseOver (true) ? colour::raised : colour::cardBg));
+        g.setColour (dragging || open ? theme().selectedRow : (isMouseOver (true) ? theme().raised : theme().cardBg));
         g.fillRoundedRectangle (r, size::radius);
 
         if (open)
         {
             // The effect whose settings are showing to the right.
-            g.setColour (owner.trackColour);
+            g.setColour (theme().family (owner.family));
             g.drawRoundedRectangle (r.reduced (0.5f), size::radius, 1.5f);
         }
 
@@ -76,17 +77,17 @@ public:
 
         if (slot.missing)
         {
-            icons::draw (g, Icon::warning, area.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            icons::draw (g, Icon::warning, area.removeFromRight (16).toFloat(), theme().warning, 14.0f);
             area.removeFromRight (4);
         }
         else if (slot.isThirdParty)
         {
-            icons::draw (g, Icon::openWindow, area.removeFromRight (16).toFloat(), colour::textSecondary, 13.0f);
+            icons::draw (g, Icon::openWindow, area.removeFromRight (16).toFloat(), theme().textSecondary, 13.0f);
             area.removeFromRight (4);
         }
 
-        g.setColour (slot.enabled && ! slot.missing ? colour::text : colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (slot.enabled && ! slot.missing ? theme().text : theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (slot.name, area, juce::Justification::centredLeft, true);
 
         if (showFocusRing && hasKeyboardFocus (false))
@@ -185,18 +186,18 @@ public:
 
         if (over)
         {
-            g.setColour (colour::raised.withAlpha (0.5f));
+            g.setColour (theme().raised.withAlpha (0.5f));
             g.fillPath (outline);
         }
 
-        g.setColour (over ? colour::textSecondary : colour::borderStrong);
+        g.setColour (over ? theme().textSecondary : theme().borderStrong);
         g.fillPath (dashed);
 
         auto content = getLocalBounds().reduced (10, 0).toFloat();
-        icons::draw (g, Icon::plus, content.removeFromLeft (16.0f), colour::textSecondary, 16.0f, 2.0f);
+        icons::draw (g, Icon::plus, content.removeFromLeft (16.0f), theme().textSecondary, 16.0f, 2.0f);
         content.removeFromLeft (8.0f);
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawText ("Add effect", content, juce::Justification::centredLeft);
 
         if (hasKeyboardFocus (false))
@@ -214,7 +215,7 @@ PluginChainView::PluginChainView (AudioEngine& e, Selection& s) : engine (e), se
     addRow->onClick = [this] { showAddMenu(); };
     addAndMakeVisible (*addRow);
 
-    instrumentWindowButton.setColours (IconButton::ghostColours());
+    instrumentWindowButton.setColours (IconButton::ghostColours);
     instrumentWindowButton.setCornerRadius (6.0f);
     instrumentWindowButton.setIconSize (15.0f);
     instrumentWindowButton.setTooltip ("Open the instrument's window");
@@ -247,7 +248,7 @@ void PluginChainView::refresh()
 
     trackId = masterMode ? masterTrackId : selection.getTrack();
     auto track = tracks.getTrack (trackId);
-    trackColour = track.has_value() ? track->colour : colour::accent;
+    family = track.has_value() ? colour::familyOf (*track) : Family::master;
     instrument = tracks.effects().getInstrument (trackId);
     chain = tracks.effects().getEffectChain (trackId);
 
@@ -306,23 +307,23 @@ void PluginChainView::paint (juce::Graphics& g)
 {
     if (trackId == 0)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Select a track to see its plug-ins.", getLocalBounds().reduced (sidePadding, 8),
                           juce::Justification::topLeft, 2);
         return;
     }
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText (masterMode ? "Effects on the whole mix. They run from top to bottom."
                                  : "Change how this track sounds. Effects run from top to bottom.",
                       hintArea, juce::Justification::topLeft, 2, 1.0f);   // 1.0 = wrap, never squash
 
     auto drawLabel = [&] (juce::Rectangle<int> area, const juce::String& text)
     {
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::uiBold (10.0f).withExtraKerningFactor (0.1f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::uiBold (textSize::tiny).withExtraKerningFactor (0.1f));
         g.drawText (text, area, juce::Justification::centredLeft);
     };
 
@@ -333,14 +334,14 @@ void PluginChainView::paint (juce::Graphics& g)
     {
         drawLabel (instrumentLabelArea, "INSTRUMENT");
 
-        g.setColour (colour::cardBg);
+        g.setColour (theme().cardBg);
         g.fillRoundedRectangle (instrumentArea.toFloat(), size::radius);
         auto r = instrumentArea.reduced (10, 0);
-        icons::draw (g, Icon::synths, r.removeFromLeft (18).toFloat(), trackColour, 16.0f);
+        icons::draw (g, Icon::synths, r.removeFromLeft (18).toFloat(), theme().family (family), 16.0f);
         r.removeFromLeft (8);
         if (instrument->missing)
         {
-            icons::draw (g, Icon::warning, r.removeFromRight (16).toFloat(), colour::mute, 14.0f);
+            icons::draw (g, Icon::warning, r.removeFromRight (16).toFloat(), theme().warning, 14.0f);
             r.removeFromRight (4);
         }
         else if (instrumentWindowButton.isVisible())
@@ -348,8 +349,8 @@ void PluginChainView::paint (juce::Graphics& g)
             r.setRight (instrumentWindowButton.getX() - 4);
         }
 
-        g.setColour (instrument->missing ? colour::textSecondary : colour::text);
-        g.setFont (fonts::ui (13.0f));
+        g.setColour (instrument->missing ? theme().textSecondary : theme().text);
+        g.setFont (fonts::ui (textSize::md));
         g.drawText (instrument->name + (instrument->missing ? " (not installed)" : ""), r, juce::Justification::centredLeft, true);
     }
 
@@ -358,7 +359,7 @@ void PluginChainView::paint (juce::Graphics& g)
     {
         const int top = effectsLabelArea.getBottom() + 2;
         const int y = top + dropIndex * (rowHeight + rowGap) - rowGap / 2 - 1;
-        g.setColour (colour::accent);
+        g.setColour (theme().highlight);
         g.fillRoundedRectangle ((float) sidePadding, (float) y, (float) (getWidth() - sidePadding * 2), 2.0f, 1.0f);
     }
 }

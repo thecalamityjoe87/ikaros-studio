@@ -8,11 +8,22 @@ namespace ikaros
 
 //==============================================================================
 /**
-    "More Sounds": the sound packs the user can download, like GarageBand's
-    Sound Library. Each pack shows its name, size and description, and a
-    button for what can be done with it: Download, Update, Remove, or Cancel
-    while it downloads. Packs that come with the app can't be removed.
-    Collections (the starter sounds) come first, with "Download All".
+    "Manage Sounds": the sound packs on this computer and the ones the user
+    can download, like GarageBand's Sound Library. The library lists a
+    category's packs to download too; this window is where they're all
+    managed. Two sections:
+
+      Installed               with the space they take, Update and Remove
+      Available to download   collections (the starter sounds) first, with
+                              "Download All", then single packs grouped by
+                              library category (Keyboards, Drums, Bass...)
+
+    Chips along the top (All, Keys, Drums...) narrow both sections to one
+    category, so a bass pack is one click away among dozens of packs.
+
+    Each pack shows its name, size and description, and a button for what
+    can be done with it: Download, Update, Remove, or Cancel while it
+    downloads. Packs that come with the app can't be removed.
 
     It reads everything from the engine's PackStore, and redraws whenever the
     store says something changed (download progress included). Without the
@@ -24,16 +35,13 @@ namespace ikaros
     Shown inside the main window over a dimmed background, like the New
     Track dialog. Deletes itself when closed.
 */
-class MoreSoundsDialog  : public juce::Component,
+class ManageSoundsDialog  : public juce::Component,
                           private juce::ChangeListener
 {
 public:
     /** Opens the dialog over `parent`. With a pack id, that pack starts
-        downloading straight away (the Sound tab's Download button). With a
-        category (the library's current one), only that category's packs are
-        listed, until the user chooses Show All Sounds. */
-    static void show (juce::Component& parent, AudioEngine&, const juce::String& downloadPackId = {},
-                      const juce::String& category = {});
+        downloading straight away (the Sound tab's Download button). */
+    static void show (juce::Component& parent, AudioEngine&, const juce::String& downloadPackId = {});
 
     /** The first-run welcome: offers the starter sounds, with "Not Now".
         Calls onClosed when it closes. */
@@ -43,7 +51,7 @@ public:
         starter sounds or said Not Now). */
     static bool shouldOfferStarterSounds (AudioEngine&);
 
-    ~MoreSoundsDialog() override;
+    ~ManageSoundsDialog() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -53,13 +61,10 @@ public:
 private:
     class Row;
 
-    MoreSoundsDialog (AudioEngine&, bool welcome, const juce::String& downloadPackId, std::function<void()> onClosed,
-                      const juce::String& category);
+    ManageSoundsDialog (AudioEngine&, bool welcome, const juce::String& downloadPackId, std::function<void()> onClosed);
 
     AudioEngine& engine;
     const bool welcome;                // the first-run form
-    const juce::String category;       // list only this category's packs (empty: all)
-    bool showAll = false;              // the user chose Show All Sounds
     juce::String pendingDownload;      // the pack to download once the index has arrived
     bool requestedPackUnavailable = false;   // ...and it turned out not to be in the index
     bool starterRequested = false;     // welcome: the user chose to download the starter sounds
@@ -71,20 +76,25 @@ private:
     IconButton retryButton { "Try again", std::nullopt, "Try Again" };
     IconButton notNowButton { "Not now", std::nullopt, "Not Now" };
     IconButton doneButton { "Done", std::nullopt, "Done" };
-    IconButton showAllButton { "Show all sounds", std::nullopt, "Show All Sounds" };
     juce::String doneText { "Done" };  // what doneButton says (for its width)
     juce::Rectangle<int> panel, statusArea;
+
+    // The category chips: one per group that has packs, plus "All".
+    juce::OwnedArray<IconButton> filterChips;
+    juce::StringArray filterGroups, filterLabels;   // each chip's group (empty for All) and label, in chip order
+    juce::String filter;               // the chosen group: a library category, "Other", or empty for All
     juce::String statusText;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void refresh();
+    void setFilter (const juce::String& group);
     void confirmRemove (const juce::String& packId, const juce::String& name);
     void markStarterOffered();
     void close();
 
-    static constexpr int panelWidth = 680, panelHeight = 600, rowHeight = 104;
+    static constexpr int panelWidth = 680, panelHeight = 600;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MoreSoundsDialog)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManageSoundsDialog)
 };
 
 } // namespace ikaros

@@ -1,5 +1,6 @@
 #include "ui/toolbar/TransportBar.h"
 #include "engine/AudioEngine.h"
+#include "engine/TempoMap.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -12,6 +13,7 @@ namespace
 {
     constexpr int buttonSize = 42;
     constexpr int playWidth = 54;
+    constexpr int countInWidth = 96;   // timer icon + "Count-in"
     constexpr int gap = 6;
     constexpr int padding = 5;
 }
@@ -24,13 +26,24 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
         addAndMakeVisible (b);
     }
 
-    playButton.setColours (IconButton::accentColours());
+    // Neutral while stopped, amber while playing. The button never toggles
+    // itself on click; update() sets its toggle state from the transport.
+    playButton.setColours ([]
+    {
+        auto c = IconButton::accentColours();
+        c.background = theme().neutralActive;
+        c.foreground = theme().text;
+        c.backgroundOn = theme().accent;
+        c.border = theme().raisedBorder;
+        c.borderOn = theme().accentBorder;
+        return c;
+    });
     playButton.setCornerRadius (size::radiusLarge);
     playButton.setIconSize (20.0f);
     addAndMakeVisible (playButton);
 
     // Red dot normally; lit red with a white dot while recording.
-    recordButton.setColours ({ colour::raised, colour::record, colour::record, juce::Colours::white });
+    recordButton.setColours ([] { return IconButton::Colours { theme().raised, theme().record, theme().record, theme().textOnColour }; });
     recordButton.setIconSize (16.0f);
     recordButton.setTooltip ("Record (R)");
 
@@ -41,9 +54,11 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     metronomeButton.setClickingTogglesState (true);
     countInButton.setClickingTogglesState (true);
 
-    // "1234", like a count-in: clicks before recording starts. It turns on
-    // the length last chosen in the Mix menu (1 bar to begin with).
-    countInButton.setFont (fonts::monoBold (11.0f));
+    // Clicks before recording starts. It turns on the length last chosen in
+    // the Mix menu (1 bar to begin with). Like the other toggles it's only
+    // filled with the accent while it's on.
+    countInButton.setFont (fonts::uiSemiBold (textSize::md));
+    countInButton.setIconSize (16.0f);
     countInButton.setTooltip ("Count-in: clicks before recording starts (1 or 2 bars: Mix > Count-in)");
 
     toStartButton.onClick   = [this] { engine.goToStart(); };
@@ -54,6 +69,21 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     countInButton.onClick   = [this] { engine.setCountInEnabled (countInButton.getToggleState()); };
 
     lcd.onBpmChanged = [this] (double bpm) { engine.setBpm (bpm); };
+
+    // Dragging the BPM is one undo step, like dragging in the tempo lane:
+    // start the step once, then move the tempo in effect at the playhead.
+    lcd.onBpmDragStarted = [this]
+    {
+        bpmDragIndex = engine.getTempoMap().indexOfTempoAt (engine.getTransportState().positionBeats);
+        engine.beginUndoStep ("Tempo");
+    };
+    lcd.onBpmDragged = [this] (double bpm)
+    {
+        const auto tempos = engine.getTempoMap().getTempoChanges();
+
+        if (bpmDragIndex < (int) tempos.size())
+            engine.setTempoChange (bpmDragIndex, tempos[(size_t) bpmDragIndex].beat, bpm);
+    };
     lcd.onTimeSignatureChanged = [this] (int num, int den) { engine.setTimeSignature (num, den); };
     lcd.onKeyChanged = [this] (int root, bool minor) { engine.setKey (root, minor); };
     addAndMakeVisible (lcd);
@@ -63,7 +93,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
 int TransportBar::getPreferredWidth() const
 {
-    return padding * 2 + buttonSize * 5 + playWidth + LcdDisplay::preferredWidth + gap * 6 + 4;
+    return padding * 2 + buttonSize * 4 + playWidth + countInWidth + LcdDisplay::preferredWidth + gap * 6 + 4;
 }
 
 void TransportBar::update()
@@ -76,6 +106,7 @@ void TransportBar::update()
         playButton.setIcon (state.playing ? Icon::pause : Icon::play);
         playButton.setTitle (state.playing ? "Pause" : "Play");
         playButton.setTooltip (state.playing ? "Pause (Space)" : "Play (Space)");
+        playButton.setToggleState (state.playing, juce::dontSendNotification);
     }
 
     recordButton.setToggleState (state.recording, juce::dontSendNotification);
@@ -89,15 +120,21 @@ void TransportBar::update()
 void TransportBar::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (colour::wellBg);
+    g.setColour (theme().transportWell);
     g.fillRoundedRectangle (r, size::radiusPill);
-    g.setColour (colour::borderSoft);
+    g.setColour (theme().transportWellBorder);
     g.drawRoundedRectangle (r, size::radiusPill, 1.0f);
 }
 
 void TransportBar::resized()
 {
     auto r = getLocalBounds().reduced (padding);
+
+    // Short of room (a narrow window), Count-in drops its label and keeps
+    // just the icon; the tooltip still says what it is.
+    const bool compact = getWidth() < getPreferredWidth();
+    countInButton.setText (compact ? juce::String() : juce::String ("Count-in"));
+    const int countIn = compact ? buttonSize : countInWidth;
 
     auto place = [&] (juce::Component& c, int w)
     {
@@ -110,9 +147,11 @@ void TransportBar::resized()
     place (recordButton, buttonSize);
     place (loopButton, buttonSize);
     r.removeFromLeft (4);
-    place (lcd, juce::jmax (120, r.getWidth() - (buttonSize + gap) * 2));
+    // The LCD takes what's left after the gap behind it, the metronome, its
+    // gap and Count-in, so Count-in keeps the same inset as Go to start.
+    place (lcd, juce::jmax (120, r.getWidth() - gap - (buttonSize + gap) - countIn));
     place (metronomeButton, buttonSize);
-    place (countInButton, buttonSize);
+    place (countInButton, countIn);
 }
 
 } // namespace ikaros

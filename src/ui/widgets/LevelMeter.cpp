@@ -46,10 +46,10 @@ void LevelMeter::reset()
     repaint();
 }
 
-void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float value, Orientation orientation)
+void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float value, Orientation orientation, juce::Colour unlit)
 {
     const float radius = juce::jmin (r.getWidth(), r.getHeight()) * 0.5f;
-    g.setColour (colour::controlFill);
+    g.setColour (unlit);
     g.fillRoundedRectangle (r, radius);
 
     if (value <= 0.001f)
@@ -57,13 +57,13 @@ void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float va
 
     // Green → yellow → red, laid along the bar's length.
     const bool horiz = orientation == Orientation::horizontal;
-    juce::ColourGradient grad (colour::meterGreen,
+    juce::ColourGradient grad (theme().meterGreen,
                                horiz ? r.getX() : r.getCentreX(), horiz ? r.getCentreY() : r.getBottom(),
-                               colour::meterRed,
+                               theme().meterRed,
                                horiz ? r.getRight() : r.getCentreX(), horiz ? r.getCentreY() : r.getY(),
                                false);
-    grad.addColour (0.7, colour::meterGreen);
-    grad.addColour (0.88, colour::meterYellow);
+    grad.addColour (0.7, theme().meterGreen);
+    grad.addColour (0.88, theme().meterYellow);
 
     auto filled = horiz ? r.withWidth (r.getWidth() * value)
                         : r.withTop (r.getBottom() - r.getHeight() * value);
@@ -79,17 +79,17 @@ void LevelMeter::paint (juce::Graphics& g)
     if (orientation == Orientation::horizontal)
     {
         auto h = juce::jmin (5.0f, (r.getHeight() - 3.0f) / 2.0f);
-        paintBar (g, r.removeFromTop (h), left, orientation);
+        paintBar (g, r.removeFromTop (h), left, orientation, theme().controlFill);
         r.removeFromTop (3.0f);
-        paintBar (g, r.removeFromTop (h), right, orientation);
+        paintBar (g, r.removeFromTop (h), right, orientation, theme().controlFill);
     }
     else
     {
         auto w = juce::jmin (8.0f, (r.getWidth() - 5.0f) / 2.0f);
         auto bars = r.withSizeKeepingCentre (w * 2.0f + 5.0f, r.getHeight());
-        paintBar (g, bars.removeFromLeft (w), left, orientation);
+        paintBar (g, bars.removeFromLeft (w), left, orientation, theme().controlFill);
         bars.removeFromLeft (5.0f);
-        paintBar (g, bars.removeFromLeft (w), right, orientation);
+        paintBar (g, bars.removeFromLeft (w), right, orientation, theme().controlFill);
     }
 }
 

@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 #include "ui/preferences/AudioSettingsPanel.h"
 #include "ui/preferences/PreferencesPage.h"
+#include "ui/preferences/ThemePicker.h"
 #include "ui/widgets/FolderField.h"
 
 namespace ikaros
@@ -117,6 +118,7 @@ public:
 
 private:
     AudioEngine& engine;
+    ThemePicker themePicker;
     juce::ComboBox sizeBox;
 };
 

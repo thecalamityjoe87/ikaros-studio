@@ -1,11 +1,12 @@
 #include "app/MainComponent.h"
 #include "app/CommandIDs.h"
 #include "ui/dialogs/AboutDialog.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/dialogs/DeviceChangePrompt.h"
 #include "ui/dialogs/ExportDialog.h"
 #include "ui/dialogs/NewTrackDialog.h"
 #include "ui/dialogs/RecoveryPrompt.h"
-#include "ui/library/MoreSoundsDialog.h"
+#include "ui/library/ManageSoundsDialog.h"
 #include "ui/library/FreesoundSetupDialog.h"
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
@@ -22,10 +23,14 @@ using namespace tokens;
 namespace
 {
     constexpr int minLibraryWidth = 200, maxLibraryWidth = 420;
-    constexpr int minArrangementHeight = 160;   // ruler, one track and the scroll bar
 
     // Dragging a panel's edge this far past its smallest size hides the panel.
     constexpr int collapseDistance = 80;
+
+    // The bottom panel's height, remembered between runs. It's only this
+    // window's business, so it's declared here rather than in Preferences.h
+    // with the settings the engine reads.
+    constexpr IntSetting bottomPanelHeightSetting { "bottomPanelHeight", BottomPanel::defaultHeight };
 }
 
 MainComponent::MainComponent (AudioEngine& e) : engine (e)
@@ -46,11 +51,11 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     };
     arrangement.onSnapChanged = [this] { commands.commandStatusChanged(); };
     arrangement.onTempoLaneToggled = [this] { commands.commandStatusChanged(); };
-    toolbar.onNewTrackRequested = [this] (juce::Component*) { showNewTrackDialog(); };
+    arrangement.onAddTrack = [this] { showNewTrackDialog(); };   // the "Add track" row under the tracks
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
-    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { MoreSoundsDialog::show (*this, engine, packId); };
-    library.onMoreSoundsRequested = [this] (const juce::String& category) { MoreSoundsDialog::show (*this, engine, {}, category); };
+    bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { ManageSoundsDialog::show (*this, engine, packId); };
+    library.onManageSoundsRequested = [this] { ManageSoundsDialog::show (*this, engine); };
     library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
 
@@ -116,8 +121,8 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
             if (safeThis == nullptr || recovered)
                 return;   // a recovered session is open: no chooser
 
-            if (MoreSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
-                MoreSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
+            if (ManageSoundsDialog::shouldOfferStarterSounds (safeThis->engine))
+                ManageSoundsDialog::showWelcome (*safeThis, safeThis->engine, showChooser);
             else
                 showChooser();
         });
@@ -141,7 +146,7 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (colour::windowBg);
+    g.fillAll (theme().windowBg);
 }
 
 void MainComponent::resized()
@@ -149,7 +154,7 @@ void MainComponent::resized()
     // Dialogs drawn over the window (session chooser, new track, saving) cover all of it.
     for (auto* child : getChildren())
         if (dynamic_cast<SessionChooser*> (child) != nullptr || dynamic_cast<NewTrackDialog*> (child) != nullptr
-             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<MoreSoundsDialog*> (child) != nullptr
+             || dynamic_cast<SavingOverlay*> (child) != nullptr || dynamic_cast<ManageSoundsDialog*> (child) != nullptr
              || dynamic_cast<AboutDialog*> (child) != nullptr || dynamic_cast<ExportDialog*> (child) != nullptr
              || dynamic_cast<PreferencesDialog*> (child) != nullptr)
             child->setBounds (getLocalBounds());
@@ -166,19 +171,22 @@ void MainComponent::resized()
         library.setBounds (r.removeFromLeft (libraryWidth));
     }
 
-    const int bottomHeight = bottomPanelVisible ? juce::jlimit (BottomPanel::preferredHeight,
+    const int bottomHeight = bottomPanelVisible ? juce::jlimit (BottomPanel::minHeight,
                                                                 getMaxBottomPanelHeight(), bottomPanelHeight)
                                                 : BottomPanel::collapsedHeight;
     bottomPanel.setBounds (r.removeFromBottom (bottomHeight));
     arrangement.setBounds (r);
 
-    // The handles straddle the panel edges, on top of everything else. The
-    // library's handle stays out while it's being dragged, even when the drag
-    // has hidden the library, so dragging back out can show it again.
+    // The library's handle straddles its edge, on top of everything else. It
+    // stays out while it's being dragged, even when the drag has hidden the
+    // library, so dragging back out can show it again.
     const int half = ResizeHandle::thickness / 2;
     libraryResizer.setVisible (libraryVisible || libraryResizer.isDragging());
     libraryResizer.setBounds (r.getX() - half, r.getY(), ResizeHandle::thickness, bottomPanel.getBottom() - r.getY());
-    bottomResizer.setBounds (r.getX(), bottomPanel.getY() - half, r.getWidth(), ResizeHandle::thickness);
+
+    // The bottom panel's handle is the grip strip along its top edge (the
+    // panel says where; its bounds are in the panel's own coordinates).
+    bottomResizer.setBounds (bottomPanel.getHandleBounds() + bottomPanel.getPosition());
 }
 
 //==============================================================================
@@ -199,8 +207,11 @@ void MainComponent::setUpResizers()
     libraryResizer.onDragEnd = [this] { resized(); commands.commandStatusChanged(); };
     libraryResizer.onDoubleClick = [this] { libraryWidth = size::sidebarWidth; resized(); };
 
-    // Bottom panel: drag its top edge. Well below the smallest height it
-    // collapses to its header row; dragging up opens it again.
+    // Bottom panel: drag the grip on its top edge. Well below the smallest
+    // height it collapses to a slim strip; dragging up (or clicking the
+    // strip) opens it again.
+    bottomPanelHeight = engine.getPreferences().get (bottomPanelHeightSetting);
+    bottomResizer.setShowsGrip (true);
     bottomResizer.onDragStart = [this]
     {
         resizeStartSize = bottomPanelVisible ? bottomPanel.getHeight() : BottomPanel::collapsedHeight;
@@ -208,20 +219,26 @@ void MainComponent::setUpResizers()
     bottomResizer.onDrag = [this] (int offset)
     {
         const int height = resizeStartSize - offset;   // dragging up makes it taller
-        const bool show = height > BottomPanel::preferredHeight - collapseDistance;
+        const bool show = height > BottomPanel::minHeight - collapseDistance;
 
         if (show)
-            bottomPanelHeight = juce::jlimit (BottomPanel::preferredHeight, getMaxBottomPanelHeight(), height);
+            bottomPanelHeight = juce::jlimit (BottomPanel::minHeight, getMaxBottomPanelHeight(), height);
 
         if (show != bottomPanelVisible)
             setBottomPanelVisible (show);
         else
             resized();
     };
-    bottomResizer.onDragEnd = [this] { commands.commandStatusChanged(); };
+    bottomResizer.onDragEnd = [this]
+    {
+        engine.getPreferences().set (bottomPanelHeightSetting, bottomPanelHeight);
+        commands.commandStatusChanged();
+    };
+    bottomResizer.onClick = [this] { setBottomPanelVisible (true); };   // the collapsed strip opens the panel
     bottomResizer.onDoubleClick = [this]
     {
-        bottomPanelHeight = BottomPanel::preferredHeight;
+        bottomPanelHeight = BottomPanel::defaultHeight;
+        engine.getPreferences().set (bottomPanelHeightSetting, bottomPanelHeight);
         setBottomPanelVisible (true);
         resized();
     };
@@ -232,8 +249,8 @@ void MainComponent::setUpResizers()
 
 int MainComponent::getMaxBottomPanelHeight() const
 {
-    const int available = getHeight() - size::menuBarHeight - size::toolbarHeight;
-    return juce::jmax (BottomPanel::preferredHeight, available - minArrangementHeight);
+    // Up to half the window (the arrangement keeps the other half).
+    return juce::jmax (BottomPanel::minHeight, getHeight() / 2);
 }
 
 void MainComponent::setLibraryVisible (bool shouldShow)
@@ -378,12 +395,13 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
                                    CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
-                                   CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut,
+                                   CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut, CommandIDs::zoomReset,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
-                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane, CommandIDs::toggleDetails,
-                                   CommandIDs::toggleFullScreen, CommandIDs::moreSounds, CommandIDs::freesoundKey, CommandIDs::about,
-                                   juce::StandardApplicationCommandIDs::quit };
+                                   CommandIDs::showMixerTab, CommandIDs::toggleAutomation, CommandIDs::toggleTempoLane,
+                                   CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleInspector,
+                                   CommandIDs::toggleFullScreen, CommandIDs::manageSounds, CommandIDs::freesoundKey, CommandIDs::about,
+                                   CommandIDs::showPlugins, juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
 
@@ -615,6 +633,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Zoom Out", "Zoom out on the timeline", "View", 0);
             info.addDefaultKeypress ('-', cmd);
             break;
+        case CommandIDs::zoomReset:
+            info.setInfo ("Reset Zoom", "Go back to the starting zoom (16 bars across)", "View", 0);
+            info.addDefaultKeypress ('0', cmd);
+            break;
         case CommandIDs::snapToBar:
             info.setInfo ("Snap to Bars", "Regions and edges land on bar lines", "View", 0);
             info.setTicked (arrangement.getSnap() == ArrangementView::Snap::bar);
@@ -642,6 +664,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::editor);
             info.addDefaultKeypress ('2', cmd);
             break;
+        case CommandIDs::compactTracks:
+            info.setInfo ("Compact Tracks", "Show more tracks at once", "View", 0);
+            info.setTicked (! arrangement.areTracksTall());
+            break;
+        case CommandIDs::tallTracks:
+            info.setInfo ("Tall Tracks", "Give each track more room", "View", 0);
+            info.setTicked (arrangement.areTracksTall());
+            break;
         case CommandIDs::toggleTempoLane:
             info.setInfo ("Show Tempo Lane", "Show the tempo and time-signature changes under the ruler", "View", 0);
             info.setTicked (arrangement.isTempoLaneShown());
@@ -656,9 +686,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (bottomPanel.isMixerShown());
             info.addDefaultKeypress ('4', cmd);
             break;
-        case CommandIDs::toggleDetails:
-            info.setInfo ("Show Details", "Show advanced track details", "View", 0);
-            info.setTicked (bottomPanel.areDetailsVisible());
+        case CommandIDs::toggleInspector:
+            info.setInfo ("Show Inspector", "Show or hide the bottom panel's inspector column", "View", 0);
+            info.setTicked (bottomPanel.isInspectorVisible());
             break;
 
         case CommandIDs::toggleFullScreen:
@@ -669,8 +699,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.addDefaultKeypress (juce::KeyPress::F11Key, 0);
            #endif
             break;
-        case CommandIDs::moreSounds:
-            info.setInfo ("More Sounds...", "Download more instruments and loops", "Sounds", 0);
+        case CommandIDs::manageSounds:
+            info.setInfo ("Manage Sounds...", "Download, update and remove sound packs", "Sounds", 0);
+            break;
+        case CommandIDs::showPlugins:
+            info.setInfo ("Plug-ins...", "Show plug-in instruments and effects in the library, and scan for new ones", "Mix", 0);
             break;
         case CommandIDs::freesoundKey:
             info.setInfo ("Freesound API Key...", "Set up or change your Freesound API key", "Sounds", 0);
@@ -818,6 +851,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
         case CommandIDs::zoomOut:         arrangement.zoomOut(); break;
+        case CommandIDs::zoomReset:       arrangement.resetZoom(); break;
         case CommandIDs::snapToBar:       arrangement.setSnap (ArrangementView::Snap::bar); break;
         case CommandIDs::snapToBeat:      arrangement.setSnap (ArrangementView::Snap::beat); break;
         case CommandIDs::snapOff:         arrangement.setSnap (ArrangementView::Snap::off); break;
@@ -825,11 +859,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::toggleLibrary:     setLibraryVisible (! libraryVisible); break;
         case CommandIDs::toggleBottomPanel: setBottomPanelVisible (! bottomPanelVisible); break;
 
-        // Picking a tab (or details) also opens the bottom panel if it's hidden.
+        // Picking a tab (or the inspector) also opens the bottom panel if it's hidden.
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
         case CommandIDs::toggleTempoLane: arrangement.setTempoLaneShown (! arrangement.isTempoLaneShown()); break;
+        case CommandIDs::compactTracks:   arrangement.setTracksTall (false); break;
+        case CommandIDs::tallTracks:      arrangement.setTracksTall (true); break;
         case CommandIDs::toggleAutomation:
         {
             auto& automation = engine.getTracks().automation();
@@ -838,9 +874,9 @@ bool MainComponent::perform (const InvocationInfo& info)
         }
         case CommandIDs::showMixerTab:    setBottomPanelVisible (true); bottomPanel.setMixerShown (! bottomPanel.isMixerShown()); break;
 
-        case CommandIDs::toggleDetails:
+        case CommandIDs::toggleInspector:
             setBottomPanelVisible (true);
-            bottomPanel.setDetailsVisible (! bottomPanel.areDetailsVisible());
+            bottomPanel.setInspectorVisible (! bottomPanel.isInspectorVisible());
             break;
 
         case CommandIDs::toggleFullScreen:
@@ -848,7 +884,13 @@ bool MainComponent::perform (const InvocationInfo& info)
                 window->setFullScreen (! window->isFullScreen());
             break;
 
-        case CommandIDs::moreSounds:      MoreSoundsDialog::show (*this, engine); break;
+        case CommandIDs::manageSounds:      ManageSoundsDialog::show (*this, engine); break;
+
+        // Plug-ins have no library tile: this shows the library's plug-in list.
+        case CommandIDs::showPlugins:
+            setLibraryVisible (true);
+            library.showPlugins();
+            break;
         case CommandIDs::freesoundKey:    FreesoundSetupDialog::show (*this, engine); break;
         case CommandIDs::preferences:     showPreferences(); break;
         case CommandIDs::about:           showAbout(); break;
@@ -905,7 +947,6 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
     }
 
     auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                        .withTitle ("Save changes?")
                        .withMessage ("Do you want to save the changes to \"" + engine.getSessionName() + "\"?")
                        .withButton ("Save")
@@ -913,10 +954,10 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
                        .withButton ("Cancel")
                        .withAssociatedComponent (this);
 
-    // showAsync's callback gets 1 for the first button, 2 for the second, and
+    // The callback gets 1 for the first button, 2 for the second, and
     // 0 for the last one (Cancel). SafePointer guards against this component
     // being deleted while the dialog is open.
-    juce::AlertWindow::showAsync (options, [safeThis = SafePointer<MainComponent> (this), thenDo] (int result)
+    AlertDialog::show (options, [safeThis = SafePointer<MainComponent> (this), thenDo] (int result)
     {
         if (safeThis == nullptr)
             return;
@@ -1088,7 +1129,6 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
         }
 
         auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::WarningIcon)
                            .withTitle ("Replace session?")
                            .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
                                            + "\" already exists in " + target.getParentDirectory().getFullPathName()
@@ -1097,7 +1137,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
                            .withButton ("Cancel")
                            .withAssociatedComponent (this);
 
-        juce::AlertWindow::showAsync (options, [save, afterSave] (int result)
+        AlertDialog::show (options, [save, afterSave] (int result)
         {
             if (result == 1)
                 save();
@@ -1146,7 +1186,7 @@ void MainComponent::requestQuit()
 
 void MainComponent::showPreferences (PreferencesDialog::Page page)
 {
-    PreferencesDialog::show (*this, engine, commands, page, [this] { MoreSoundsDialog::show (*this, engine); });
+    PreferencesDialog::show (*this, engine, commands, page, [this] { ManageSoundsDialog::show (*this, engine); });
 }
 
 // Some settings change something in this window the moment they change.
@@ -1276,13 +1316,11 @@ void MainComponent::showRecordingReport (const RecordingReport& report)
 
 void MainComponent::showError (const juce::String& title, const juce::String& message)
 {
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                      .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                      .withTitle (title)
-                                      .withMessage (message)
-                                      .withButton ("OK")
-                                      .withAssociatedComponent (this),
-                                  nullptr);
+    AlertDialog::show (juce::MessageBoxOptions()
+                       .withTitle (title)
+                       .withMessage (message)
+                       .withButton ("OK")
+                       .withAssociatedComponent (this));
 }
 
 } // namespace ikaros

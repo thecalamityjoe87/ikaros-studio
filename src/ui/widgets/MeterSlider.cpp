@@ -38,22 +38,27 @@ void MeterSlider::paint (juce::Graphics& g)
 
     const float barHeight = 4.0f, barGap = 2.0f;
     auto bars = juce::Rectangle<float> (start, centreY - barHeight - barGap * 0.5f, end - start, barHeight * 2.0f + barGap);
-    LevelMeter::paintBar (g, bars.removeFromTop (barHeight), left, LevelMeter::Orientation::horizontal);
+    const auto unlit = style == Style::trackHeader ? theme().volumeSliderTrack : theme().sliderTrack;
+    LevelMeter::paintBar (g, bars.removeFromTop (barHeight), left, LevelMeter::Orientation::horizontal, unlit);
     bars.removeFromTop (barGap);
-    LevelMeter::paintBar (g, bars.removeFromTop (barHeight), right, LevelMeter::Orientation::horizontal);
+    LevelMeter::paintBar (g, bars.removeFromTop (barHeight), right, LevelMeter::Orientation::horizontal, unlit);
 
-    // The handle, with a dark ring so it stands out against the lit bars.
+    // The handle, with a ring so it stands out against the lit bars, and a
+    // soft shadow in light mode.
     const auto x = (float) getPositionOfValue (getValue());
     auto thumb = juce::Rectangle<float> (12.0f, 12.0f).withCentre ({ x, centreY });
-    g.setColour (colour::toolbarBg);
+    juce::Path disc;
+    disc.addEllipse (thumb.expanded (1.5f));
+    juce::DropShadow (theme().thumbShadow, 3, { 0, 1 }).drawForPath (g, disc);
+    g.setColour (theme().meterThumbRing);
     g.fillEllipse (thumb.expanded (1.5f));
-    // Amber while automation moves it (see setAutomatedLook).
+    // In the "automated" colour while automation moves it (see setAutomatedLook).
     const bool automated = getProperties()["automated"];
-    g.setColour (! isEnabled() ? colour::textSecondary : automated ? colour::accent : colour::text);
+    g.setColour (! isEnabled() ? theme().textSecondary : automated ? theme().automated : theme().thumb);
     g.fillEllipse (thumb);
 
     if (hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().expanded (2.0f), 4.0f);
+        IkarosLookAndFeel::drawFocusRing (g, getLocalBounds().toFloat().expanded (2.0f), size::radiusXs);
 }
 
 } // namespace ikaros

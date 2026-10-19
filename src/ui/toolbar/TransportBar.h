@@ -38,7 +38,9 @@ private:
     IconButton loopButton      { "Loop", Icon::loop };
     LcdDisplay lcd;
     IconButton metronomeButton { "Metronome", Icon::metronome };
-    IconButton countInButton   { "Count-in", std::nullopt, "1234" };
+    IconButton countInButton   { "Count-in", Icon::timer, "Count-in" };
+
+    int bpmDragIndex = 0;   // the tempo change a BPM drag in the readout is changing
 
     bool wasPlaying = false;
 

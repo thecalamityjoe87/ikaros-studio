@@ -24,13 +24,11 @@ FreesoundSetupDialog::FreesoundSetupDialog (AudioEngine& e)
     setWantsKeyboardFocus (true);
     setAlwaysOnTop (true);
 
-    auto grey = IconButton::raisedColours();
-    grey.border = colour::border;
 
     for (auto* b : { &signUpButton, &applyButton, &closeButton, &forgetButton })
     {
-        b->setColours (grey);
-        b->setFont (fonts::uiSemiBold (13.0f));
+        b->setColours (IconButton::borderedColours);
+        b->setFont (fonts::uiSemiBold (textSize::md));
         b->setIconSize (14.0f);
         addAndMakeVisible (b);
     }
@@ -46,16 +44,15 @@ FreesoundSetupDialog::FreesoundSetupDialog (AudioEngine& e)
         keyField.clear();
     };
 
-    connectButton.setColours (IconButton::accentColours());
-    connectButton.setFont (fonts::uiSemiBold (13.0f));
+    connectButton.setColours (IconButton::primaryColours);
+    connectButton.setFont (fonts::uiSemiBold (textSize::md));
     connectButton.onClick = [this] { connect(); };
     addAndMakeVisible (connectButton);
 
-    keyField.setTextToShowWhenEmpty ("Paste your key here", colour::textSecondary);
-    keyField.setFont (fonts::ui (14.0f));
+    keyField.setTextToShowWhenEmpty ("Paste your key here", theme().textSecondary);
+    keyField.setFont (fonts::ui (textSize::lg));
     keyField.setTitle ("Freesound API key");
     keyField.setIndents (10, 9);
-    keyField.setColour (juce::TextEditor::outlineColourId, colour::borderSoft);
     keyField.setSelectAllWhenFocused (true);
     keyField.onReturnKey = [this] { connect(); };
     keyField.onEscapeKey = [this] { close(); };
@@ -123,21 +120,21 @@ void FreesoundSetupDialog::mouseDown (const juce::MouseEvent& e)
 //==============================================================================
 void FreesoundSetupDialog::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    g.fillAll (theme().scrim);
 
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), 30, { 0, 8 }).drawForRectangle (g, panel);
-    g.setColour (colour::toolbarBg);
-    g.fillRoundedRectangle (panel.toFloat(), 14.0f);
-    g.setColour (colour::border);
-    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 14.0f, 1.0f);
+    theme().dialogShadow.drawForRectangle (g, panel);
+    g.setColour (theme().dialogBg);
+    g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
     auto r = panel.reduced (28, 24);
-    g.setColour (colour::text);
-    g.setFont (fonts::uiBold (18.0f));
+    g.setColour (theme().text);
+    g.setFont (fonts::uiBold (textSize::title));
     g.drawText ("Find loops on Freesound", r.removeFromTop (26), juce::Justification::centredLeft);
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (13.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText ("Freesound is a free library of sounds shared by its community. To search it from here you need your "
                       "own free API key. It takes a couple of minutes to get.",
                       r.removeFromTop (46).withTrimmedTop (6), juce::Justification::topLeft, 3, 1.0f);
@@ -145,18 +142,18 @@ void FreesoundSetupDialog::paint (juce::Graphics& g)
     auto drawStep = [&g] (int number, juce::Rectangle<int> area, const juce::String& title, const juce::String& detail)
     {
         auto badge = area.removeFromLeft (24).removeFromTop (22).toFloat().withSizeKeepingCentre (22.0f, 22.0f);
-        g.setColour (colour::accent);
+        g.setColour (theme().neutralActive);
         g.fillEllipse (badge);
-        g.setColour (colour::toolbarBg);
-        g.setFont (fonts::uiBold (12.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::uiBold (textSize::sm));
         g.drawText (juce::String (number), badge.toNearestInt(), juce::Justification::centred);
 
         area.removeFromLeft (8);
-        g.setColour (colour::text);
-        g.setFont (fonts::uiSemiBold (14.0f));
+        g.setColour (theme().text);
+        g.setFont (fonts::uiSemiBold (textSize::lg));
         g.drawText (title, area.removeFromTop (22), juce::Justification::centredLeft);
-        g.setColour (colour::textSecondary);
-        g.setFont (fonts::ui (12.0f));
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::sm));
         g.drawFittedText (detail, area, juce::Justification::topLeft, 3, 1.0f);
     };
 
@@ -168,28 +165,28 @@ void FreesoundSetupDialog::paint (juce::Graphics& g)
 
     auto& store = engine.getFreesound();
     juce::String status;
-    auto statusColour = colour::textSecondary;
+    auto statusColour = theme().textSecondary;
 
     switch (store.getKeyCheck())
     {
         case FreesoundStore::KeyCheck::checking:  status = "Checking your key with Freesound..."; break;
         case FreesoundStore::KeyCheck::rejected:
-        case FreesoundStore::KeyCheck::failed:    status = store.getMessage(); statusColour = colour::record; break;
+        case FreesoundStore::KeyCheck::failed:    status = store.getMessage(); statusColour = theme().record; break;
         default:
             if (store.hasKey())
             {
                 status = "A key is saved. Paste a new one to replace it.";
-                statusColour = colour::effectOn;
+                statusColour = theme().effectOn;
             }
             break;
     }
 
     g.setColour (statusColour);
-    g.setFont (fonts::ui (13.0f));
+    g.setFont (fonts::ui (textSize::md));
     g.drawFittedText (status, statusArea, juce::Justification::topLeft, 3, 1.0f);
 
-    g.setColour (colour::textSecondary);
-    g.setFont (fonts::ui (12.0f));
+    g.setColour (theme().textSecondary);
+    g.setFont (fonts::ui (textSize::sm));
     g.drawFittedText ("Only loops shared under CC0 or CC BY are shown. Loops you add are credited to their authors on the "
                       "Acknowledgements page of the About window. Your key stays on this computer.",
                       footerArea, juce::Justification::topLeft, 3, 1.0f);
