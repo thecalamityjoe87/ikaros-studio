@@ -11,6 +11,7 @@ namespace ikaros::fonts
 juce::Font ui (float height);            // Figtree Regular
 juce::Font uiSemiBold (float height);    // Figtree SemiBold
 juce::Font uiBold (float height);        // Figtree Bold
+juce::Font uiExtraBold (float height);   // Figtree ExtraBold (pedal names)
 juce::Font mono (float height);          // JetBrains Mono Medium
 juce::Font monoBold (float height);      // JetBrains Mono Bold
 

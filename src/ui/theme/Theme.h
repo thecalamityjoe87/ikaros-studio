@@ -123,6 +123,10 @@ struct ThemePalette
     // Smart Controls cards
     juce::Colour smartCardBg, smartCardBorder, smartCardShadow;
 
+    // The pedalboard: the "floor" the pedals stand on, and the cables
+    // between them. (The pedals keep their own colours in both themes.)
+    juce::Colour pedalboardFloor, pedalboardCable;
+
     // The on-screen keyboard
     juce::Colour keyboardTray, keyboardTrayBorder;
     juce::Colour pianoWhite, pianoWhiteDown, pianoKeyDivider;   // the divider: the gap between white keys

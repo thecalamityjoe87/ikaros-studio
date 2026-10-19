@@ -220,6 +220,7 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-Regular.ttf
         resources/fonts/Figtree-SemiBold.ttf
         resources/fonts/Figtree-Bold.ttf
+        resources/fonts/Figtree-ExtraBold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
         resources/fonts/JetBrainsMono-Bold.ttf
         resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
@@ -262,6 +263,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
+    src/engine/PedalStyles.h        src/engine/PedalStyles.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
@@ -370,6 +372,8 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/PianoRollGestures.cpp
     src/ui/bottompanel/PianoRollPainting.cpp
     src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
+    src/ui/bottompanel/PedalView.h          src/ui/bottompanel/PedalView.cpp
+    src/ui/bottompanel/PedalboardView.h     src/ui/bottompanel/PedalboardView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
@@ -564,7 +568,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner,pedals)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -602,6 +606,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Quantize PROPERTIES LABELS "quantize")
     add_test(NAME EngineSmokeTest.Tuner COMMAND IkarosEngineSmokeTest --only=tuner)
     set_tests_properties(EngineSmokeTest.Tuner PROPERTIES LABELS "tuner")
+    add_test(NAME EngineSmokeTest.Pedals COMMAND IkarosEngineSmokeTest --only=pedals)
+    set_tests_properties(EngineSmokeTest.Pedals PROPERTIES LABELS "pedals")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

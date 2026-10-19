@@ -403,6 +403,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::compactTracks, CommandIDs::tallTracks, CommandIDs::toggleInspector,
                                    CommandIDs::toggleFullScreen, CommandIDs::manageSounds, CommandIDs::freesoundKey, CommandIDs::about,
                                    CommandIDs::showPlugins, CommandIDs::toggleTuner, CommandIDs::closeTuner,
+                                   CommandIDs::showPedalboardTab,
                                    juce::StandardApplicationCommandIDs::quit };
     ids.addArray (all, juce::numElementsInArray (all));
 }
@@ -695,6 +696,12 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("Show Automation", "Show every track's automation", "View", 0);
             info.setTicked (engine.getTracks().automation().areAllLanesShown());
             break;
+        case CommandIDs::showPedalboardTab:
+            info.setInfo ("Pedalboard", "Show the selected audio track's pedals", "View", 0);
+            info.setActive (bottomPanel.isPedalboardAvailable());
+            info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::pedals);
+            info.addDefaultKeypress ('5', cmd);
+            break;
         case CommandIDs::showMixerTab:
             info.setInfo ("Mixer", "Show every track's fader at once", "View", 0);
             info.setTicked (bottomPanel.isMixerShown());
@@ -879,6 +886,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
+        case CommandIDs::showPedalboardTab: setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::pedals); break;
         case CommandIDs::toggleTempoLane: arrangement.setTempoLaneShown (! arrangement.isTempoLaneShown()); break;
         case CommandIDs::compactTracks:   arrangement.setTracksTall (false); break;
         case CommandIDs::tallTracks:      arrangement.setTracksTall (true); break;

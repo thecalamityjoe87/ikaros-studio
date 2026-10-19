@@ -2,6 +2,7 @@
 #include "engine/SoundControls.h"
 #include "engine/AudioEngine.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/PedalStyles.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
@@ -110,6 +111,42 @@ namespace
                 return p;
 
         return nullptr;
+    }
+
+    //==============================================================================
+    // Pedals first (see EffectsController.h).
+    bool isPedal (te::Plugin& p)    { return findPedalStyle (getPluginTypeString (p)) != nullptr; }
+
+    // Only audio tracks keep their pedals first: they're the ones with a
+    // pedalboard. (findTrack is null for the master.)
+    bool keepsPedalsFirst (te::Edit* edit, TrackId id)
+    {
+        auto* t = findTrack (edit, id);
+        return t != nullptr && isAudioTrack (*t);
+    }
+
+    // How many effects at the start of the chain are pedals.
+    int countLeadingPedals (const std::vector<te::Plugin*>& effects)
+    {
+        int n = 0;
+
+        while (n < (int) effects.size() && isPedal (*effects[(size_t) n]))
+            ++n;
+
+        return n;
+    }
+
+    // Where an effect may go among `others` (the chain without it) when
+    // `position` is asked for (-1 = the end): a pedal no further than the
+    // end of the pedals, any other effect no earlier.
+    int positionKeepingPedalsFirst (bool pedal, const std::vector<te::Plugin*>& others, int position)
+    {
+        const int pedals = countLeadingPedals (others);
+
+        if (pedal)
+            return position < 0 ? pedals : juce::jmin (position, pedals);
+
+        return position < 0 ? -1 : juce::jmax (position, pedals);
     }
 
     PluginSlot makeSlot (te::Plugin& p)
@@ -240,17 +277,18 @@ namespace
         return nullptr;
     }
 
-    // A few of Tracktion's built-in effects (Chorus, Phaser) keep their
-    // settings as plain properties on their state rather than as
-    // parameters, so they'd show no knobs. These are their settings, with
-    // the ranges the knobs cover and the defaults Tracktion uses.
+    // A few of Tracktion's built-in effects (Chorus, Phaser, the Echo's
+    // time) keep their settings as plain properties on their state rather
+    // than as parameters, so they'd show no knobs. These are their settings,
+    // with the ranges the knobs cover and the defaults Tracktion uses.
     struct StoredSetting
     {
         const char* pluginType;
         juce::Identifier property;
         const char* name;
         float minimum, maximum, defaultValue;
-        const char* unit;   // "%" shows 0..1 as a percentage
+        const char* unit;           // "%" shows 0..1 as a percentage
+        bool wholeNumber = false;   // the effect reads it as an int (stored rounded)
     };
 
     const std::vector<StoredSetting>& storedSettings()
@@ -263,6 +301,10 @@ namespace
             { te::PhaserPlugin::xmlTypeName, te::IDs::depth,         "Depth",    0.0f, 10.0f, 5.0f, "" },
             { te::PhaserPlugin::xmlTypeName, te::IDs::rate,          "Rate",     0.05f, 4.0f, 0.4f, "Hz" },
             { te::PhaserPlugin::xmlTypeName, te::IDs::feedback,      "Feedback", 0.0f,  0.95f, 0.7f, "%" },
+            // Up to 2 s: the Echo makes room for that much when playback
+            // starts (external/patches/tracktion-delay-preallocate.patch), so
+            // turning it while playing never allocates on the audio thread.
+            { te::DelayPlugin::xmlTypeName,  te::IDs::length,        "Time",     20.0f, 2000.0f, 150.0f, "ms", true },
         };
         return settings;
     }
@@ -282,6 +324,9 @@ namespace
     {
         if (juce::String (s.unit) == "%")
             return percent (value);
+
+        if (s.wholeNumber)
+            return juce::String (juce::roundToInt (value)) + " " + juce::String (s.unit);
 
         return juce::String (value, 1) + (juce::String (s.unit).isEmpty() ? "" : " " + juce::String (s.unit));
     }
@@ -872,6 +917,9 @@ PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int
     if (plugin == nullptr)
         return 0;
 
+    if (keepsPedalsFirst (edit, id))
+        position = positionKeepingPedalsFirst (isPedal (*plugin), effectsOn (*list), position);
+
     owner.beginUndoStep ("Add Effect");
 
     list->insertPlugin (plugin, pluginListIndexForPosition (*list, position), nullptr);
@@ -892,11 +940,27 @@ PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const 
     if (plugin == nullptr)
         return 0;
 
-    // Remove + insert in one undo step, at the same position.
+    // Remove + insert in one undo step, at the same position (on an audio
+    // track, a pedal replaced by another kind of effect moves after the
+    // pedals, and the other way round).
     owner.beginUndoStep ("Replace Effect");
-    const auto index = list->indexOf (old);
-    old->removeFromParent();
-    list->insertPlugin (plugin, index, nullptr);
+
+    if (keepsPedalsFirst (edit, id))
+    {
+        auto effects = effectsOn (*list);
+        const auto oldPosition = (int) std::distance (effects.begin(), std::find (effects.begin(), effects.end(), old));
+        effects.erase (effects.begin() + oldPosition);
+        const auto position = positionKeepingPedalsFirst (isPedal (*plugin), effects, oldPosition);
+        old->removeFromParent();
+        list->insertPlugin (plugin, pluginListIndexForPosition (*list, position), nullptr);
+    }
+    else
+    {
+        const auto index = list->indexOf (old);
+        old->removeFromParent();
+        list->insertPlugin (plugin, index, nullptr);
+    }
+
     return plugin->itemID.getRawID();
 }
 
@@ -928,6 +992,17 @@ void EffectsController::moveEffect (TrackId id, PluginId pluginId, int newPositi
 
     auto effects = effectsOn (*list);
     const auto oldPosition = (int) std::distance (effects.begin(), std::find (effects.begin(), effects.end(), plugin.get()));
+
+    // newPosition is where it ends up: its index among the others.
+    if (keepsPedalsFirst (owner.getEdit(), id))
+    {
+        auto others = effects;
+        others.erase (others.begin() + oldPosition);
+        newPosition = positionKeepingPedalsFirst (isPedal (*plugin), others, newPosition);
+
+        if (newPosition < 0)
+            newPosition = (int) others.size();
+    }
 
     if (oldPosition == newPosition)
         return;
@@ -961,7 +1036,8 @@ std::vector<ParameterInfo> EffectsController::getEffectParameters (TrackId id, P
                 for (auto* param : p->getAutomatableParameters())
                     result.push_back ({ param->getParameterName(),
                                         param->getCurrentNormalisedValue(),
-                                        param->getCurrentValueAsStringWithLabel() });
+                                        param->getCurrentValueAsStringWithLabel(),
+                                        param->paramID });
 
             // Settings kept as properties come after the real parameters.
             for (auto* setting : storedSettingsFor (*p))
@@ -969,7 +1045,8 @@ std::vector<ParameterInfo> EffectsController::getEffectParameters (TrackId id, P
                 const auto value = (float) p->state.getProperty (setting->property, setting->defaultValue);
                 result.push_back ({ setting->name,
                                     juce::jmap (value, setting->minimum, setting->maximum, 0.0f, 1.0f),
-                                    describeStored (*setting, value) });
+                                    describeStored (*setting, value),
+                                    setting->property.toString() });
             }
         }
     }
@@ -1002,7 +1079,11 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
                 if (juce::isPositiveAndBelow (storedIndex, (int) stored.size()))
                 {
                     auto* setting = stored[(size_t) storedIndex];
-                    p->state.setProperty (setting->property, juce::jmap (value, setting->minimum, setting->maximum),
+                    const auto newValue = juce::jmap (value, setting->minimum, setting->maximum);
+
+                    // A juce::var holding an int, for a setting the effect reads as one.
+                    p->state.setProperty (setting->property,
+                                          setting->wholeNumber ? juce::var (juce::roundToInt (newValue)) : juce::var (newValue),
                                           &owner.getEdit()->getUndoManager());
                 }
             }

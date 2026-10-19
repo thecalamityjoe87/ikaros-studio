@@ -133,6 +133,7 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::showSoundTab);
         add (CommandIDs::showEditorTab);
         add (CommandIDs::showEqTab);
+        add (CommandIDs::showPedalboardTab);
         add (CommandIDs::showMixerTab);
         m.addSeparator();
         add (CommandIDs::toggleInspector);

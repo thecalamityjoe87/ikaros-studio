@@ -4,6 +4,7 @@
 #include "ui/bottompanel/AudioEditor.h"
 #include "ui/bottompanel/EqView.h"
 #include "ui/bottompanel/MixerView.h"
+#include "ui/bottompanel/PedalboardView.h"
 #include "ui/bottompanel/PianoRoll.h"
 #include "ui/bottompanel/PluginEditor.h"
 #include "ui/bottompanel/RegionInspector.h"
@@ -18,7 +19,7 @@ namespace ikaros
     The panel under the arrangement:
 
         ============ grip ============   (drag to resize)
-        [Sound | Editor | EQ | Mixer] | (dot) Track name          [Inspector] [v]
+        [Sound | Editor | EQ | Pedals | Mixer] | (dot) Track name [Inspector] [v]
         [Track | Master]  region name
         (inspector)                      tab content
 
@@ -29,6 +30,8 @@ namespace ikaros
       Editor: the selected region, close up: the piano roll for a MIDI
               region, the audio editor for an audio region (tracks only)
       EQ:     a 4-band EQ
+      Pedals: an audio track's pedalboard (the segment only shows for
+              audio tracks)
       Mixer:  every track's fader at once (and the master's, fixed on the
               right), across the whole panel
 
@@ -49,7 +52,7 @@ namespace ikaros
 class BottomPanel  : public juce::Component
 {
 public:
-    enum class Tab { sound, editor, eq };
+    enum class Tab { sound, editor, eq, pedals };
 
     BottomPanel (AudioEngine&, Selection&);
     ~BottomPanel() override;
@@ -78,6 +81,9 @@ public:
     /** Collapsed: only a slim strip shows (collapsedHeight tall). */
     void setCollapsed (bool);
     bool isCollapsed() const noexcept           { return collapsed; }
+
+    /** The Pedals tab is for audio tracks: true while one is selected. */
+    bool isPedalboardAvailable() const noexcept;
 
     /** Re-reads the selected track/region from the engine (model or selection changed). */
     void refresh();
@@ -131,6 +137,7 @@ private:
     bool collapsed = false;
     bool masterMode = false;
     bool regionMode = true;
+    bool pedalsShown = false;            // the Pedals segment is in the switch (see isPedalboardAvailable)
     bool inspectorShowsMaster = false;   // what TrackInspector was last set to (see showTabPage)
     RegionId lastSelectedRegion = 0;     // to notice a new region being picked (see refreshEditor)
     bool mixerShown = false;
@@ -139,6 +146,7 @@ private:
     IconButton soundTab  { "Sound", std::nullopt, "Sound" };
     IconButton editorTab { "Editor", std::nullopt, "Editor" };
     IconButton eqTab     { "EQ", std::nullopt, "EQ" };
+    IconButton pedalsTab { "Pedals", std::nullopt, "Pedals" };   // audio tracks only
     IconButton mixerButton { "Mixer", std::nullopt, "Mixer" };
     IconButton inspectorButton { "Inspector", std::nullopt, "Inspector" };
     IconButton collapseButton { "Hide panel", Icon::chevronDown };
@@ -153,6 +161,7 @@ private:
     std::unique_ptr<SoundPage> soundPage;
     std::unique_ptr<MasterPage> masterPage;
     EqView eqView { engine };
+    PedalboardView pedalboard { engine, selection };
     PianoRoll pianoRoll { engine };
     AudioEditor audioEditor { engine };
     MixerView mixer;
@@ -175,8 +184,9 @@ private:
     /** What the panel works on: the selected track, or masterTrackId. */
     TrackId getTarget() const;
 
-    /** Master mode, and a tab it applies to (the Editor is always about a track's regions). */
-    bool showsMaster() const noexcept           { return masterMode && tab != Tab::editor; }
+    /** Master mode, and a tab it applies to (the Editor is always about a
+        track's regions, and the Pedals tab about an audio track). */
+    bool showsMaster() const noexcept           { return masterMode && tab != Tab::editor && tab != Tab::pedals; }
 
     /** The inspector column is showing (the full mixer takes the whole width). */
     bool showsInspectorColumn() const noexcept  { return inspectorVisible && ! mixerShown && ! collapsed; }

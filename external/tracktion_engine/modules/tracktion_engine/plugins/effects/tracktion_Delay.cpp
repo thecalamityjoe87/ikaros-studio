@@ -42,7 +42,9 @@ const char* DelayPlugin::xmlTypeName = "delay";
 
 void DelayPlugin::initialise (const PluginInitialisationInfo& info)
 {
-    const int lengthInSamples = (int) (lengthMs * info.sampleRate / 1000.0);
+    // Room for the longest delay a knob can set (2 s), so turning the time
+    // up while playing never allocates on the audio thread.
+    const int lengthInSamples = (int) (std::max (2000, lengthMs.get()) * info.sampleRate / 1000.0);
     delayBuffer.ensureMaxBufferSize (lengthInSamples);
     delayBuffer.clearBuffer();
 }

@@ -13,6 +13,7 @@
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
 #include "engine/Tuner.h"
+#include "engine/PedalStyles.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -3732,6 +3733,257 @@ static void runTunerSection()
     }
 }
 
+//==============================================================================
+// The pedalboard: the pedal style table, pedals kept at the start of an
+// audio track's chain, room for 12 effects, the Echo's Time knob, undo and
+// saving, and older sessions keeping their order.
+static void runPedalsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    auto device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    const auto rate = device->getSettings().sampleRate;
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    auto t = tracks.addAudioTrack();
+    pumpMessages();
+
+    // The chain's plugin types, e.g. "chorus,delay,reverb".
+    auto typesOn = [&] (TrackId track)
+    {
+        juce::StringArray types;
+
+        for (auto& slot : effects.getEffectChain (track))
+            types.add (slot.type);
+
+        return types.joinIntoString (",");
+    };
+
+    auto removeAll = [&] (TrackId track)
+    {
+        for (auto& slot : effects.getEffectChain (track))
+            effects.removeEffect (track, slot.id);
+    };
+
+    auto indexOfParameter = [&] (TrackId track, PluginId plugin, const juce::String& id)
+    {
+        auto params = effects.getEffectParameters (track, plugin);
+
+        for (int i = 0; i < (int) params.size(); ++i)
+            if (params[(size_t) i].id == id)
+                return i;
+
+        return -1;
+    };
+
+    std::cout << "Pedal styles\n";
+    {
+        auto available = effects.getAvailableEffects();
+        bool offered = true, knobCounts = true, knobsFound = true;
+        juce::StringArray names;
+
+        for (auto& style : getPedalStyles())
+        {
+            offered = offered && std::any_of (available.begin(), available.end(), [&] (const EffectType& e)
+                                              { return e.type == style.pluginType && ! e.isThirdParty; });
+            knobCounts = knobCounts && style.knobs.size() >= 2 && style.knobs.size() <= 3;
+            names.addIfNotAlreadyThere (style.name);
+
+            const auto plugin = effects.addEffect (t, style.pluginType);
+
+            for (auto& knob : style.knobs)
+            {
+                if (indexOfParameter (t, plugin, knob.parameterId) < 0)
+                {
+                    knobsFound = false;
+                    std::cout << "         " << style.name << " has no \"" << knob.parameterId << "\" setting\n";
+                }
+            }
+
+            effects.removeEffect (t, plugin);
+        }
+
+        check (getPedalStyles().size() == 7 && names.size() == 7, "seven of the effects are pedals, each with its own name");
+        check (offered, "every pedal skins an effect from the effects menu");
+        check (knobCounts, "each has 2 or 3 knobs");
+        check (knobsFound, "and every knob turns a setting its effect has");
+        check (findPedalStyle ("reverb") == nullptr && findPedalStyle ("ikarosLimiter") == nullptr,
+               "Reverb and Limiter aren't pedals");
+    }
+
+    std::cout << "Pedals come first\n";
+    {
+        const auto reverb = effects.addEffect (t, "reverb");
+        const auto chorus = effects.addEffect (t, "chorus");
+        const auto echo = effects.addEffect (t, "delay");
+        check (typesOn (t) == "chorus,delay,reverb", "a pedal added at the end goes after the last pedal, before other effects");
+
+        effects.moveEffect (t, chorus, 2);
+        check (typesOn (t) == "delay,chorus,reverb", "a pedal moved past the other effects stops after the last pedal");
+        effects.moveEffect (t, reverb, 0);
+        check (typesOn (t) == "delay,chorus,reverb", "another effect can't go in front of the pedals");
+        effects.addEffect (t, "pitchShifter", 0);
+        check (typesOn (t) == "delay,chorus,pitchShifter,reverb", "nor be added there");
+
+        effects.replaceEffect (t, reverb, "phaser");
+        check (typesOn (t) == "delay,chorus,phaser,pitchShifter", "an effect replaced by a pedal joins the pedals");
+        effects.replaceEffect (t, echo, "reverb");
+        check (typesOn (t) == "chorus,phaser,reverb,pitchShifter", "a pedal replaced by another effect leaves them");
+
+        // Instrument tracks have no pedalboard: their effects go where they're put.
+        auto instrument = tracks.addInstrumentTrack();
+        effects.addEffect (instrument, "reverb");
+        effects.addEffect (instrument, "chorus");
+        check (typesOn (instrument) == "reverb,chorus", "an instrument track's effects stay in any order");
+        tracks.deleteTrack (instrument);
+        removeAll (t);
+    }
+
+    std::cout << "Up to 12 effects\n";
+    {
+        check (EffectsController::maxEffectsPerTrack == 12, "a track has room for 12 effects");
+        int added = 0;
+
+        for (int i = 0; i < 12; ++i)
+            added += effects.addEffect (t, i % 2 == 0 ? "chorus" : "reverb") != 0 ? 1 : 0;
+
+        check (added == 12, "12 can be added");
+        check (effects.addEffect (t, "phaser") == 0 && effects.getEffectChain (t).size() == 12, "a 13th can't");
+        removeAll (t);
+    }
+
+    std::cout << "Tape Echo's time\n";
+    {
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (! inputs.empty(), "(the pretend device has inputs)");
+
+        if (inputs.empty())
+            return;
+
+        tracks.inputs().setTrackInput (t, inputs[0].id);
+        tracks.setSelectedTrack (t);
+        tracks.inputs().setArmed (t, true);
+        tracks.inputs().setMonitoring (t, true);
+
+        const auto echo = effects.addEffect (t, "delay");
+        const auto time = indexOfParameter (t, echo, "length");
+        check (time >= 0 && effects.getEffectParameters (t, echo)[(size_t) time].valueText == "150 ms",
+               "the Echo has a Time setting, 150 ms to start with");
+
+        if (time < 0)
+            return;
+
+        effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "feedback"), 0.0f);   // one repeat
+        effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "mix proportion"), 0.5f);
+        runAudio (*device, 0.5);
+
+        engine.beginUndoStep ("Tape Echo Time");
+        effects.setEffectParameter (t, echo, time, (500.0f - 20.0f) / (2000.0f - 20.0f));
+        check (effects.getEffectParameters (t, echo)[(size_t) time].valueText == "500 ms", "it can be set to 500 ms");
+
+        // A click goes in; the first sound out is the click, the next its echo.
+        juce::AudioBuffer<float> click (device->getSettings().numInputs, (int) (rate * 0.8));
+        click.clear();
+
+        for (int ch = 0; ch < click.getNumChannels(); ++ch)
+            for (int i = 0; i < 32; ++i)
+                click.setSample (ch, i, 0.5f);
+
+        runAudio (*device, 0.6);   // (let the old echoes die away)
+        const auto heard = device->process (click);
+        int first = -1, second = -1;
+
+        for (int i = 0; i < heard.getNumSamples(); ++i)
+        {
+            if (std::abs (heard.getSample (0, i)) < 0.05f)
+                continue;
+
+            if (first < 0)
+                first = i;
+            else if (i > first + (int) (rate * 0.1))
+            {
+                second = i;
+                break;
+            }
+        }
+
+        const auto gapMs = first >= 0 && second >= 0 ? (second - first) * 1000.0 / rate : 0.0;
+        std::cout << "    (the echo comes " << gapMs << " ms after the click)\n";
+        check (std::abs (gapMs - 500.0) < 2.0, "and the echo comes back 500 ms later");
+
+        engine.undo();
+        check (effects.getEffectParameters (t, echo)[(size_t) time].valueText == "150 ms", "undo puts it back");
+        removeAll (t);
+        tracks.inputs().setMonitoring (t, false);
+    }
+
+    std::cout << "Undo and saving\n";
+    {
+        PluginId chorus = 0, echo = 0, phaser = 0;
+        checkUndoRoundTrip (engine, "Add Effect", [&] { chorus = effects.addEffect (t, "chorus"); });
+        echo = effects.addEffect (t, "delay");
+        effects.addEffect (t, "reverb");
+        pumpMessages();
+
+        checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t, echo, false); });
+        checkUndoRoundTrip (engine, "Move Effect", [&] { effects.moveEffect (t, echo, 0); });
+        checkUndoRoundTrip (engine, "Replace Effect", [&] { phaser = effects.replaceEffect (t, chorus, "phaser"); });
+        checkUndoRoundTrip (engine, "Orbit Phaser Rate", [&]
+        {
+            engine.beginUndoStep ("Orbit Phaser Rate");
+            effects.setEffectParameter (t, phaser, indexOfParameter (t, phaser, "rate"), 0.8f);
+        });
+        checkUndoRoundTrip (engine, "Tape Echo Time", [&]
+        {
+            engine.beginUndoStep ("Tape Echo Time");
+            effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "length"), 0.25f);
+        });
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Pedals"));
+        t = tracks.getTracks().back().id;
+        auto chain = effects.getEffectChain (t);
+        check (typesOn (t) == "delay,phaser,reverb" && chain.size() == 3 && ! chain[0].enabled && chain[1].enabled,
+               "the pedals, their order and their on/off state survive save and reopen");
+
+        if (chain.size() == 3)
+            check (effects.getEffectParameters (t, chain[0].id)[(size_t) indexOfParameter (t, chain[0].id, "length")].valueText == "515 ms",
+                   "and so do their knobs");
+    }
+
+    std::cout << "Older sessions keep their order\n";
+    {
+        // A session from before pedals came first: a chorus after a reverb
+        // (put there behind the controller's back).
+        removeAll (t);
+        effects.addEffect (t, "reverb");
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes, below.)
+            auto* edit = TestAudioDevice::getEditOf (engine);
+            auto* track = detail::findTrack (edit, t);
+            auto chorus = edit->getPluginCache().createNewPlugin (tracktion::ChorusPlugin::xmlTypeName, {});
+            auto* reverb = track->pluginList.findFirstPluginOfType<tracktion::ReverbPlugin>();
+            track->pluginList.insertPlugin (chorus, track->pluginList.indexOf (reverb) + 1, nullptr);
+        }
+
+        check (typesOn (t) == "reverb,chorus", "(made one)");
+
+        const auto session = dir.getChildFile ("Old Order");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        t = tracks.getTracks().back().id;
+        check (typesOn (t) == "reverb,chorus", "it opens with its effects in the order they were saved in");
+
+        // Moving its chorus on the pedalboard brings it to the front.
+        effects.moveEffect (t, effects.getEffectChain (t)[1].id, 0);
+        check (typesOn (t) == "chorus,reverb", "moving its pedal puts it with the pedals");
+    }
+
+    device.reset();
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -6599,6 +6851,9 @@ int main (int argc, char* argv[])
 
     if (runs ("tuner"))
         runTunerSection();
+
+    if (runs ("pedals"))
+        runPedalsSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

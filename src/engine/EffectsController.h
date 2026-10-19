@@ -59,10 +59,17 @@ public:
     /** The effects that can be added to a track: the built-in ones, then
         third-party ones (type "plugin:<id>", grouped by maker). */
     std::vector<EffectType> getAvailableEffects() const;
-    static constexpr int maxEffectsPerTrack = 8;
+    static constexpr int maxEffectsPerTrack = 12;
 
     /** Opens a third-party plug-in's own window (instrument or effect). */
     void showPluginWindow (TrackId, PluginId);
+
+    // Pedals (effects with a PedalStyle, see PedalStyles.h) stay at the
+    // start of an audio track's chain, before its other effects: adding,
+    // moving and replacing keep them there, whatever position is asked
+    // for. An effect added at the end (-1) goes after the last pedal if
+    // it's a pedal. Instrument tracks and the master keep any order. Older
+    // sessions open in the order they were saved in.
 
     /** Adds an effect at a position in the chain (-1 = at the end). Returns 0 if it couldn't. */
     PluginId addEffect (TrackId, const juce::String& type, int position = -1);

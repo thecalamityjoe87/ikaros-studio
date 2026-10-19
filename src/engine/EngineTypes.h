@@ -391,6 +391,8 @@ struct ParameterInfo
     juce::String name;
     float value = 0.0f;            // normalised 0..1
     juce::String valueText;        // human readable, with units
+    juce::String id;               // stable: the parameter's ID, or the state property of a
+                                   // setting kept as one (see PedalStyle::knobs)
 };
 
 // An audio input the user can record from, e.g. "Input 1".

@@ -152,6 +152,9 @@ namespace
         p.tintLight           = hex (0xffffffff);
         p.tintDark            = hex (0xff000000);
 
+        p.pedalboardFloor     = hex (0xff0e1013);
+        p.pedalboardCable     = hex (0xff050608);
+
         p.scrim               = juce::Colours::black.withAlpha (0.55f);
         p.scrimStrong         = juce::Colours::black.withAlpha (0.6f);    // session chooser
         p.scrimLight          = juce::Colours::black.withAlpha (0.45f);   // "Saving…" overlay
@@ -254,6 +257,8 @@ namespace
         p.popupBg             = hex (0xffffffff);
 
         p.wellBg              = hex (0xffd3d7de);
+        p.pedalboardFloor     = hex (0xffd3d8e0);
+        p.pedalboardCable     = hex (0xff959ca7);
         p.cardBg              = hex (0xffffffff);
         p.raised              = hex (0xffffffff);
         p.controlFill         = hex (0xffe2e5ea);
