@@ -4,6 +4,7 @@
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Theme.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/CachedShadow.h"
 
 namespace ikaros
 {
@@ -66,9 +67,7 @@ public:
         // edge, so it reads as a dome. Pressed, it sinks a little.
         const auto capRadius = ringRadius * (down ? 0.6f : 0.64f);
         const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
-        juce::Path capPath;
-        capPath.addEllipse (cap);
-        juce::DropShadow (juce::Colours::black.withAlpha (0.45f), 5, { 0, 2 }).drawForPath (g, capPath);
+        capShadow.drawForEllipse (g, juce::DropShadow (juce::Colours::black.withAlpha (0.45f), 5, { 0, 2 }), cap);
 
         juce::ColourGradient metal (juce::Colours::white, cap.getX() + cap.getWidth() * 0.38f, cap.getY() + cap.getHeight() * 0.3f,
                                     juce::Colour (0xff7d838d), cap.getRight(), cap.getBottom(), true);
@@ -91,6 +90,7 @@ public:
 
 private:
     PedalView& pedal;
+    CachedShadow capShadow;   // blurred once, not on every repaint
 };
 
 //==============================================================================
@@ -205,11 +205,10 @@ void PedalView::knobChanged (int index)
 }
 
 //==============================================================================
-void PedalView::drawShadow (juce::Graphics& g, const PedalView& pedal)
+void PedalView::drawShadow (juce::Graphics& g, const PedalView& pedal, CachedShadow& cache)
 {
-    juce::Path body;
-    body.addRoundedRectangle (pedal.getBounds().toFloat(), size::radiusCard);
-    juce::DropShadow (juce::Colours::black.withAlpha (0.38f), 14, { 0, 6 }).drawForPath (g, body);
+    cache.drawForRoundedRectangle (g, juce::DropShadow (juce::Colours::black.withAlpha (0.38f), 14, { 0, 6 }),
+                                   pedal.getBounds().toFloat(), size::radiusCard);
 }
 
 juce::Image PedalView::createPreview (AudioEngine& engine, const PedalStyle& style, float scale)

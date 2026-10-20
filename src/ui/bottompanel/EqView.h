@@ -49,6 +49,9 @@ private:
     TrackId target = 0;
     tokens::Family family = tokens::Family::master;   // the curve's colour, looked up when painting
     EqSettings settings;
+    TrackId shownTarget = 0;                                // what refresh() last drew, so it can skip
+    tokens::Family shownFamily = tokens::Family::master;    // redrawing when nothing changed
+    bool shownOnce = false;
     std::vector<float> curve;      // dB at each column of the graph
 
     IconButton powerButton { "EQ on/off", Icon::power, "On" };

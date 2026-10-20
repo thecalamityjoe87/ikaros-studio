@@ -36,6 +36,7 @@ private:
     TrackId trackId = 0;
     bool isAudio = false;
     std::vector<AudioInput> inputs;
+    juce::String shownState;   // what the section shows now (see refresh)
 
     juce::ComboBox inputBox;
     IconButton monitorButton { "Monitoring", std::nullopt, "Monitoring" };

@@ -252,6 +252,26 @@ void PluginChainView::refresh()
     instrument = tracks.effects().getInstrument (trackId);
     chain = tracks.effects().getEffectChain (trackId);
 
+    // This is called on every change in the session (many a second while
+    // automation plays): leave the rows alone, and don't redraw, unless
+    // something they show changed.
+    const auto describe = [] (const PluginSlot& s)
+    {
+        return juce::String ((juce::int64) s.id) + "|" + s.type + "|" + s.name + "|" + (s.enabled ? "on" : "off")
+               + (s.isThirdParty ? "|3p" : "") + (s.missing ? "|missing" : "") + "|" + s.missingPackId + "|" + s.missingPackName + "\n";
+    };
+
+    auto state = juce::String ((juce::int64) trackId) + "|" + juce::String ((int) family) + (masterMode ? "|master\n" : "\n")
+                 + (instrument.has_value() ? describe (*instrument) : juce::String ("none\n"));
+
+    for (auto& s : chain)
+        state += describe (s);
+
+    if (state == shownState)
+        return;
+
+    shownState = state;
+
     // Keep the same row components where possible (so keyboard focus survives).
     while (rows.size() > (int) chain.size())
         rows.removeLast();

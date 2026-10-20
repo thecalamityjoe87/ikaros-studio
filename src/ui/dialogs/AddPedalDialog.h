@@ -50,6 +50,15 @@ private:
     IconButton cancelButton { "Cancel", std::nullopt, "Cancel" };
     juce::Rectangle<int> panel;
 
+    // A picture of the window behind the dialog, taken as it opens (see
+    // show). Drawn under the dimming, it lets the dialog be opaque, so
+    // scrolling the list doesn't redraw the whole app behind it.
+    juce::Image backdrop;
+    juce::Rectangle<int> backdropArea;   // the parent area it shows; anywhere else, the app shows through
+    juce::Image background;              // the backdrop with the panel drawn on it (see resized)
+
+    void paintPanel (juce::Graphics&);   // the shadow, the panel and its title
+
     void choose (const juce::String& type);
     void close();
     juce::Rectangle<int> layOutTiles();   // positions the tiles and headings; returns the size they need

@@ -4,6 +4,7 @@
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
+#include "ui/widgets/CachedShadow.h"
 
 namespace ikaros
 {
@@ -41,6 +42,11 @@ public:
         setTooltip (style.name + " (" + style.typeLabel + ")");
         setWantsKeyboardFocus (true);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
+
+        // Keep what paintButton drew (the blurred shadow, the picture) in an
+        // image, so scrolling the list just copies it instead of drawing
+        // every pedal again. A hover or focus change draws it once more.
+        setBufferedToImage (true);
     }
 
     const PedalStyle& style;   // a row of the static table, so it outlives us
@@ -53,9 +59,9 @@ public:
         if (over && ! down)
             pedal = pedal.translated (0.0f, -2.0f);
 
-        juce::Path body;
-        body.addRoundedRectangle (pedal, size::radiusCard * previewScale * 2.0f);
-        juce::DropShadow (juce::Colours::black.withAlpha (over ? 0.45f : 0.3f), over ? 8 : 5, { 0, over ? 4 : 2 }).drawForPath (g, body);
+        // One cached shadow for each look, so hovering doesn't blur again.
+        const juce::DropShadow shadow (juce::Colours::black.withAlpha (over ? 0.45f : 0.3f), over ? 8 : 5, { 0, over ? 4 : 2 });
+        (over ? hoverShadow : restingShadow).drawForRoundedRectangle (g, shadow, pedal, size::radiusCard * previewScale * 2.0f);
 
         // The picture was drawn at the screen's scale, so this is pixel for
         // pixel. drawImage uses the current colour's opacity, which the
@@ -109,6 +115,7 @@ public:
 
 private:
     juce::Image picture;
+    CachedShadow restingShadow, hoverShadow;
 };
 
 //==============================================================================
@@ -116,6 +123,23 @@ void AddPedalDialog::show (juce::Component& parent, AudioEngine& engine, std::fu
 {
     // Owned by its parent from here on; it deletes itself in close().
     auto* dialog = new AddPedalDialog (engine, std::move (onChosen));
+
+    // The picture of what's behind, before the dialog covers it, at the
+    // screen's scale so it stays sharp.
+    float screenScale = 1.0f;
+
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        screenScale = (float) display->scale;
+
+    dialog->backdropArea = parent.getLocalBounds();
+    dialog->backdrop = parent.createComponentSnapshot (dialog->backdropArea, true, screenScale);
+
+    {
+        // Dimmed once here, not on every paint.
+        juce::Graphics g (dialog->backdrop);
+        g.fillAll (theme().scrim);
+    }
+
     parent.addAndMakeVisible (dialog);
     dialog->setBounds (parent.getLocalBounds());
 
@@ -145,6 +169,7 @@ AddPedalDialog::AddPedalDialog (AudioEngine& engine, std::function<void (const j
         content.addAndMakeVisible (tile);
     }
 
+    content.setOpaque (true);
     viewport.setViewedComponent (&content, false);   // false: we own `content`, not the viewport
     viewport.setScrollBarsShown (true, true);        // both ways, when the list doesn't fit
     addAndMakeVisible (viewport);
@@ -215,6 +240,11 @@ juce::Rectangle<int> AddPedalDialog::layOutTiles()
 
 void AddPedalDialog::resized()
 {
+    // Opaque while the picture covers the dialog. After the window is
+    // resized it doesn't fit any more: the app shows through again (and
+    // redraws behind the dialog, as it would without the picture).
+    setOpaque (backdrop.isValid() && getBounds() == backdropArea);
+
     // Wide enough for the longest row and the up-and-down scroll bar, so
     // it only scrolls sideways in a narrow window; at most maxPanelHeight
     // tall, and the list scrolls up and down inside it.
@@ -232,6 +262,17 @@ void AddPedalDialog::resized()
     viewport.setBounds (r);
     content.setSize (listSize.getWidth(), listSize.getHeight());
     cancelButton.setBounds (footer.removeFromRight (100));
+
+    // Opaque: draw the dimmed app, the shadow and the panel into one
+    // picture now, so a paint (e.g. under the scroll bar while the list
+    // scrolls) is a single copy. The picture is at the screen's scale.
+    if (isOpaque())
+    {
+        background = backdrop.createCopy();
+        juce::Graphics g (background);
+        g.addTransform (juce::AffineTransform::scale ((float) background.getWidth() / (float) juce::jmax (1, getWidth())));
+        paintPanel (g);
+    }
 }
 
 bool AddPedalDialog::keyPressed (const juce::KeyPress& key)
@@ -302,9 +343,19 @@ void AddPedalDialog::mouseDown (const juce::MouseEvent& e)
 
 void AddPedalDialog::paint (juce::Graphics& g)
 {
-    // Dim the app behind the dialog.
-    g.fillAll (theme().scrim);
+    // Opaque: the picture of everything below (see resized).
+    if (isOpaque())
+    {
+        g.drawImage (background, getLocalBounds().toFloat());
+        return;
+    }
 
+    g.fillAll (theme().scrim);   // dim the app behind the dialog
+    paintPanel (g);
+}
+
+void AddPedalDialog::paintPanel (juce::Graphics& g)
+{
     theme().dialogShadow.drawForRectangle (g, panel);
     g.setColour (theme().dialogBg);
     g.fillRoundedRectangle (panel.toFloat(), size::radiusPill);
@@ -323,6 +374,10 @@ void AddPedalDialog::paint (juce::Graphics& g)
 
 void AddPedalDialog::Content::paint (juce::Graphics& g)
 {
+    // Opaque (see the constructor), in the panel's colour: scrolling then
+    // only redraws the list, not the dialog and the picture behind it.
+    g.fillAll (theme().dialogBg);
+
     // Each group's heading: its name in small capitals, and how many pedals.
     for (auto& heading : headings)
     {

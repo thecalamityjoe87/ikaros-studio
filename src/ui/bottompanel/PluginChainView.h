@@ -60,6 +60,7 @@ private:
     bool masterMode = false;
     std::optional<PluginSlot> instrument;
     std::vector<PluginSlot> chain;
+    juce::String shownState;   // what the rows show now (see refresh)
     tokens::Family family = tokens::Family::master;   // the target track's (colour looked up when painting)
 
     juce::OwnedArray<EffectRow> rows;

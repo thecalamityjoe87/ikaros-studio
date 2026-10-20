@@ -2,6 +2,7 @@
 
 #include "engine/AudioEngine.h"
 #include "engine/PedalStyles.h"
+#include "ui/widgets/CachedShadow.h"
 
 namespace ikaros
 {
@@ -57,8 +58,10 @@ public:
     std::function<void (PedalView&)> onRemoveRequested;
 
     /** Draws a pedal's drop shadow. Call it from the parent's paint(): the
-        shadow falls outside the pedal's own bounds. */
-    static void drawShadow (juce::Graphics&, const PedalView&);
+        shadow falls outside the pedal's own bounds. `cache` keeps the blurred
+        shadow between paints; every pedal is the same size, so the parent
+        needs only one. */
+    static void drawShadow (juce::Graphics&, const PedalView&, CachedShadow& cache);
 
     /** A picture of a pedal, switched on and with its knobs at noon, drawn
         `scale` times its size (e.g. 0.5 at half size, times the screen's

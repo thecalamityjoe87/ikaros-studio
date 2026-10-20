@@ -43,16 +43,17 @@ void ArrangementView::Lane::focusGained (FocusChangeType cause)
 
 void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
 {
-    // The lane's own drawing (the selected tint) only changes with the
-    // selection. (setAlpha repaints by itself, and only when it changes.)
-    if (isSelected != selected)
+    // Quieter when muted; fainter still under automation, so the curve stands out.
+    const float newFade = (t.silencedBySolo || t.muted ? 0.4f : 1.0f) * (t.automationShown ? 0.45f : 1.0f);
+
+    // The lane's own drawing only changes with the selection and the fade.
+    if (isSelected != selected || newFade != fade)
         repaint();
 
     family = colour::familyOf (t);
     selected = isSelected;
+    fade = newFade;
     isAudio = t.kind == TrackKind::audio;
-    // Quieter when muted; fainter still under automation, so the curve stands out.
-    setAlpha ((t.silencedBySolo || t.muted ? 0.4f : 1.0f) * (t.automationShown ? 0.45f : 1.0f));
     setTooltip (isAudio ? "Drop an audio file here, or press R to record"
                         : "Double-click to add a 4-bar chord region");
 }
@@ -154,23 +155,31 @@ void ArrangementView::Lane::setRecordingRange (double startBeat, double endBeat)
 
 void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
 {
-    if (recordEnd <= recordStart)
-        return;
+    if (recordEnd > recordStart)
+    {
+        // A red region that grows with the playhead while recording.
+        auto& geo = owner.geometry;
+        auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
+        auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
 
-    // A red region that grows with the playhead while recording.
-    auto& geo = owner.geometry;
-    auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
-    auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
+        g.setColour (theme().arrangement.record.withAlpha (0.25f));
+        g.fillRoundedRectangle (r, size::radius);
+        g.setColour (theme().arrangement.record);
+        g.drawRoundedRectangle (r, size::radius, 1.5f);
 
-    g.setColour (theme().arrangement.record.withAlpha (0.25f));
-    g.fillRoundedRectangle (r, size::radius);
-    g.setColour (theme().arrangement.record);
-    g.drawRoundedRectangle (r, size::radius, 1.5f);
+        g.setFont (fonts::uiBold (textSize::xs));
+        g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
 
-    g.setFont (fonts::uiBold (textSize::xs));
-    g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
+        paintLiveWaveform (g, r.withTrimmedTop (18.0f).reduced (0.0f, 4.0f));
+    }
 
-    paintLiveWaveform (g, r.withTrimmedTop (18.0f).reduced (0.0f, 4.0f));
+    // Faded: a veil of the background the lane sits on. That looks just
+    // like setAlpha would (the lanes sit on a plain laneBg), but setAlpha
+    // draws the lane and its regions into a separate image and blends it
+    // back on every repaint, which was most of the drawing time with
+    // automation shown.
+    if (fade < 1.0f)
+        g.fillAll (theme().arrangement.laneBg.withAlpha (1.0f - fade));
 }
 
 void ArrangementView::Lane::paintLiveWaveform (juce::Graphics& g, juce::Rectangle<float> area)

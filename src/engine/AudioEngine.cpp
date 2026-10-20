@@ -294,6 +294,7 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     ~Impl() override
     {
         stopTimer();
+        heldChanges.stopTimer();
         engine.getDeviceManager().removeChangeListener (this);
         cancelPendingUpdate();
         detachMasterMeter();
@@ -763,16 +764,56 @@ public:
 private:
     juce::ValueTree observedState;
 
+    // While the song plays, automation moves its settings, and Tracktion
+    // writes every new value back into the session tree: a "knob turned" for
+    // each automated setting on every audio block, hundreds a second. Each
+    // one makes the UI re-read its tracks and the bottom panel, which kept
+    // the message thread too busy to draw smoothly or take clicks. So while
+    // playing, changes that only touch knobs reach the listeners at most
+    // ~30 times a second (as often as the UI's own timer runs); anything
+    // else still goes out straight away, with them.
+    static constexpr juce::uint32 mixerOnlyIntervalMs = 33;
+    juce::uint32 lastDelivery = 0;
+
+    static bool isMixerOnly (const ModelChanges& c)
+    {
+        return c.mixer && ! (c.tracks || c.regions || c.notes || c.transport || c.automation || c.session)
+                && c.changedRegions.empty();
+    }
+
+    // Sends the held-back knob changes once the interval is up.
+    struct HeldChanges  : public juce::Timer
+    {
+        explicit HeldChanges (Impl& i) : impl (i) {}
+        void timerCallback() override   { stopTimer(); impl.triggerAsyncUpdate(); }
+        Impl& impl;
+    };
+
+    HeldChanges heldChanges { *this };
+
     void handleAsyncUpdate() override
     {
         ModelChanges changes;
+        const auto now = juce::Time::getMillisecondCounter();
 
         {
             const juce::ScopedLock sl (pendingLock);
+
+            if (isMixerOnly (pending) && edit != nullptr && edit->getTransport().isPlaying()
+                 && now - lastDelivery < mixerOnlyIntervalMs)
+            {
+                if (! heldChanges.isTimerRunning())
+                    heldChanges.startTimer ((int) (mixerOnlyIntervalMs - (now - lastDelivery)));
+
+                return;
+            }
+
             std::swap (changes, pending);
         }
 
-        lastModelChange = juce::Time::getMillisecondCounter();
+        heldChanges.stopTimer();
+        lastDelivery = now;
+        lastModelChange = now;
 
         // Spelled out in full: inside Impl, plain "Listener" would mean the
         // juce::ValueTree::Listener we inherit from.

@@ -181,6 +181,7 @@ private:
     juce::Viewport effectViewport;
 
     std::optional<TrackInfo> track;
+    juce::String shownTitle;   // what the title shows now (see refreshTrack)
     std::optional<RegionInfo> editorRegion;   // the region the Editor shows
     bool editingAudio = false;   // the Editor tab shows the audio editor (else the piano roll)
     juce::Rectangle<int> titleArea;       // in the header: the selected track's dot and name

@@ -314,6 +314,18 @@ juce::StringArray AutomationEditor::getAutomatedTargets (TrackId trackId) const
     if (t == nullptr)
         return result;
 
+    // This runs for every track each time the UI re-reads them (many times
+    // a second while automation plays), and looking up each target is slow:
+    // first see whether anything on the track has automation at all.
+    bool anyPoints = false;
+
+    for (auto plugin : t->pluginList)
+        for (auto* param : plugin->getAutomatableParameters())
+            anyPoints = anyPoints || param->hasAutomationPoints();
+
+    if (! anyPoints)
+        return result;
+
     // Only the mixer's and the Sound tab's: those are the controls the app
     // draws itself (a plug-in's own window moves its own knobs).
     juce::StringArray ids { automationTargets::volume, automationTargets::pan };

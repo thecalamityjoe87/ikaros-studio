@@ -29,7 +29,15 @@ ArrangementView::AutomationLane::AutomationLane (ArrangementView& o, TrackId id)
 
 void ArrangementView::AutomationLane::update (const TrackInfo& t)
 {
-    setAlpha (t.silencedBySolo || t.muted ? 0.4f : 1.0f);
+    // Quieter when muted. (The colours fade in paint(): setAlpha would draw
+    // the lane into a separate image and blend it back on every repaint.)
+    const float newOpacity = t.silencedBySolo || t.muted ? 0.4f : 1.0f;
+
+    if (newOpacity != opacity)
+    {
+        opacity = newOpacity;
+        repaint();
+    }
 
     // A drag in progress keeps its own points (the engine's are a step behind).
     if (gesture != Gesture::none)
@@ -107,24 +115,32 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
     // Each kind of setting has its own colour (volume blue, pan green...).
     const float width = (float) getWidth();
     const auto lineColour = getAutomationColour (targetId);
+    const auto faded = [this] (juce::Colour c) { return c.withMultipliedAlpha (opacity); };
+
+    // Only the part that's being repainted (often just the strips the
+    // playhead moved across) is drawn: building and stroking the whole line
+    // on every repaint was what made playback stutter with automation shown.
+    const auto clip = g.getClipBounds().toFloat().expanded (pointRadius * 2.0f, 0.0f);
 
     if (points.empty())
     {
         // Not automated: a dashed line at the setting's value.
+        // (It starts on a whole dash, so the dashes stay put as it's redrawn.)
         const float y = valueToY (currentValue);
+        const float dashLength = 6.0f + 4.0f;
         juce::Path line;
-        line.startNewSubPath (0.0f, y);
-        line.lineTo (width, y);
+        line.startNewSubPath (std::floor (juce::jmax (0.0f, clip.getX()) / dashLength) * dashLength, y);
+        line.lineTo (juce::jmin (width, clip.getRight()), y);
 
         juce::Path dashed;
         const float dashes[] { 6.0f, 4.0f };
         juce::PathStrokeType (1.5f).createDashedStroke (dashed, line, dashes, 2);
-        g.setColour (lineColour.withAlpha (0.8f));
+        g.setColour (faded (lineColour.withAlpha (0.8f)));
         g.fillPath (dashed);
 
         if (editable)
         {
-            g.setColour (theme().arrangement.textSecondary);
+            g.setColour (faded (theme().arrangement.textSecondary));
             g.setFont (fonts::ui (textSize::xs));
             g.drawText ("Click to add a point", juce::Rectangle<float> (8.0f, y < 24.0f ? y + 4.0f : y - 18.0f, 200.0f, 14.0f),
                         juce::Justification::centredLeft, false);
@@ -132,44 +148,58 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
     }
     else
     {
-        // The curve: flat before the first point and after the last, as it plays.
+        // The curve: flat before the first point and after the last, as it
+        // plays. Only the points in the repainted part, plus one either side
+        // so the line runs on to the edges.
+        const auto byBeat = [] (const AutomationPoint& p, double beat) { return p.beat < beat; };
+        const auto firstBeat = owner.geometry.xToBeat (clip.getX());
+        const auto lastBeat = owner.geometry.xToBeat (clip.getRight());
+        auto first = std::lower_bound (points.begin(), points.end(), firstBeat, byBeat);
+        auto last = std::lower_bound (first, points.end(), lastBeat, byBeat);
+
+        if (first != points.begin())
+            --first;
+
+        if (last != points.end())
+            ++last;
+
         juce::Path curve;
-        curve.startNewSubPath (0.0f, valueToY (points.front().value));
+        curve.startNewSubPath (0.0f, valueToY (first->value));
 
-        for (auto& p : points)
-            curve.lineTo (pointPosition (p));
+        for (auto p = first; p != last; ++p)
+            curve.lineTo (pointPosition (*p));
 
-        curve.lineTo (width, valueToY (points.back().value));
+        curve.lineTo (width, valueToY (std::prev (last)->value));
 
         juce::Path fill (curve);
         fill.lineTo (width, (float) getHeight());
         fill.lineTo (0.0f, (float) getHeight());
         fill.closeSubPath();
-        g.setColour (lineColour.withAlpha (editable ? 0.12f : 0.06f));
+        g.setColour (faded (lineColour.withAlpha (editable ? 0.12f : 0.06f)));
         g.fillPath (fill);
 
-        g.setColour (editable ? lineColour : lineColour.withAlpha (0.5f));
+        g.setColour (faded (editable ? lineColour : lineColour.withAlpha (0.5f)));
         g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         for (size_t i = 0; i < points.size(); ++i)
         {
             const auto pos = pointPosition (points[i]);
 
-            if (pos.x < -hitRadius || pos.x > width + hitRadius)
+            if (pos.x < clip.getX() - hitRadius || pos.x > clip.getRight() + hitRadius)
                 continue;
 
             const auto dot = juce::Rectangle<float> (pointRadius * 2.0f, pointRadius * 2.0f).withCentre (pos);
 
             if (selected[i])
             {
-                g.setColour (theme().arrangement.text);
+                g.setColour (faded (theme().arrangement.text));
                 g.fillEllipse (dot.expanded (1.0f));
-                g.setColour (lineColour);
+                g.setColour (faded (lineColour));
                 g.drawEllipse (dot.expanded (1.0f), 2.0f);
             }
             else
             {
-                g.setColour (editable ? lineColour : lineColour.withAlpha (0.5f));
+                g.setColour (faded (editable ? lineColour : lineColour.withAlpha (0.5f)));
                 g.fillEllipse (dot);
             }
         }
@@ -182,18 +212,18 @@ void ArrangementView::AutomationLane::paint (juce::Graphics& g)
             const auto text = owner.engine.getTracks().automation().describeValue (trackId, targetId, p.value);
             g.setFont (fonts::mono (textSize::xs));
             auto label = juce::Rectangle<float> (90.0f, 18.0f).withCentre (pos).translated (0.0f, pos.y > 28.0f ? -16.0f : 16.0f);
-            g.setColour (theme().arrangement.bubble);
+            g.setColour (faded (theme().arrangement.bubble));
             g.fillRoundedRectangle (label, size::radiusSmall);
-            g.setColour (theme().arrangement.text);
+            g.setColour (faded (theme().arrangement.text));
             g.drawText (text, label, juce::Justification::centred, false);
         }
     }
 
     if (! selectBox.isEmpty())
     {
-        g.setColour (theme().arrangement.highlight.withAlpha (0.08f));
+        g.setColour (faded (theme().arrangement.highlight.withAlpha (0.08f)));
         g.fillRect (selectBox);
-        g.setColour (theme().arrangement.highlight);
+        g.setColour (faded (theme().arrangement.highlight));
         g.drawRect (selectBox, 1.0f);
     }
 }

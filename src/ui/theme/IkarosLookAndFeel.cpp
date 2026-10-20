@@ -137,10 +137,14 @@ void IkarosLookAndFeel::styleInlineEditor (juce::TextEditor& editor)
 void IkarosLookAndFeel::setFamilyColour (juce::Slider& s, Family f, FamilyShade shade)
 {
     // getProperties() is a free-form NamedValueSet every component carries.
-    // A juce::var holds an int, not our enums, hence the casts.
-    s.getProperties().set ("family", static_cast<int> (f));
-    s.getProperties().set ("familyShade", static_cast<int> (shade));
-    s.repaint();
+    // A juce::var holds an int, not our enums, hence the casts. set() says
+    // whether the value changed: views call this on every refresh (many a
+    // second while automation plays), so only repaint when it did.
+    const bool familyChanged = s.getProperties().set ("family", static_cast<int> (f));
+    const bool shadeChanged = s.getProperties().set ("familyShade", static_cast<int> (shade));
+
+    if (familyChanged || shadeChanged)
+        s.repaint();
 }
 
 juce::Colour IkarosLookAndFeel::valueColourFor (juce::Slider& s, int colourId)

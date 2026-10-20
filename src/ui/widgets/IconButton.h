@@ -47,7 +47,7 @@ public:
     void setIconSize (float s)                 { iconSize = s; repaint(); }
     void setFont (juce::Font f)                { font = f; repaint(); }
     /** Overrides the icon colour (e.g. the red record dot). */
-    void setIconColour (std::optional<juce::Colour> c) { iconColour = c; repaint(); }
+    void setIconColour (std::optional<juce::Colour> c) { if (c != iconColour) { iconColour = c; repaint(); } }
 
     /** Preset colour schemes from the design. */
     static Colours raisedColours();     // grey raised button, amber when toggled on (active toggles only)

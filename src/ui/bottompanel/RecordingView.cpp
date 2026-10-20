@@ -47,6 +47,29 @@ void RecordingView::refresh()
     auto track = tracks.getTrack (trackId);
     isAudio = track.has_value() && track->kind == TrackKind::audio;
 
+    // This is called on every change in the session (many a second while
+    // automation plays): only rebuild the input list and redraw when
+    // something here changed.
+    RecordingSettings settings;
+    std::vector<AudioInput> newInputs;
+
+    if (isAudio)
+    {
+        settings = tracks.inputs().getRecordingSettings (trackId);
+        newInputs = tracks.inputs().getAudioInputs();
+    }
+
+    auto state = juce::String ((juce::int64) trackId) + (isAudio ? "|audio|" : "|") + settings.inputId
+                 + (settings.monitoring ? "|monitoring" : "|");
+
+    for (auto& input : newInputs)
+        state += "\n" + input.id + "|" + input.name;
+
+    if (state == shownState)
+        return;
+
+    shownState = state;
+
     inputBox.setVisible (isAudio);
     monitorButton.setVisible (isAudio);
     meter.setVisible (isAudio);
@@ -54,8 +77,7 @@ void RecordingView::refresh()
 
     if (isAudio)
     {
-        auto settings = tracks.inputs().getRecordingSettings (trackId);
-        inputs = tracks.inputs().getAudioInputs();
+        inputs = std::move (newInputs);
 
         inputBox.clear (juce::dontSendNotification);
 

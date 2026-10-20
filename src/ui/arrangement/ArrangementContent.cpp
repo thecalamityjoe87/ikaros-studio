@@ -80,7 +80,14 @@ void ArrangementView::Content::updateAutomation (const TrackInfo& t)
     if (t.automationShown)
     {
         lane->setBounds (lanes[t.id]->getBounds());
-        lane->toFront (false);   // above the track's lane (false: without taking focus)
+
+        // Above the track's lane (false: without taking focus). Only when it
+        // isn't already: toFront repaints the whole lane even when nothing
+        // moves, and this runs on every change the engine reports (many a
+        // second while automation plays), which redrew every lane each time.
+        if (getIndexOfChildComponent (lane.get()) < getIndexOfChildComponent (lanes[t.id].get()))
+            lane->toFront (false);
+
         lane->update (t);
     }
 

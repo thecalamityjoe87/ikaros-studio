@@ -95,6 +95,18 @@ public:
             rangePending = ! isAudioTrack;
         }
 
+        // What paint() draws, before and after: it's only repainted when that
+        // changes, not on every refresh (many a second while automation
+        // plays). The knobs repaint themselves.
+        const auto look = [this]
+        {
+            return juce::String ((int) isAudioTrack) + (hasKnobs ? "k" : "-") + juce::String (shownKnobs) + "|" + soundName
+                   + "|" + (instrument.has_value() ? instrument->name + instrument->missingPackId + instrument->missingPackName
+                                                     + (instrument->missing ? "m" : "") + (instrument->isThirdParty ? "t" : "")
+                                                   : juce::String ("none"));
+        };
+        const auto lookBefore = look();
+
         auto controls = tc.effects().getSoundControls (id);
         automated = track.has_value() ? track->automated : juce::StringArray();
         instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
@@ -123,7 +135,9 @@ public:
         }
 
         resized();
-        repaint();
+
+        if (look() != lookBefore)
+            repaint();
     }
 
     // ~30 Hz. A newly chosen sampled instrument loads in the background (big ones take a while, and
@@ -807,7 +821,17 @@ void BottomPanel::refreshTrack()
     if (mixer.isVisible())
         mixer.refresh();
 
-    repaint (titleArea);
+    // The title (see paint), redrawn only when it changes: this runs on
+    // every knob change (many a second while automation plays).
+    const auto title = showsMaster() ? juce::String ("master")
+                     : track.has_value() ? track->name + "|" + track->soundName + "|" + colour::forTrack (*track).toString()
+                                         : juce::String();
+
+    if (title != shownTitle)
+    {
+        shownTitle = title;
+        repaint (titleArea);
+    }
 }
 
 void BottomPanel::refreshEditor()

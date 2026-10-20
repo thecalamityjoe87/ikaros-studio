@@ -26,8 +26,10 @@ IconButton::IconButton (const juce::String& accessibleName, std::optional<Icon> 
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
 
-void IconButton::setIcon (std::optional<Icon> i)    { icon = i; repaint(); }
-void IconButton::setText (const juce::String& t)    { text = t; repaint(); }
+// Views set these on every refresh (many a second while automation plays),
+// so they only repaint when something changed.
+void IconButton::setIcon (std::optional<Icon> i)    { if (i != icon) { icon = i; repaint(); } }
+void IconButton::setText (const juce::String& t)    { if (t != text) { text = t; repaint(); } }
 void IconButton::setColours (ColourScheme c)        { colourScheme = std::move (c); repaint(); }
 
 IconButton::Colours IconButton::raisedColours()

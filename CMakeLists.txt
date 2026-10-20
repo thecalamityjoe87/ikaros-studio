@@ -325,6 +325,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
     src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
+    src/ui/widgets/CachedShadow.h           src/ui/widgets/CachedShadow.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
     src/ui/widgets/FolderField.h            src/ui/widgets/FolderField.cpp

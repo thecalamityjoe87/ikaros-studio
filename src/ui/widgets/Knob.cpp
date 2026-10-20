@@ -34,6 +34,11 @@ Knob::Knob (const juce::String& name)
 
 void Knob::setName (const juce::String& name)
 {
+    // The Sound tab sets every knob's name on each refresh (many a second
+    // while automation plays): only repaint when it's a new one.
+    if (name == label && name == getName())
+        return;
+
     juce::Component::setName (name);
     label = name;
     slider.setTitle (name);

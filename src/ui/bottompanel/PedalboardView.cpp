@@ -108,6 +108,21 @@ public:
         auto& effects = owner.engine.getTracks().effects();
         const bool sameTrack = newTrack == trackId;
         trackId = newTrack;
+
+        // Which pedals, in which order: the board (its cable and the
+        // shadows) only needs redrawing when that changes, not on every knob
+        // change (many a second while automation plays).
+        const auto pedalIds = [this]
+        {
+            std::vector<PluginId> ids;
+
+            for (auto& s : chain)
+                ids.push_back (s.id);
+
+            return ids;
+        };
+        const auto pedalsBefore = pedalIds();
+
         chain = trackId != 0 ? effects.getEffectChain (trackId) : std::vector<PluginSlot>();
         chainFull = (int) chain.size() >= EffectsController::maxEffectsPerTrack;
 
@@ -149,7 +164,9 @@ public:
         addSlot.setVisible (trackId != 0 && ! chainFull);
         updateSize();
         layoutPedals();
-        repaint();
+
+        if (! sameTrack || pedalIds() != pedalsBefore)
+            repaint();
 
         // A pedal was just added on this track: scroll it into view.
         if (sameTrack && added != nullptr)
@@ -197,7 +214,7 @@ public:
         g.drawText ("IN", in, juce::Justification::centred);
 
         for (auto* pedal : pedals)
-            PedalView::drawShadow (g, *pedal);
+            PedalView::drawShadow (g, *pedal, pedalShadow);
     }
 
     void resized() override
@@ -211,6 +228,7 @@ private:
     std::vector<PluginSlot> chain;    // the track's whole effect chain (pedals and the rest)
     bool chainFull = false;
     juce::OwnedArray<PedalView> pedals;   // in chain order
+    CachedShadow pedalShadow;             // under every pedal (see PedalView::drawShadow)
     AddSlot addSlot;
 
     // Dragging a pedal sideways to reorder it.
