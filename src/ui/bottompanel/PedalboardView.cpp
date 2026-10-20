@@ -17,7 +17,6 @@ namespace
     constexpr int inWidth = 36, inHeight = 22;
     constexpr int firstGap = 30;           // from the IN marker to the first pedal
     constexpr int pedalGap = 30;           // between pedals (the cable shows in it)
-    constexpr int addSlotWidth = 116;
     constexpr int verticalPadding = 14;    // the least room above and below the pedals
     constexpr int cableThickness = 4;
 
@@ -153,7 +152,7 @@ public:
 
         // A pedal was just added on this track: scroll it into view.
         if (sameTrack && added != nullptr)
-            owner.viewport.setViewPosition (juce::jmax (0, added->getRight() + pedalGap + addSlotWidth - owner.viewport.getMaximumVisibleWidth()),
+            owner.viewport.setViewPosition (juce::jmax (0, added->getRight() + pedalGap + PedalView::width - owner.viewport.getMaximumVisibleWidth()),
                                             owner.viewport.getViewPositionY());
     }
 
@@ -260,7 +259,8 @@ private:
         if (dragged != nullptr && dragMoved)
             dragged->setTopLeftPosition (dragged->getX(), pedalTop());
 
-        addSlot.setBounds (pedalX (pedals.size()), pedalTop(), addSlotWidth, PedalView::height);
+        // The same size as a pedal: the space the next one will take.
+        addSlot.setBounds (pedalX (pedals.size()), pedalTop(), PedalView::width, PedalView::height);
     }
 
     //==============================================================================

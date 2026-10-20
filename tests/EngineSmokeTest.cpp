@@ -14,6 +14,7 @@
 #include "engine/TestAudioDevice.h"
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
+#include "engine/PortedPedals.h"                     // the ported pedals' type names
 #include "engine/LiveWaveform.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
@@ -3859,7 +3860,7 @@ static void runPedalsSection (const juce::File& dir)
             effects.removeEffect (t, plugin);
         }
 
-        check (getPedalStyles().size() == 7 && names.size() == 7, "seven of the effects are pedals, each with its own name");
+        check (getPedalStyles().size() == 20 && names.size() == 20, "there are twenty pedals, each with its own name");
         check (offered, "every pedal skins an effect from the effects menu");
         check (knobCounts, "each has 2 or 3 knobs");
         check (knobsFound, "and every knob turns a setting its effect has");
@@ -4122,6 +4123,316 @@ static void runPedalsSection (const juce::File& dir)
         // Moving its chorus on the pedalboard brings it to the front.
         effects.moveEffect (t, effects.getEffectChain (t)[1].id, 0);
         check (typesOn (t) == "chorus,reverb", "moving its pedal puts it with the pedals");
+        removeAll (t);
+    }
+
+    std::cout << "Ported pedals sound like the originals\n";
+    {
+        // Each port plays tests/fixtures/pedals/di_guitar.wav at the settings
+        // tools/pedals/render_references.sh rendered the original LV2 plugin
+        // at, and the difference from that render must be near silence: at
+        // least `belowDb` quieter than the render itself.
+        //
+        // How near depends on the port:
+        //   - It runs the original DSP unchanged: it matches to rounding (it
+        //     differs only in compiler flags), so 80 dB leaves plenty of room.
+        //   - We oversample a stage with juce::dsp::Oversampling where the
+        //     original used zita-resampler (Mellow Drive, Vintage Fuzz, Super
+        //     Fuzz): the two resamplers' filters differ in delay (by a
+        //     fraction of a sample, too) and near the top of the hearing
+        //     range, and the clipping after them exaggerates that. The best
+        //     whole-sample lag (within 256) is used. Measured: the two fuzzes
+        //     about 38 dB (only their clipping is oversampled), so 30 dB.
+        //     Mellow Drive about 22 dB, whatever filters we use: the
+        //     original's 2x resampler primes its down-sampler with one
+        //     sample fewer than its up-sampler, which seems to leave it half
+        //     a sample late, and no whole-sample lag lines that up. So 18
+        //     dB. These ports sound alike, not identical.
+        //   - The Golden Boost: its original is a JUCE plugin, built with an
+        //     older JUCE, so the same code rounds a little differently
+        //     (measured about 76 dB): 60 dB.
+        // The first setting listed is also turned a little, to check the
+        // test would notice a difference: then it must null at least 6 dB
+        // worse. So that setting must not be a switch.
+        struct Reference
+        {
+            juce::String type, file;
+            std::vector<std::pair<juce::String, float>> settings;   // parameter ID, value
+            double belowDb;
+            bool align = false;      // look for the best lag
+            bool stereo = false;     // a stereo DSP: its right channel isn't silent
+        };
+
+        const std::vector<Reference> references {
+            { YellowDrivePlugin::xmlTypeName, "yellow_drive.wav", { { "drive", 0.7f }, { "level", -6.0f }, { "tone", 650.0f } }, 80.0 },
+            { StackDrivePlugin::xmlTypeName, "stack_drive.wav",
+              { { "gain", 0.7f }, { "bass", 0.5f }, { "level", 0.5f }, { "mid", 0.6f }, { "treble", 0.5f } }, 80.0 },
+            { HotPlatePlugin::xmlTypeName, "hot_plate.wav", { { "gain", 0.6f }, { "bass", 0.5f }, { "treble", 0.6f }, { "volume", 0.3f } }, 80.0 },
+            { TubeDrivePlugin::xmlTypeName, "tube_drive.wav", { { "gain", 0.6f }, { "bass", 0.5f }, { "treble", 0.6f }, { "volume", 0.5f } }, 80.0 },
+            { MellowDrivePlugin::xmlTypeName, "mellow_drive.wav", { { "drive", 0.6f }, { "glass", 0.5f }, { "level", 0.5f } }, 18.0, true },
+            { SunFuzzPlugin::xmlTypeName, "sun_fuzz.wav", { { "drive", 0.7f }, { "input", 0.5f }, { "volume", 0.5f } }, 80.0 },
+            { VintageFuzzPlugin::xmlTypeName, "vintage_fuzz.wav", { { "fuzz", 0.7f }, { "tone", 0.5f }, { "volume", 0.5f } }, 30.0, true },
+            { SuperFuzzPlugin::xmlTypeName, "super_fuzz.wav",
+              { { "expander", 0.6f }, { "balance", 0.5f }, { "tone", 0.0f }, { "trim", 0.25f } }, 30.0, true },
+            { EnvelopeWahPlugin::xmlTypeName, "envelope_wah.wav",
+              { { "depth", 0.8f }, { "drive", 0.0f }, { "gain", 0.0f }, { "mode", 2.0f }, { "peak", 8.0f }, { "range", 1.0f }, { "tone", 0.0f } }, 80.0 },
+            { SlowSwellPlugin::xmlTypeName, "slow_swell.wav", { { "uptime", 200.0f }, { "downtime", 5.0f }, { "threshold", 1.0f } }, 80.0 },
+            { JetFlangerPlugin::xmlTypeName, "jet_flanger.wav",
+              { { "depth", 1.0f }, { "width", 5.0f }, { "freq", 0.5f }, { "feedback", -0.707f }, { "wet", 100.0f }, { "mix", 0.0f } }, 80.0 },
+            { SpringTankPlugin::xmlTypeName, "spring_tank.wav",
+              { { "dry_wet", 50.0f }, { "lfo", 0.2f }, { "roomsize", 0.6f }, { "damp", 0.4f }, { "mode", 0.0f } }, 80.0, false, true },
+            { GoldenBoostPlugin::xmlTypeName, "golden_boost.wav", { { "gain", 0.6f }, { "treble", 0.6f }, { "level", 0.5f } }, 60.0, true },
+        };
+
+        // render_references.sh plays this much silence first and leaves it
+        // out (the originals fade in, and their knobs glide to the settings).
+        constexpr int preroll = 48000, blockSize = 512;
+        const auto folder = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals");
+
+        auto readWav = [] (const juce::File& file)
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (file.createInputStream().release(), true));
+            juce::AudioBuffer<float> samples (1, reader != nullptr ? (int) reader->lengthInSamples : 0);
+
+            if (reader != nullptr)
+                reader->read (&samples, 0, samples.getNumSamples(), 0, true, false);
+
+            return samples;
+        };
+
+        auto rms = [] (const juce::AudioBuffer<float>& b, int ch)
+        {
+            return b.getNumSamples() > 0 ? (double) b.getRMSLevel (ch, 0, b.getNumSamples()) : 0.0;
+        };
+
+        // Plays `guitar` through the plugin's left channel, and silence
+        // through its right, in blocks the way Tracktion does.
+        auto render = [&] (tracktion::Plugin& plugin, double sampleRate, const juce::AudioBuffer<float>& guitar)
+        {
+            plugin.initialise ({ tracktion::TimePosition(), sampleRate, blockSize });
+            plugin.reset();
+
+            juce::AudioBuffer<float> buffer (2, preroll + guitar.getNumSamples());
+            buffer.clear();
+            buffer.copyFrom (0, preroll, guitar, 0, 0, guitar.getNumSamples());
+
+            for (int start = 0; start < buffer.getNumSamples(); start += blockSize)
+            {
+                tracktion::PluginRenderContext context (&buffer, start, std::min (blockSize, buffer.getNumSamples() - start),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            juce::AudioBuffer<float> played (2, guitar.getNumSamples());
+
+            for (int ch = 0; ch < 2; ++ch)
+                played.copyFrom (ch, 0, buffer, ch, preroll, guitar.getNumSamples());
+
+            return played;
+        };
+
+        // How far (dB) the difference between the left channel of `played`
+        // and `original` is below `original`. With `align`, `played` may be
+        // a little late or early (the oversampling filters' delay), so the
+        // best lag within 256 samples is used.
+        auto nullDepth = [] (const juce::AudioBuffer<float>& played, const juce::AudioBuffer<float>& original, bool align)
+        {
+            const int n = original.getNumSamples(), margin = align ? 256 : 0;
+            const float* a = played.getReadPointer (0);
+            const float* b = original.getReadPointer (0);
+            double reference = 0.0, best = std::numeric_limits<double>::max();
+
+            for (int i = margin; i < n - margin; ++i)
+                reference += (double) b[i] * b[i];
+
+            for (int lag = -margin; lag <= margin; ++lag)
+            {
+                double error = 0.0;
+
+                for (int i = margin; i < n - margin; ++i)
+                {
+                    const double d = (double) a[i + lag] - b[i];
+                    error += d * d;
+                }
+
+                best = std::min (best, error);
+            }
+
+            return 10.0 * std::log10 (reference / std::max (best, 1.0e-30));
+        };
+
+        const auto guitar = readWav (folder.getChildFile ("di_guitar.wav"));
+        check (guitar.getNumSamples() == 96000, "(the DI guitar is two seconds long)");
+
+        for (auto& reference : references)
+        {
+            const auto original = readWav (folder.getChildFile (reference.file));
+            auto* edit = TestAudioDevice::getEditOf (engine);
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = edit->getPluginCache().createNewPlugin (reference.type, {});
+            const auto name = plugin != nullptr ? plugin->getName() : reference.type;
+
+            if (plugin == nullptr || original.getNumSamples() != guitar.getNumSamples())
+            {
+                check (false, (name + " can be made, and has a reference render").toRawUTF8());
+                continue;
+            }
+
+            for (auto& [id, value] : reference.settings)
+                if (auto param = plugin->getAutomatableParameterByID (id))
+                    param->setParameter (value, juce::sendNotificationSync);
+
+            const auto played = render (*plugin, 48000.0, guitar);
+            const auto belowDb = nullDepth (played, original, reference.align);
+            const auto latencyMs = plugin->getLatencySeconds() * 1000.0;
+            std::cout << "    (" << name << ": the difference is " << juce::String (belowDb, 1) << " dB below the original"
+                      << (latencyMs > 0.0 ? ", latency " + juce::String (latencyMs, 2) + " ms" : juce::String()) << ")\n";
+            check (belowDb >= reference.belowDb, (name + " sounds like the original (the difference is near silence)").toRawUTF8());
+
+            if (! reference.stereo)
+                check (rms (played, 1) < 1.0e-9, (name + ": each channel has its own copy (the silent right stays silent)").toRawUTF8());
+
+            check ((latencyMs == 0.0) != reference.align, (name + (reference.align ? ": its oversampling's latency is reported"
+                                                                                   : ": no latency")).toRawUTF8());
+
+            // A null test that can't fail proves nothing: with its first
+            // knob turned a little, the difference must be clearly audible.
+            if (auto param = plugin->getAutomatableParameterByID (reference.settings.front().first))
+            {
+                const auto range = param->getValueRange();
+                param->setParameter (reference.settings.front().second + 0.1f * (range.getEnd() - range.getStart()), juce::sendNotificationSync);
+                const auto nudgedDepth = nullDepth (render (*plugin, 48000.0, guitar), original, reference.align);
+                std::cout << "    (with " << reference.settings.front().first << " turned a little: " << juce::String (nudgedDepth, 1) << " dB)\n";
+                check (nudgedDepth < juce::jmin (40.0, belowDb - 6.0),
+                       (name + ": (and with a knob turned a little, it doesn't null)").toRawUTF8());
+                param->setParameter (reference.settings.front().second, juce::sendNotificationSync);
+            }
+
+            // At 44.1 kHz there's no reference, but it should sound much the same.
+            const auto at44 = render (*plugin, 44100.0, guitar);
+            const auto levelDifference = juce::Decibels::gainToDecibels (rms (at44, 0)) - juce::Decibels::gainToDecibels (rms (played, 0));
+            check (std::isfinite (rms (at44, 0)) && std::abs (levelDifference) < 2.0f, (name + " works at 44.1 kHz too").toRawUTF8());
+        }
+    }
+
+    std::cout << "All twenty pedals at once\n";
+    {
+        // How much of the computer's time the pedals need: two seconds of
+        // stereo guitar through all twenty, one after another, played
+        // directly (a track holds at most 12 effects). A Debug build is far
+        // slower than the app, so the check only applies to Release builds.
+        auto* edit = TestAudioDevice::getEditOf (engine);
+        juce::AudioBuffer<float> audio (2, 96000);
+        audio.clear();
+        juce::WavAudioFormat wav;
+        const auto fixture = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals/di_guitar.wav");
+
+        if (std::unique_ptr<juce::AudioFormatReader> reader { wav.createReaderFor (fixture.createInputStream().release(), true) })
+            reader->read (&audio, 0, 96000, 0, true, true);   // the mono file into both channels
+        double totalSeconds = 0.0;
+        juce::StringArray slowest;
+
+        for (auto& style : getPedalStyles())
+        {
+            auto plugin = edit->getPluginCache().createNewPlugin (style.pluginType, {});
+
+            if (plugin == nullptr)
+                continue;
+
+            plugin->initialise ({ tracktion::TimePosition(), 48000.0, 512 });
+            const auto start = juce::Time::getHighResolutionTicks();
+
+            for (int at = 0; at < audio.getNumSamples(); at += 512)
+            {
+                tracktion::PluginRenderContext context (&audio, at, std::min (512, audio.getNumSamples() - at),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin->applyToBuffer (context);
+            }
+
+            const auto seconds = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+            totalSeconds += seconds;
+            slowest.add (juce::String (seconds / 2.0 * 100.0, 1).paddedLeft ('0', 5) + "% " + style.name);
+        }
+
+        slowest.sort (false);
+        std::reverse (slowest.begin(), slowest.end());   // the most first
+        std::cout << "    (all twenty need " << juce::String (totalSeconds / 2.0 * 100.0, 1)
+                  << "% of one core at 48 kHz; the most: " << slowest.joinIntoString (", ").substring (0, 140) << "...)\n";
+        check (std::isfinite (audio.getRMSLevel (0, 0, 96000)), "(the chain's output is finite)");
+       #if defined (NDEBUG)
+        check (totalSeconds < 2.0 * 0.5, "all twenty together need less than half of one core");
+       #endif
+    }
+
+    std::cout << "Yellow Drive\n";
+    {
+        const auto drive = effects.addEffect (t, YellowDrivePlugin::xmlTypeName);
+        auto valueOf = [&] (const juce::String& id)
+        {
+            const auto i = indexOfParameter (t, drive, id);
+            return i >= 0 ? effects.getEffectParameters (t, drive)[(size_t) i].valueText : juce::String();
+        };
+
+        check (drive != 0 && effects.getEffectChain (t).front().name == "Yellow Drive", "it can be added, and is called Yellow Drive");
+        check (valueOf ("drive") == "50%" && valueOf ("tone") == "400 Hz"
+                 && valueOf ("level") == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "16.0 dB",
+               "its knobs start where the original's do (Drive 50%, Tone 400 Hz, Level -16 dB)");
+
+        checkUndoRoundTrip (engine, "Yellow Drive Drive", [&]
+        {
+            engine.beginUndoStep ("Yellow Drive Drive");
+            effects.setEffectParameter (t, drive, indexOfParameter (t, drive, "drive"), 0.8f);
+        });
+        engine.beginUndoStep ("Yellow Drive Tone");
+        effects.setEffectParameter (t, drive, indexOfParameter (t, drive, "tone"), 0.5f);   // 550 Hz (linear, as the original)
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Yellow Drive"));
+        t = tracks.getTracks().back().id;
+        const auto chain = effects.getEffectChain (t);
+        check (chain.size() == 1 && chain[0].type == YellowDrivePlugin::xmlTypeName, "it survives save and reopen");
+
+        if (chain.size() == 1)
+        {
+            const auto i = indexOfParameter (t, chain[0].id, "tone");
+            check (i >= 0 && effects.getEffectParameters (t, chain[0].id)[(size_t) i].valueText == "550 Hz", "and so do its knobs");
+        }
+    }
+
+    std::cout << "Every ported pedal survives saving\n";
+    {
+        // All the ported pedals, as many as fit on a track, each with its
+        // first knob turned to 0.8.
+        removeAll (t);
+        juce::StringArray types;
+
+        for (auto& style : getPedalStyles())
+            if (style.pluginType.startsWith ("ikaros") && types.size() < EffectsController::maxEffectsPerTrack)
+                types.add (style.pluginType);
+
+        for (auto& type : types)
+        {
+            const auto id = effects.addEffect (t, type);
+            engine.beginUndoStep ("Pedal Knob");
+            effects.setEffectParameter (t, id, 0, 0.8f);
+        }
+
+        const auto before = typesOn (t);
+        auto knobs = [&]
+        {
+            juce::StringArray texts;
+
+            for (auto& slot : effects.getEffectChain (t))
+                texts.add (effects.getEffectParameters (t, slot.id)[0].valueText);
+
+            return texts.joinIntoString ("|");
+        };
+
+        const auto knobsBefore = knobs();
+        checkSaveAndReopen (engine, dir.getChildFile ("Ported Pedals"));
+        t = tracks.getTracks().back().id;
+        check (types.size() == 12 && typesOn (t) == before, "twelve of them on a track come back, in order");
+        check (knobs() == knobsBefore, "with their knobs");
     }
 
     device.reset();

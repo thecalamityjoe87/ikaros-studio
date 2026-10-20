@@ -98,7 +98,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
                                         Family::audio);   // audio tracks are always the audio blue
     guitarCard = std::make_unique<Card> (Icon::guitar, "Guitar or Bass",
                                          "Plug in a guitar or bass and play it through a pedalboard of effects.",
-                                         Family::audio);  // an audio track too
+                                         Family::guitar);
 
     for (auto kind : { Kind::instrument, Kind::audio, Kind::guitar })
     {

@@ -85,6 +85,69 @@ Rubber Band Library, which stretches loops to the song's tempo and key
   external/rubberband.
 
 
+GxPlugins and Guitarix, the sound of most of the pedalboard's pedals
+  https://github.com/brummer10 (GxPlugins: one repository per pedal)
+  https://github.com/brummer10/guitarix
+  GxPlugins: GNU General Public License, version 3
+  Guitarix: GNU General Public License, version 2 or later
+  Copyright (C) 2011-2012 Hermann Meyer, James Warden, Andreas Degert,
+  Pete Shorthose, Steve Poskitt (the Guitarix project)
+  The full license texts are in each folder under external/gxplugins.
+  Only the effects' DSP (the code Faust generated) is used; the LV2 wrappers
+  and GUIs are not. Three files are changed (the oversampling is done by
+  Ikaros instead): see external/gxplugins/README.ikaros, which also lists
+  the commits used.
+
+    Yellow Drive    GxSD1, inspired by the Boss SD-1 Super OverDrive
+    Mellow Drive    GxEternity, inspired by the Lovepedal Eternity
+    Tube Drive      GxBottleRocket, inspired by the Electro-Harmonix Bottle Rocket
+    Hot Plate       GxHotBox, inspired by the Matchless Hotbox
+    Stack Drive     GxGuvnor, inspired by the Marshall Guv'nor
+    Sun Fuzz        GxSunFace, inspired by the Analogman Sun Face
+    Vintage Fuzz    GxSuppaToneBender, inspired by the Sola Sound Tone Bender
+    Super Fuzz      GxSuperFuzz, inspired by the Univox Super-Fuzz
+    Envelope Wah    GxQuack, inspired by the Musitronics Mu-Tron III
+    Slow Swell      GxSlowGear, inspired by the Boss SG-1 Slow Gear
+    Jet Flanger     Guitarix's flanger (gx_flanger)
+    Spring Tank     Guitarix's stereo reverb (gx_reverb)
+
+
+KlonCentaur, the sound of the Golden Boost pedal
+  https://github.com/jatinchowdhury18/KlonCentaur
+  BSD 3-Clause License
+  Copyright (c) 2020, jatinchowdhury18
+  The Golden Boost is inspired by the Klon Centaur. It uses KlonCentaur's
+  circuit model, unchanged, with parts of chowdsp_utils
+  (https://github.com/Chowdhury-DSP/chowdsp_utils, GNU General Public
+  License, version 3, Copyright Jatin Chowdhury). Both licenses are in
+  external/kloncentaur; see its README.ikaros for what's used.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice, this
+     list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+
+  3. Neither the name of the copyright holder nor the names of its
+     contributors may be used to endorse or promote products derived from
+     this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
 Fonts
   Figtree and JetBrains Mono, SIL Open Font License 1.1 (see resources/fonts).
 

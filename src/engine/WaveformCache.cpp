@@ -31,7 +31,7 @@ void WaveformCache::clear()
 //==============================================================================
 // Waveform overview for an audio clip: the loudest sample in each of
 // `numColumns` slices of the part of the file the clip plays.
-std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int numColumns)
+std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip)
 {
     // A reversed region plays a reversed copy of its file, which Tracktion
     // makes in the background. Rather than wait for it, read the original
@@ -48,6 +48,7 @@ std::vector<float> WaveformCache::computePeaks (te::WaveAudioClip& clip, int num
     double contentStart = clip.isLooping() ? clip.getLoopStart().inSeconds() : pos.offset.inSeconds();
     const double contentLength = clip.isLooping() ? clip.getLoopLength().inSeconds() : pos.getLength().inSeconds();
     double sourceStart = contentStart;
+    const int numColumns = juce::jlimit (minPeaks, maxPeaks, juce::roundToInt (contentLength / secondsPerPeak));
 
     if (reversed)
         sourceStart = te::AudioFile (clip.edit.engine, file).getLength() - contentStart - contentLength;

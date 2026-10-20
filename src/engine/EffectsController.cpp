@@ -2,6 +2,7 @@
 #include "engine/SoundControls.h"
 #include "engine/AudioEngine.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/PortedPedals.h"
 #include "engine/PedalStyles.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
@@ -27,13 +28,26 @@ namespace
             { te::CompressorPlugin::xmlTypeName, "Compressor",            "Dynamics" },
             { LimiterPlugin::xmlTypeName,        "Limiter",               "Dynamics" },
             { NoiseGatePlugin::xmlTypeName,      "Noise Gate",            "Dynamics" },
+            { SlowSwellPlugin::xmlTypeName,      SlowSwellPlugin::getPluginName(),   "Dynamics" },
             { te::EqualiserPlugin::xmlTypeName,  "EQ",                    "EQ & Filter" },
             { te::LowPassPlugin::xmlTypeName,    "Low/High-Pass Filter",  "EQ & Filter" },
+            { EnvelopeWahPlugin::xmlTypeName,    EnvelopeWahPlugin::getPluginName(), "EQ & Filter" },
             { DistortionPlugin::xmlTypeName,     "Distortion",            "Distortion" },
+            { GoldenBoostPlugin::xmlTypeName,    GoldenBoostPlugin::getPluginName(), "Distortion" },
+            { YellowDrivePlugin::xmlTypeName,    YellowDrivePlugin::getPluginName(), "Distortion" },
+            { MellowDrivePlugin::xmlTypeName,    MellowDrivePlugin::getPluginName(), "Distortion" },
+            { TubeDrivePlugin::xmlTypeName,      TubeDrivePlugin::getPluginName(),   "Distortion" },
+            { HotPlatePlugin::xmlTypeName,       HotPlatePlugin::getPluginName(),    "Distortion" },
+            { StackDrivePlugin::xmlTypeName,     StackDrivePlugin::getPluginName(),  "Distortion" },
+            { SunFuzzPlugin::xmlTypeName,        SunFuzzPlugin::getPluginName(),     "Distortion" },
+            { VintageFuzzPlugin::xmlTypeName,    VintageFuzzPlugin::getPluginName(), "Distortion" },
+            { SuperFuzzPlugin::xmlTypeName,      SuperFuzzPlugin::getPluginName(),   "Distortion" },
             { te::ReverbPlugin::xmlTypeName,     "Reverb",                "Space" },
             { te::DelayPlugin::xmlTypeName,      "Echo",                  "Space" },
+            { SpringTankPlugin::xmlTypeName,     SpringTankPlugin::getPluginName(),  "Space" },
             { te::ChorusPlugin::xmlTypeName,     "Chorus",                "Modulation" },
             { te::PhaserPlugin::xmlTypeName,     "Phaser",                "Modulation" },
+            { JetFlangerPlugin::xmlTypeName,     JetFlangerPlugin::getPluginName(),  "Modulation" },
             { TremoloPlugin::xmlTypeName,        "Tremolo",               "Modulation" },
             { te::PitchShiftPlugin::xmlTypeName, "Pitch Shift",           "Pitch" },
         };

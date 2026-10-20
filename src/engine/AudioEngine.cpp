@@ -2,6 +2,7 @@
 #include "engine/AudioDeviceWatcher.h"
 #include "engine/AudioPreview.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/PortedPedals.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
@@ -261,6 +262,21 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<NoiseGatePlugin>();
         engine.getPluginManager().createBuiltInType<DistortionPlugin>();
         engine.getPluginManager().createBuiltInType<TremoloPlugin>();
+
+        // The pedals ported from other projects (see PedalStyles.cpp).
+        engine.getPluginManager().createBuiltInType<GoldenBoostPlugin>();
+        engine.getPluginManager().createBuiltInType<YellowDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<MellowDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<TubeDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<HotPlatePlugin>();
+        engine.getPluginManager().createBuiltInType<StackDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<SunFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<VintageFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<SuperFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<EnvelopeWahPlugin>();
+        engine.getPluginManager().createBuiltInType<SlowSwellPlugin>();
+        engine.getPluginManager().createBuiltInType<JetFlangerPlugin>();
+        engine.getPluginManager().createBuiltInType<SpringTankPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]

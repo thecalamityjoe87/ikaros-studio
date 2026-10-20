@@ -156,6 +156,12 @@ add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
 # has no official git repository; see external/lame/README.ikaros.
 add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_ALL)
 
+# The DSP of the GxPlugins pedals (GPL 3) and two Guitarix effects (GPL 2+)
+# behind most of the pedalboard's pedals, kept in the repo (one GitHub
+# repository per pedal, and only their DSP is used); see
+# external/gxplugins/README.ikaros.
+add_subdirectory(external/gxplugins/ikaros "${CMAKE_BINARY_DIR}/gxplugins" EXCLUDE_FROM_ALL)
+
 # Rubber Band stretches audio regions in time and pitch (loops following the
 # song's tempo and key, Flex Time). Tracktion builds it into its own
 # time-stretch code from Rubber Band's single-file version
@@ -263,6 +269,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
+    src/engine/PortedPedals.h           src/engine/PortedPedals.cpp
+    src/engine/KlonCentaurDsp.h         src/engine/KlonCentaurDsp.cpp
     src/engine/PedalStyles.h        src/engine/PedalStyles.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
@@ -283,6 +291,13 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
+
+# The Golden Boost's circuit model (KlonCentaur, BSD 3-clause, with parts of
+# chowdsp_utils, GPL 3) is compiled in KlonCentaurDsp.cpp. Its files include
+# <pch.h>, our stand-in for ChowCentaur's own; see external/kloncentaur/README.ikaros.
+set_source_files_properties(src/engine/KlonCentaurDsp.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/external/kloncentaur/ikaros"
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")   # third-party code's warnings
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -419,6 +434,7 @@ target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        ikaros_gxplugins
         ikaros_timestretch
         miniz
         mp3lame
@@ -543,6 +559,7 @@ if(IKAROS_BUILD_TESTS)
         ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        ikaros_gxplugins
         ikaros_timestretch
         miniz
         mp3lame

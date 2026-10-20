@@ -158,7 +158,7 @@ static RegionInfo makeRegionInfo (te::Clip& clip, WaveformCache& waveforms)
 
         if (auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip))
         {
-            r.peaks = waveforms.computePeaks (*wave, 256);
+            r.peaks = waveforms.computePeaks (*wave);
 
             // The waveform shows the region's own volume too, like the audio editor's.
             const auto gain = wave->getGain();

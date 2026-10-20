@@ -451,9 +451,9 @@ void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area
 
 void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    // info.peaks: loudness per slice (0..1) of the region, or of one loop if
-    // it's looped, from the engine. Drawn mirrored around the centre line,
-    // one column per pixel.
+    // info.peaks: loudness per slice (0..1, a slice is about 10 ms) of the
+    // region, or of one loop if it's looped, from the engine. Drawn
+    // mirrored around the centre line, one column per pixel.
     const auto range = getDisplayRange();
     const auto repeat = getRepeat();
 
@@ -470,19 +470,47 @@ void RegionComponent::paintWaveform (juce::Graphics& g, juce::Rectangle<float> a
         return range.getStart() - info.startBeat + (double) (x / area.getWidth()) * range.getLength();
     };
 
-    // The peak under a column. Unlooped, while an edge is dragged outwards,
-    // the new part has no peaks yet and is drawn flat until the drag ends.
-    auto peakAt = [&] (float x)
+    // How far through the peaks (0..1) a column's left edge is.
+    auto proportionAt = [&] (float x)
     {
         double proportion = (beatAt (x) + repeat.offset) / repeat.length;
 
         if (repeat.looping)
             proportion -= std::floor (proportion);   // the same place in every repeat
 
-        if (proportion < 0.0 || proportion >= 1.0)
+        return proportion;
+    };
+
+    auto peak = [&] (int i)    { return info.peaks[(size_t) juce::jlimit (0, numPeaks - 1, i)]; };
+
+    // The level drawn at a column. Unlooped, while an edge is dragged
+    // outwards, the new part has no peaks yet and is drawn flat until the
+    // drag ends.
+    auto peakAt = [&] (float x)
+    {
+        const double from = proportionAt (x), to = proportionAt (x + 1.0f);
+
+        if (from < 0.0 || from >= 1.0)
             return 0.0f;
 
-        return info.peaks[(size_t) juce::jlimit (0, numPeaks - 1, (int) (proportion * numPeaks))];
+        // Zoomed out, several slices fall in one column: show the loudest,
+        // so short hits don't vanish between columns.
+        if (to > from && (to - from) * numPeaks > 1.0)
+        {
+            float loudest = 0.0f;
+
+            for (int i = (int) (from * numPeaks), end = juce::jmin (numPeaks, (int) std::ceil (to * numPeaks)); i < end; ++i)
+                loudest = juce::jmax (loudest, info.peaks[(size_t) i]);
+
+            return loudest;
+        }
+
+        // Zoomed in, a slice is wider than a column: a straight line from
+        // one slice's middle to the next, rather than flat steps.
+        const double position = from * numPeaks - 0.5;
+        const int i = (int) std::floor (position);
+        const float t = (float) (position - i);
+        return peak (i) + t * (peak (i + 1) - peak (i));
     };
 
     // Zoomed in, a region can be far wider than the screen: only trace the
