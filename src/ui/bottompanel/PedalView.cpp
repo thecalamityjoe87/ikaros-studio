@@ -212,6 +212,22 @@ void PedalView::drawShadow (juce::Graphics& g, const PedalView& pedal)
     juce::DropShadow (juce::Colours::black.withAlpha (0.38f), 14, { 0, 6 }).drawForPath (g, body);
 }
 
+juce::Image PedalView::createPreview (AudioEngine& engine, const PedalStyle& style, float scale)
+{
+    // A real PedalView, never shown: it draws itself (knobs and footswitch
+    // too) into an image. No track or plugin, so nothing it does reaches
+    // the engine; setting the knobs with dontSendNotification doesn't even
+    // call knobChanged.
+    PedalView pedal (engine, style);
+    pedal.setSize (width, height);
+    pedal.slot.enabled = true;
+
+    for (auto* knob : pedal.knobs)
+        knob->setValue (0.5, juce::dontSendNotification);
+
+    return pedal.createComponentSnapshot (pedal.getLocalBounds(), true, scale);
+}
+
 void PedalView::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds().toFloat();

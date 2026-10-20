@@ -35,9 +35,10 @@ public:
     /** False when there's no track, or its chain is full. */
     bool canAddPedal() const;
 
-    /** Shows the menu of pedals to add at the end of the board, under
-        `target` (the panel's Add Pedal button, or the board's Add slot). */
-    void showAddMenu (juce::Component& target);
+    /** Opens the Add Pedal dialog (every pedal, as pictures) over the
+        window `from` is in (the panel's Add Pedal button, or the board's
+        Add slot). The chosen pedal goes at the end of the board. */
+    void showAddPedal (juce::Component& from);
 
     void paint (juce::Graphics&) override;
     void resized() override;

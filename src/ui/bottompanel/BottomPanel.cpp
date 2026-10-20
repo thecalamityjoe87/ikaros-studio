@@ -516,7 +516,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
 
     tunerButton.setTooltip ("Tune up: the transport readout becomes a tuner for this track's input");
     tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
-    addPedalButton.onClick = [this] { pedalboard.showAddMenu (addPedalButton); };
+    addPedalButton.onClick = [this] { pedalboard.showAddPedal (addPedalButton); };
 
     // An ordinary button, like the rest of the header's.
     collapseButton.setColours (IconButton::raisedColours);

@@ -60,6 +60,12 @@ public:
         shadow falls outside the pedal's own bounds. */
     static void drawShadow (juce::Graphics&, const PedalView&);
 
+    /** A picture of a pedal, switched on and with its knobs at noon, drawn
+        `scale` times its size (e.g. 0.5 at half size, times the screen's
+        scale for sharp pixels). For showing pedals that aren't on a board
+        (the Add Pedal dialog). It never touches the engine. */
+    static juce::Image createPreview (AudioEngine&, const PedalStyle&, float scale);
+
     static constexpr int width = 156, height = 216;
 
     //==============================================================================

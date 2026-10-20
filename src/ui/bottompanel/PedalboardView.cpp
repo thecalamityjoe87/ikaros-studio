@@ -1,4 +1,5 @@
 #include "ui/bottompanel/PedalboardView.h"
+#include "ui/dialogs/AddPedalDialog.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Theme.h"
@@ -22,7 +23,7 @@ namespace
 
     bool isPedal (const PluginSlot& slot)    { return findPedalStyle (slot.type) != nullptr; }
 
-    // Every pedal, grouped as the Add Pedal menu shows them. `onChosen` is
+    // Every pedal, grouped as in PedalStyles, for a pedal's Replace menu. `onChosen` is
     // called with the chosen pedal's plugin type; `ticked` gets a tick.
     juce::PopupMenu buildPedalMenu (std::function<void (const juce::String& type)> onChosen, const juce::String& ticked = {})
     {
@@ -98,7 +99,7 @@ class PedalboardView::Board  : public juce::Component
 public:
     explicit Board (PedalboardView& o) : owner (o)
     {
-        addSlot.onClick = [this] { owner.showAddMenu (addSlot); };
+        addSlot.onClick = [this] { owner.showAddPedal (addSlot); };
         addChildComponent (addSlot);
     }
 
@@ -362,7 +363,10 @@ private:
                                                         effects.replaceEffect (track, id, type);
                                                     }, pedal.getStyle().pluginType));
         menu.addItem ("Remove", [&effects, track, id] { effects.removeEffect (track, id); });
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pedal));
+        // Right-clicked: the menu opens where the mouse is, over the pedal.
+        // From the keyboard (Shift+F10): beside the pedal.
+        auto options = juce::PopupMenu::Options();
+        menu.showMenuAsync (pedal.isMouseOver (true) ? options.withMousePosition() : options.withTargetComponent (&pedal));
     }
 };
 
@@ -395,15 +399,22 @@ bool PedalboardView::canAddPedal() const
     return trackId != 0 && ! board->isFull();
 }
 
-void PedalboardView::showAddMenu (juce::Component& target)
+void PedalboardView::showAddPedal (juce::Component& from)
 {
     if (! canAddPedal())
         return;
 
+    // The dialog covers the window's content (its whole area, below the
+    // title bar), as the New Track dialog does.
+    juce::Component* parent = from.getTopLevelComponent();
+
+    if (auto* window = dynamic_cast<juce::ResizableWindow*> (parent))
+        if (auto* windowContent = window->getContentComponent())
+            parent = windowContent;
+
     const auto id = trackId;
     auto& effects = engine.getTracks().effects();
-    buildPedalMenu ([&effects, id] (const juce::String& type) { effects.addEffect (id, type); })
-        .showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target));
+    AddPedalDialog::show (*parent, engine, [&effects, id] (const juce::String& type) { effects.addEffect (id, type); });
 }
 
 void PedalboardView::paint (juce::Graphics& g)

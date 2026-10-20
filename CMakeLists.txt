@@ -334,6 +334,7 @@ set(IKAROS_UI_SOURCES
 
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+    src/ui/dialogs/AddPedalDialog.h         src/ui/dialogs/AddPedalDialog.cpp
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
     src/ui/dialogs/StartupSplash.h          src/ui/dialogs/StartupSplash.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
