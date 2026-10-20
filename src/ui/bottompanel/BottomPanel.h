@@ -19,7 +19,7 @@ namespace ikaros
     The panel under the arrangement:
 
         ============ grip ============   (drag to resize)
-        [Sound | Editor | EQ | Pedals | Mixer] | (dot) Track name [Inspector] [v]
+        [Sound | Editor | EQ | Pedals | Mixer] | (dot) Track name   [Inspector] [v]
         [Track | Master]  region name
         (inspector)                      tab content
 
@@ -30,8 +30,9 @@ namespace ikaros
       Editor: the selected region, close up: the piano roll for a MIDI
               region, the audio editor for an audio region (tracks only)
       EQ:     a 4-band EQ
-      Pedals: an audio track's pedalboard (the segment only shows for
-              audio tracks)
+      Pedals: a guitar or bass track's pedalboard (the segment only shows
+              for those; see EffectsController::hasPedalboard). The header
+              gets Tuner and Add Pedal buttons on this tab.
       Mixer:  every track's fader at once (and the master's, fixed on the
               right), across the whole panel
 
@@ -82,8 +83,11 @@ public:
     void setCollapsed (bool);
     bool isCollapsed() const noexcept           { return collapsed; }
 
-    /** The Pedals tab is for audio tracks: true while one is selected. */
-    bool isPedalboardAvailable() const noexcept;
+    /** True while the selected track has a pedalboard (see
+        EffectsController::hasPedalboard). The Pedals tab also stays while
+        it's showing, so removing a vocal track's last pedal doesn't whisk
+        the board away; it goes once another track or tab is picked. */
+    bool isPedalboardAvailable() const noexcept    { return pedalboardAvailable; }
 
     /** Re-reads the selected track/region from the engine (model or selection changed). */
     void refresh();
@@ -138,6 +142,8 @@ private:
     bool masterMode = false;
     bool regionMode = true;
     bool pedalsShown = false;            // the Pedals segment is in the switch (see isPedalboardAvailable)
+    bool pedalboardAvailable = false;    // see isPedalboardAvailable (worked out in refreshTrack)
+    TrackId pedalboardTrack = 0;         // the track pedalboardAvailable was worked out for
     bool inspectorShowsMaster = false;   // what TrackInspector was last set to (see showTabPage)
     RegionId lastSelectedRegion = 0;     // to notice a new region being picked (see refreshEditor)
     bool mixerShown = false;
@@ -149,6 +155,8 @@ private:
     IconButton pedalsTab { "Pedals", std::nullopt, "Pedals" };   // audio tracks only
     IconButton mixerButton { "Mixer", std::nullopt, "Mixer" };
     IconButton inspectorButton { "Inspector", std::nullopt, "Inspector" };
+    IconButton tunerButton { "Tuner", Icon::tuningFork, "Tuner" };           // Pedals tab only
+    IconButton addPedalButton { "Add pedal", Icon::plus, "Add Pedal" };     // Pedals tab only
     IconButton collapseButton { "Hide panel", Icon::chevronDown };
 
     // The inspector column's switch: Track | Master, or Track | Region on the Editor tab.
@@ -195,6 +203,7 @@ private:
     bool showsRegionInspector() const noexcept  { return tab == Tab::editor && regionMode && ! mixerShown && ! isShowingEffect(); }
 
     void refreshTrack();     // the inspector, Sound tab and Mixer
+    void updatePedalboardAvailable();
     void refreshEditor();    // the piano roll or audio editor
     void updateTabButtons();
     void showTabPage();

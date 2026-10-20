@@ -71,6 +71,13 @@ public:
     // it's a pedal. Instrument tracks and the master keep any order. Older
     // sessions open in the order they were saved in.
 
+    /** True for an audio track that gets a pedalboard (the bottom panel's
+        Pedals tab): a guitar or bass track (its icon is "guitar" or "bass",
+        see TrackController::addGuitarTrack), or one that already has pedals,
+        so pedals never become unreachable. Vocal and other audio tracks,
+        instrument tracks and the master don't. */
+    bool hasPedalboard (TrackId) const;
+
     /** Adds an effect at a position in the chain (-1 = at the end). Returns 0 if it couldn't. */
     PluginId addEffect (TrackId, const juce::String& type, int position = -1);
     PluginId replaceEffect (TrackId, PluginId, const juce::String& newType);

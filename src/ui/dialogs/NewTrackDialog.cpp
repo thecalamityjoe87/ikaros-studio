@@ -94,14 +94,17 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
                                              "Play and record with a MIDI keyboard, your computer keyboard or the on-screen keyboard.",
                                              Family::keys);
     audioCard = std::make_unique<Card> (Icon::mic, "Real Instrument",
-                                        "Record a microphone, guitar or anything plugged into your audio interface.",
+                                        "Record a microphone, or anything else plugged into your audio interface.",
                                         Family::audio);   // audio tracks are always the audio blue
+    guitarCard = std::make_unique<Card> (Icon::guitar, "Guitar or Bass",
+                                         "Plug in a guitar or bass and play it through a pedalboard of effects.",
+                                         Family::audio);  // an audio track too
 
-    for (auto* card : { instrumentCard.get(), audioCard.get() })
+    for (auto kind : { Kind::instrument, Kind::audio, Kind::guitar })
     {
-        const bool audio = card == audioCard.get();
-        card->onClick = [this, audio] { choose (audio); };
-        card->onDoubleClick = [this, audio] { choose (audio); create(); };
+        auto& card = cardFor (kind);
+        card.onClick = [this, kind] { choose (kind); };
+        card.onDoubleClick = [this, kind] { choose (kind); create(); };
         addAndMakeVisible (card);
     }
 
@@ -144,16 +147,26 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     createButton.onClick = [this] { create(); };
     addAndMakeVisible (createButton);
 
-    choose (false);
+    choose (Kind::instrument);
 }
 
-void NewTrackDialog::choose (bool audio)
+NewTrackDialog::Card& NewTrackDialog::cardFor (Kind kind) const
 {
-    audioChosen = audio;
-    instrumentCard->setToggleState (! audio, juce::dontSendNotification);
-    audioCard->setToggleState (audio, juce::dontSendNotification);
-    inputBox.setVisible (audio);
-    monitorToggle.setVisible (audio);
+    return kind == Kind::instrument ? *instrumentCard
+         : kind == Kind::audio      ? *audioCard
+                                    : *guitarCard;
+}
+
+void NewTrackDialog::choose (Kind kind)
+{
+    chosen = kind;
+
+    for (auto k : { Kind::instrument, Kind::audio, Kind::guitar })
+        cardFor (k).setToggleState (k == chosen, juce::dontSendNotification);
+
+    // Audio and guitar tracks record an input.
+    inputBox.setVisible (recordsInput());
+    monitorToggle.setVisible (recordsInput());
     repaint();
 }
 
@@ -162,9 +175,9 @@ void NewTrackDialog::create()
     auto& tracks = engine.getTracks();
     TrackId id = 0;
 
-    if (audioChosen)
+    if (recordsInput())
     {
-        id = tracks.addAudioTrack();
+        id = chosen == Kind::guitar ? tracks.addGuitarTrack() : tracks.addAudioTrack();
 
         if (id != 0)
         {
@@ -208,8 +221,16 @@ bool NewTrackDialog::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::escapeKey)            { close(); return true; }
     if (key == juce::KeyPress::returnKey)            { create(); return true; }
-    if (key == juce::KeyPress::leftKey)              { choose (false); instrumentCard->grabKeyboardFocus(); return true; }
-    if (key == juce::KeyPress::rightKey)             { choose (true); audioCard->grabKeyboardFocus(); return true; }
+
+    // Left and Right step through the cards.
+    if (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)
+    {
+        const auto index = juce::jlimit (0, 2, (int) chosen + (key == juce::KeyPress::leftKey ? -1 : 1));
+        choose (static_cast<Kind> (index));
+        cardFor (chosen).grabKeyboardFocus();
+        return true;
+    }
+
     return false;
 }
 
@@ -235,7 +256,7 @@ void NewTrackDialog::paint (juce::Graphics& g)
     g.setFont (fonts::uiBold (textSize::title));
     g.drawText ("Choose a track type", r.removeFromTop (26), juce::Justification::centredLeft);
 
-    if (audioChosen)
+    if (recordsInput())
     {
         g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
@@ -256,10 +277,12 @@ void NewTrackDialog::resized()
 
     auto cards = r.removeFromTop (210);
     const int gap = 16;
-    const int cardWidth = (cards.getWidth() - gap) / 2;
+    const int cardWidth = (cards.getWidth() - gap * 2) / 3;
     instrumentCard->setBounds (cards.removeFromLeft (cardWidth));
     cards.removeFromLeft (gap);
-    audioCard->setBounds (cards);
+    audioCard->setBounds (cards.removeFromLeft (cardWidth));
+    cards.removeFromLeft (gap);
+    guitarCard->setBounds (cards);   // (takes any spare pixel)
 
     r.removeFromTop (16);
     audioOptionsArea = r.removeFromTop (30);

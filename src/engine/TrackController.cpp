@@ -180,6 +180,23 @@ TrackId TrackController::addAudioTrack()
     return createAudioTrack ({});
 }
 
+TrackId TrackController::addGuitarTrack()
+{
+    int guitarCount = 1;
+
+    for (auto* t : getUserTracks (*owner.getEdit()))
+        if (isAudioTrack (*t) && t->state.getProperty (iconProp).toString() == "guitar")
+            ++guitarCount;
+
+    owner.beginUndoStep ("Add Guitar Track");
+    const auto id = createAudioTrack ("Guitar " + juce::String (guitarCount));
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        t->state.setProperty (iconProp, "guitar", &owner.getEdit()->getUndoManager());
+
+    return id;
+}
+
 // Adds an audio track after the last track, as part of the current undo step.
 // An empty name gives the next "Audio N".
 TrackId TrackController::createAudioTrack (const juce::String& name)

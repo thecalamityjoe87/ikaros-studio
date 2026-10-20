@@ -2,19 +2,20 @@
 
 #include "ui/bottompanel/PedalView.h"
 #include "ui/state/Selection.h"
-#include "ui/widgets/IconButton.h"
 
 namespace ikaros
 {
 
 //==============================================================================
 /**
-    The bottom panel's Pedals tab, for audio tracks: the track's pedals as
-    a row of stompboxes, like a guitarist's pedalboard.
+    The bottom panel's Pedals tab, for guitar and bass tracks (see
+    EffectsController::hasPedalboard): the track's pedals as a row of
+    stompboxes on a darker floor, like a guitarist's pedalboard.
 
-        [] Guitar 1  Pedalboard                       [Tuner] [+ Add Pedal]
-        ---------------------------------------------------------------- (the floor)
         IN ---[pedal]---[pedal]---[pedal]---[ + Add pedal ]
+
+    The panel's header names the track and holds the Tuner and Add Pedal
+    buttons (see BottomPanel), so the board itself is all floor.
 
     The pedals are the effects at the start of the track's chain that have a
     PedalStyle (see PedalStyles.h); the Plug-ins inspector lists the same
@@ -31,8 +32,12 @@ public:
     /** Re-reads the selected track's pedals (model or selection changed). */
     void refresh();
 
-    /** The Tuner button follows the tuner. Called by the owner's ~30 Hz timer. */
-    void update();
+    /** False when there's no track, or its chain is full. */
+    bool canAddPedal() const;
+
+    /** Shows the menu of pedals to add at the end of the board, under
+        `target` (the panel's Add Pedal button, or the board's Add slot). */
+    void showAddMenu (juce::Component& target);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -43,17 +48,10 @@ private:
 
     AudioEngine& engine;
     Selection& selection;
-    std::optional<TrackInfo> track;
+    TrackId trackId = 0;   // the audio track shown (0 = none)
 
-    IconButton tunerButton { "Tuner", Icon::tuningFork, "Tuner" };
-    IconButton addButton { "Add pedal", Icon::plus, "Add Pedal" };
     juce::Viewport viewport;
     std::unique_ptr<Board> board;
-    juce::Rectangle<int> titleArea;
-
-    void showAddMenu (juce::Component& target);
-
-    static constexpr int headerHeight = 48;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PedalboardView)
 };

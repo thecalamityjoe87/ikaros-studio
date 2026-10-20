@@ -892,6 +892,22 @@ std::vector<EffectType> EffectsController::getAvailableEffects() const
     return effects;
 }
 
+bool EffectsController::hasPedalboard (TrackId id) const
+{
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr || ! isAudioTrack (*t))
+        return false;
+
+    const auto icon = t->state.getProperty (iconProp).toString();
+
+    if (icon == "guitar" || icon == "bass")
+        return true;
+
+    auto effects = effectsOn (t->pluginList);
+    return std::any_of (effects.begin(), effects.end(), [] (te::Plugin* p) { return isPedal (*p); });
+}
+
 void EffectsController::showPluginWindow (TrackId id, PluginId pluginId)
 {
     if (auto* list = findPluginList (owner.getEdit(), id))

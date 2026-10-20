@@ -3813,6 +3813,39 @@ static void runPedalsSection (const juce::File& dir)
                "Reverb and Limiter aren't pedals");
     }
 
+    std::cout << "Which tracks have a pedalboard\n";
+    {
+        TrackId guitar = 0;
+        checkUndoRoundTrip (engine, "Add Guitar Track", [&] { guitar = tracks.addGuitarTrack(); });
+        const auto info = tracks.getTrack (guitar);
+        check (info.has_value() && info->kind == TrackKind::audio && info->name == "Guitar 1" && info->icon == "guitar",
+               "Guitar or Bass makes an audio track called Guitar 1, with the guitar icon");
+        check (effects.hasPedalboard (guitar), "which has a pedalboard");
+
+        check (! effects.hasPedalboard (t), "a plain audio track (a microphone) doesn't");
+        tracks.setTrackIcon (t, "bass");
+        check (effects.hasPedalboard (t), "one with the bass icon does");
+        tracks.setTrackIcon (t, "mic");
+        check (! effects.hasPedalboard (t), "and with the microphone icon it doesn't again");
+
+        const auto chorus = effects.addEffect (t, "chorus");
+        check (effects.hasPedalboard (t), "an audio track with a pedal keeps its pedalboard, whatever its icon");
+        effects.removeEffect (t, chorus);
+        effects.addEffect (t, "reverb");
+        check (! effects.hasPedalboard (t), "(other effects don't count)");
+        removeAll (t);
+        tracks.setTrackIcon (t, {});
+
+        const auto instrument = tracks.addInstrumentTrack();
+        tracks.setTrackIcon (instrument, "guitar");
+        effects.addEffect (instrument, "chorus");
+        check (! effects.hasPedalboard (instrument) && ! effects.hasPedalboard (masterTrackId),
+               "instrument tracks and the master never do");
+        tracks.deleteTrack (instrument);
+        tracks.deleteTrack (guitar);
+        pumpMessages();
+    }
+
     std::cout << "Pedals come first\n";
     {
         const auto reverb = effects.addEffect (t, "reverb");

@@ -1,4 +1,5 @@
 #include "ui/bottompanel/BottomPanel.h"
+#include "engine/Tuner.h"
 #include "ui/widgets/AutomationHint.h"
 #include "ui/widgets/Knob.h"
 #include "ui/bottompanel/PianoKeyboard.h"
@@ -503,6 +504,20 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     addAndMakeVisible (inspectorButton);
 
+    // The Pedals tab's own buttons, in the header (so the board below is all
+    // pedals). Tuner lights up while the tuner is on (see update()).
+    for (auto* b : { &tunerButton, &addPedalButton })
+    {
+        b->setColours (IconButton::raisedColours);
+        b->setFont (fonts::ui (textSize::md));
+        b->setIconSize (16.0f);
+        addChildComponent (b);
+    }
+
+    tunerButton.setTooltip ("Tune up: the transport readout becomes a tuner for this track's input");
+    tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
+    addPedalButton.onClick = [this] { pedalboard.showAddMenu (addPedalButton); };
+
     // An ordinary button, like the rest of the header's.
     collapseButton.setColours (IconButton::raisedColours);
     collapseButton.setTooltip ("Hide panel");
@@ -567,9 +582,18 @@ void BottomPanel::setMixerShown (bool shouldShow)
     refresh();
 }
 
-bool BottomPanel::isPedalboardAvailable() const noexcept
+void BottomPanel::updatePedalboardAvailable()
 {
-    return track.has_value() && track->kind == TrackKind::audio;
+    const auto id = track.has_value() ? track->id : TrackId (0);
+    const bool sameTrack = id == pedalboardTrack;
+    pedalboardTrack = id;
+
+    // A guitar or bass track (or one with pedals) has a pedalboard. The
+    // board also stays while it's showing for the same track (see
+    // isPedalboardAvailable).
+    const bool stays = sameTrack && pedalboardAvailable && tab == Tab::pedals
+                         && track.has_value() && track->kind == TrackKind::audio;
+    pedalboardAvailable = id != 0 && (engine.getTracks().effects().hasPedalboard (id) || stays);
 }
 
 TrackId BottomPanel::getTarget() const
@@ -613,6 +637,8 @@ void BottomPanel::showTabPage()
 
     pedalsShown = isPedalboardAvailable();
     pedalsTab.setVisible (open && pedalsShown);
+    tunerButton.setVisible (tabPage && tab == Tab::pedals);
+    addPedalButton.setVisible (tabPage && tab == Tab::pedals);
 
     trackModeButton.setVisible (column);
     masterModeButton.setVisible (column && tab != Tab::editor);
@@ -747,8 +773,10 @@ void BottomPanel::refreshTrack()
     if (isShowingEffect() && effectEditor->getTrackId() != getTarget())
         closeEffect();
 
-    // The Pedals segment comes and goes with audio tracks; off one, the
-    // Pedals tab gives way to Sound.
+    // The Pedals segment comes and goes with guitar and bass tracks; off
+    // one, the Pedals tab gives way to Sound.
+    updatePedalboardAvailable();
+
     if (tab == Tab::pedals && ! isPedalboardAvailable())
     {
         tab = Tab::sound;
@@ -765,6 +793,10 @@ void BottomPanel::refreshTrack()
     inspector.refresh();
     soundPage->refresh (track);
     pedalboard.refresh();
+    addPedalButton.setEnabled (pedalboard.canAddPedal());
+    addPedalButton.setTooltip (pedalboard.canAddPedal() ? juce::String ("Add a pedal at the end of the board")
+                                                        : "This track has " + juce::String (EffectsController::maxEffectsPerTrack)
+                                                            + " effects, the most a track can have");
     masterPage->refresh();
     eqView.setTarget (getTarget(), ! showsMaster() && track.has_value() ? colour::familyOf (*track) : Family::master);
 
@@ -830,8 +862,8 @@ void BottomPanel::update()
     inspector.update();
     soundPage->update();
 
-    if (pedalboard.isVisible())
-        pedalboard.update();
+    if (tunerButton.isVisible())
+        tunerButton.setToggleState (engine.getTuner().isActive(), juce::dontSendNotification);
 
     if (mixerShown)
         mixer.updateMeters();
@@ -995,6 +1027,16 @@ void BottomPanel::resized()
     header.removeFromRight (8);
     inspectorButton.setBounds (header.removeFromRight (96).withSizeKeepingCentre (96, 30));
     header.removeFromRight (14);
+
+    // On the Pedals tab: Tuner and Add Pedal, left of Inspector.
+    if (addPedalButton.isVisible())
+    {
+        addPedalButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 30));
+        header.removeFromRight (8);
+        tunerButton.setBounds (header.removeFromRight (88).withSizeKeepingCentre (88, 30));
+        header.removeFromRight (14);
+    }
+
     titleArea = header;
 
     r.removeFromTop (1);   // the line under the header

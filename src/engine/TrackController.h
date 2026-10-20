@@ -74,6 +74,11 @@ public:
 
     /** Adds an audio track, for recording a microphone, guitar or other input. */
     TrackId addAudioTrack();
+
+    /** Adds an audio track for a guitar or bass (New Track's "Guitar or
+        Bass"): named "Guitar N", with the guitar icon, so it gets a
+        pedalboard (see EffectsController::hasPedalboard). One undo step. */
+    TrackId addGuitarTrack();
     void deleteTrack (TrackId);
 
     /** Adds a copy of a track just below it: same kind, sound, effects, mixer

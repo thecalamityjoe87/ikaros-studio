@@ -1,10 +1,9 @@
 #include "ui/bottompanel/PedalboardView.h"
-#include "engine/Tuner.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Theme.h"
 #include "ui/theme/Tokens.h"
-#include "ui/theme/TrackColours.h"
+#include "ui/widgets/Icons.h"
 
 namespace ikaros
 {
@@ -372,18 +371,6 @@ PedalboardView::PedalboardView (AudioEngine& e, Selection& s) : engine (e), sele
 {
     setTitle ("Pedalboard");
 
-    for (auto* b : { &tunerButton, &addButton })
-    {
-        b->setColours (IconButton::borderedColours);
-        b->setFont (fonts::uiSemiBold (textSize::md));
-        b->setIconSize (16.0f);
-        addAndMakeVisible (b);
-    }
-
-    tunerButton.setTooltip ("Tune up: the transport readout becomes a tuner for this track's input");
-    tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
-    addButton.onClick = [this] { showAddMenu (addButton); };
-
     board = std::make_unique<Board> (*this);
     viewport.setViewedComponent (board.get(), false);   // false: we own the board, not the viewport
     viewport.setScrollBarsShown (true, true);   // scrollbars only when the pedals don't fit
@@ -398,28 +385,22 @@ PedalboardView::~PedalboardView()
 
 void PedalboardView::refresh()
 {
-    track = engine.getTracks().getTrack (selection.getTrack());
-    const bool audioTrack = track.has_value() && track->kind == TrackKind::audio;
-    board->refresh (audioTrack ? track->id : 0);
-
-    addButton.setEnabled (audioTrack && ! board->isFull());
-    addButton.setTooltip (board->isFull() ? "This track has " + juce::String (EffectsController::maxEffectsPerTrack)
-                                              + " effects, the most a track can have"
-                                          : juce::String ("Add a pedal at the end of the board"));
-    repaint (titleArea);
+    const auto track = engine.getTracks().getTrack (selection.getTrack());
+    trackId = track.has_value() && track->kind == TrackKind::audio ? track->id : 0;
+    board->refresh (trackId);
 }
 
-void PedalboardView::update()
+bool PedalboardView::canAddPedal() const
 {
-    tunerButton.setToggleState (engine.getTuner().isActive(), juce::dontSendNotification);
+    return trackId != 0 && ! board->isFull();
 }
 
 void PedalboardView::showAddMenu (juce::Component& target)
 {
-    if (! track.has_value() || board->isFull())
+    if (! canAddPedal())
         return;
 
-    const auto id = track->id;
+    const auto id = trackId;
     auto& effects = engine.getTracks().effects();
     buildPedalMenu ([&effects, id] (const juce::String& type) { effects.addEffect (id, type); })
         .showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target));
@@ -427,47 +408,12 @@ void PedalboardView::showAddMenu (juce::Component& target)
 
 void PedalboardView::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds();
-    auto header = r.removeFromTop (headerHeight);
-
-    g.setColour (theme().bottomPanelBg);
-    g.fillRect (header);
-    g.setColour (theme().borderSoft);
-    g.fillRect (header.removeFromBottom (1));
-    g.setColour (theme().pedalboardFloor);
-    g.fillRect (r);
-
-    // The track: a swatch in its colour, its name, then "Pedalboard".
-    if (! track.has_value())
-        return;
-
-    auto title = titleArea;
-    g.setColour (colour::forTrack (*track));
-    g.fillRoundedRectangle (title.removeFromLeft (14).withSizeKeepingCentre (14, 14).toFloat(), 3.5f);
-    title.removeFromLeft (10);
-
-    g.setColour (theme().text);
-    g.setFont (fonts::uiBold (textSize::lg));
-    const auto nameWidth = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), track->name));
-    g.drawText (track->name, title.removeFromLeft (juce::jmin (nameWidth + 2, title.getWidth())), juce::Justification::centredLeft, true);
-    title.removeFromLeft (10);
-    g.setColour (theme().textSecondary);
-    g.setFont (fonts::ui (textSize::md));
-    g.drawText ("Pedalboard", title, juce::Justification::centredLeft, true);
+    g.fillAll (theme().pedalboardFloor);
 }
 
 void PedalboardView::resized()
 {
-    auto r = getLocalBounds();
-    auto header = r.removeFromTop (headerHeight).withTrimmedBottom (1).reduced (size::panelPadding, 0);
-
-    addButton.setBounds (header.removeFromRight (124).withSizeKeepingCentre (124, 32));
-    header.removeFromRight (8);
-    tunerButton.setBounds (header.removeFromRight (92).withSizeKeepingCentre (92, 32));
-    header.removeFromRight (14);
-    titleArea = header;
-
-    viewport.setBounds (r);
+    viewport.setBounds (getLocalBounds());
     board->updateSize();
 }
 
