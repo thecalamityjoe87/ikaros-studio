@@ -19,6 +19,7 @@
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "engine/Tuner.h"
+#include "engine/LiveWaveform.h"
 #include "platform/AppFolders.h"
 #include "platform/FileLock.h"
 
@@ -414,12 +415,21 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
         // Designated initialisers (C++20): name the Options fields we set; the
         // rest keep their defaults.
-        return te::Edit::createEdit ({ .engine = engine,
-                                       .editState = state,
-                                       .editProjectItemID = id,
-                                       .editFileRetriever = [this] { return sessionFile; },
-                                       .filePathResolver = [this] (const juce::String& path) { return resolvePath (path); },
-                                       .numAudioTracks = 0 });   // no default track: we add our own
+        auto edit = te::Edit::createEdit ({ .engine = engine,
+                                            .editState = state,
+                                            .editProjectItemID = id,
+                                            .editFileRetriever = [this] { return sessionFile; },
+                                            .filePathResolver = [this] (const juce::String& path) { return resolvePath (path); },
+                                            .numAudioTracks = 0 });   // no default track: we add our own
+
+        // Tracktion numbers new tracks, regions and plug-ins from one past the
+        // highest number in the session, worked out the first time it needs
+        // one. Have it work that out now, while the whole session is here:
+        // otherwise, after deleting a track, a new effect could get the
+        // number of one of its plug-ins (they live on in the undo history),
+        // and undoing the delete would bring back two plug-ins with one ID.
+        edit->createNewItemID();
+        return edit;
     }
 
     // Audio regions refer to their files by path, relative to the session
@@ -794,6 +804,7 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
 
     recordingGuard = std::make_unique<RecordingGuard> (*this);
     tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
+    liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
     deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
     sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
@@ -827,6 +838,7 @@ AudioEngine::~AudioEngine()
 
     recordingGuard.reset();
     tuner.reset();
+    liveWaveform.reset();
 
     impl->detachMasterMeter();
     preview.reset();
@@ -2440,11 +2452,42 @@ SystemStats AudioEngine::getSystemStats() const
     return s;
 }
 
+void AudioEngine::updateLiveRecording()
+{
+    auto* edit = impl->edit.get();
+    auto* track = edit != nullptr ? detail::findTrack (edit, impl->takeTrack) : nullptr;
+
+    if (track == nullptr || ! detail::isAudioTrack (*track) || ! edit->getTransport().isRecording())
+    {
+        if (liveWaveform->isRunning())
+            liveWaveform->stop();
+
+        return;
+    }
+
+    auto& tempo = edit->tempoSequence;
+
+    // A new take: its waveform starts where the take does (after any count-in).
+    if (! liveWaveform->isRunning() || liveWaveform->get().track != impl->takeTrack)
+        liveWaveform->start (impl->takeTrack, tempo.toTime (te::BeatPosition::fromBeats (impl->recordStartBeats)).inSeconds());
+
+    liveWaveform->collect (edit->getTransport().getPosition().inSeconds(), [&tempo] (double seconds)
+    {
+        return tempo.toBeats (te::TimePosition::fromSeconds (seconds)).inBeats();
+    });
+}
+
+const LiveRecording& AudioEngine::getLiveRecording() const
+{
+    return liveWaveform->get();
+}
+
 void AudioEngine::reattachAudioCallbacks()
 {
     preview->reattach();
     recordingGuard->reattach();
     tuner->reattach();
+    liveWaveform->reattach();
 
     if (impl->realtimeThread != nullptr)
         impl->realtimeThread->reattach();

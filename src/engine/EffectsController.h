@@ -71,12 +71,18 @@ public:
     // it's a pedal. Instrument tracks and the master keep any order. Older
     // sessions open in the order they were saved in.
 
-    /** True for an audio track that gets a pedalboard (the bottom panel's
-        Pedals tab): a guitar or bass track (its icon is "guitar" or "bass",
-        see TrackController::addGuitarTrack), or one that already has pedals,
-        so pedals never become unreachable. Vocal and other audio tracks,
-        instrument tracks and the master don't. */
+    /** True for an audio track that shows a pedalboard (the bottom panel's
+        Pedals tab). Any audio track can (setPedalboardShown); until it's set,
+        guitar and bass tracks do (their icon is "guitar" or "bass", see
+        TrackController::addGuitarTrack), and so do tracks that already have
+        pedals. Instrument tracks and the master never do. */
     bool hasPedalboard (TrackId) const;
+
+    /** Shows or hides an audio track's pedalboard, in one undo step (View >
+        Pedalboard shows it). Hiding it doesn't remove the pedals: they still
+        play, and the Plug-ins inspector still lists them. Saved with the
+        session. */
+    void setPedalboardShown (TrackId, bool shown);
 
     /** Adds an effect at a position in the chain (-1 = at the end). Returns 0 if it couldn't. */
     PluginId addEffect (TrackId, const juce::String& type, int position = -1);

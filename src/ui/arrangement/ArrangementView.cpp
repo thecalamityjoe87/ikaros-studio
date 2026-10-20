@@ -534,6 +534,9 @@ void ArrangementView::updateTransport()
     lastPlayheadX = x;
     playhead->setX (x);
 
+    // The live waveform first, so the recording region repaints with it.
+    engine.updateLiveRecording();
+
     if (state.recording)
         content->setRecording (engine.getTracks().inputs().getArmedTrack(), state.recordStartBeats, state.positionBeats);
     else

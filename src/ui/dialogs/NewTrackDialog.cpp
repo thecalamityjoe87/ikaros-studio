@@ -93,7 +93,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     instrumentCard = std::make_unique<Card> (Icon::keyboards, "Software Instrument",
                                              "Play and record with a MIDI keyboard, your computer keyboard or the on-screen keyboard.",
                                              Family::keys);
-    audioCard = std::make_unique<Card> (Icon::mic, "Real Instrument",
+    audioCard = std::make_unique<Card> (Icon::mic, "Audio",
                                         "Record a microphone, or anything else plugged into your audio interface.",
                                         Family::audio);   // audio tracks are always the audio blue
     guitarCard = std::make_unique<Card> (Icon::guitar, "Guitar or Bass",
@@ -108,7 +108,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
         addAndMakeVisible (card);
     }
 
-    // Real Instrument options
+    // Audio and Guitar or Bass options
     inputs = engine.getTracks().inputs().getAudioInputs();
 
     for (int i = 0; i < (int) inputs.size(); ++i)

@@ -532,6 +532,10 @@ BottomPanel::~BottomPanel() = default;
 
 void BottomPanel::setTab (Tab t)
 {
+    // (The pedalboard may have just been shown from the menu, before the
+    // engine's change notice has come through.)
+    updatePedalboardAvailable();
+
     if (t == Tab::pedals && ! isPedalboardAvailable())
         t = Tab::sound;
 

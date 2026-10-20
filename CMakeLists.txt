@@ -280,6 +280,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
     src/engine/PitchDetector.h      src/engine/PitchDetector.cpp
     src/engine/Tuner.h              src/engine/Tuner.cpp
+    src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
 

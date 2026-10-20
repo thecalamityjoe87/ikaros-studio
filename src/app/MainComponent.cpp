@@ -697,8 +697,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setTicked (engine.getTracks().automation().areAllLanesShown());
             break;
         case CommandIDs::showPedalboardTab:
+            // Any audio track: picking it shows the track's pedalboard if it was hidden.
             info.setInfo ("Pedalboard", "Show the selected audio track's pedals", "View", 0);
-            info.setActive (bottomPanel.isPedalboardAvailable());
+            info.setActive (hasTrack && track->kind == TrackKind::audio);
             info.setTicked (! bottomPanel.isMixerShown() && bottomPanel.getTab() == BottomPanel::Tab::pedals);
             info.addDefaultKeypress ('5', cmd);
             break;
@@ -886,7 +887,11 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::showSoundTab:    setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::sound); break;
         case CommandIDs::showEqTab:       setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::eq); break;
         case CommandIDs::showEditorTab:   setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::editor); break;
-        case CommandIDs::showPedalboardTab: setBottomPanelVisible (true); bottomPanel.setTab (BottomPanel::Tab::pedals); break;
+        case CommandIDs::showPedalboardTab:
+            tracks.effects().setPedalboardShown (trackId, true);   // (does nothing if it's showing already)
+            setBottomPanelVisible (true);
+            bottomPanel.setTab (BottomPanel::Tab::pedals);
+            break;
         case CommandIDs::toggleTempoLane: arrangement.setTempoLaneShown (! arrangement.isTempoLaneShown()); break;
         case CommandIDs::compactTracks:   arrangement.setTracksTall (false); break;
         case CommandIDs::tallTracks:      arrangement.setTracksTall (true); break;
@@ -957,7 +962,7 @@ bool MainComponent::canSplitAtPlayhead() const
 //==============================================================================
 void MainComponent::showNewTrackDialog()
 {
-    // Like GarageBand: choose Software Instrument or Real Instrument first.
+    // Like GarageBand: choose Software Instrument, Audio or Guitar or Bass first.
     NewTrackDialog::show (*this, engine, [this] (TrackId id) { selection.selectTrack (id); });
 }
 

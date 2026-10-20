@@ -14,6 +14,7 @@
 #include "engine/TestAudioDevice.h"
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
+#include "engine/LiveWaveform.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -470,6 +471,59 @@ static double residentMB()
 
 static void runRecordingSection (const juce::File& dir)
 {
+    // The waveform drawn while a take is recorded (see LiveWaveform), fed by
+    // hand as the audio thread would feed it: no device needed.
+    std::cout << "Live waveform\n";
+    {
+        juce::AudioDeviceManager noDevice;   // never opened
+        LiveWaveform live (noDevice);
+        live.prepare (48000.0);
+        live.setInputChannels (0, 1);        // a stereo input
+
+        // Plays `seconds` into it in 256-sample blocks: silent left, and the
+        // right side at `level` (the louder side counts).
+        auto play = [&live] (double seconds, float level)
+        {
+            std::vector<float> left (256, 0.0f), right (256, level);
+            const float* channels[] = { left.data(), right.data() };
+            const auto total = juce::roundToInt (seconds * 48000.0);
+
+            for (int done = 0; done < total; done += 256)
+                live.pushInput (channels, 2, juce::jmin (256, total - done));   // (the last block may be short)
+        };
+
+        auto toBeats = [] (double seconds) { return seconds * 2.0; };   // 120 BPM
+
+        // A take starting at 1 s, after half a second of count-in.
+        live.start (7, 1.0);
+        play (0.5, 0.0f);    // the count-in: before the take, left out
+        play (0.2, 0.0f);
+        play (0.3, 0.5f);
+        live.collect (1.5, toBeats);   // the take has run for half a second
+
+        const auto& got = live.get();
+        bool silenceThenSound = got.peaks.size() == 50;
+
+        for (size_t i = 0; silenceThenSound && i < got.peaks.size(); ++i)
+            silenceThenSound = std::abs (got.peaks[i] - (i >= 20 ? 0.5f : 0.0f)) < 0.001f;
+
+        check (got.track == 7 && silenceThenSound,
+               "it has one peak per 10 ms of the take (the count-in left out): 0.2 s quiet, then the louder side");
+        check (got.beats.size() == got.peaks.size() && std::abs (got.beats.front() - 2.0) < 1.0e-9
+                 && std::abs (got.beats.back() - 2.0 * 1.49) < 1.0e-9,
+               "each slice knows its beat on the timeline");
+
+        // A cycle recording jumps back: the next pass draws over the first.
+        play (0.1, 0.25f);
+        live.collect (1.1, toBeats);
+        check (got.peaks.size() == 50 && std::abs (got.peaks[0] - 0.25f) < 0.001f && std::abs (got.peaks[9] - 0.25f) < 0.001f
+                 && got.peaks[10] == 0.0f,
+               "a second pass replaces the first where it plays");
+
+        live.stop();
+        check (live.get().isEmpty() && ! live.isRunning(), "stopping forgets it");
+    }
+
     AudioEngine engine { testSettings, false };
 
     // 10 ms of input latency and 5 ms of output latency, as a USB interface
@@ -3843,6 +3897,62 @@ static void runPedalsSection (const juce::File& dir)
                "instrument tracks and the master never do");
         tracks.deleteTrack (instrument);
         tracks.deleteTrack (guitar);
+        pumpMessages();
+    }
+
+    std::cout << "Showing and hiding the pedalboard\n";
+    {
+        check (! effects.hasPedalboard (t), "(a vocal track has none to start with)");
+        checkUndoRoundTrip (engine, "Show Pedalboard", [&] { effects.setPedalboardShown (t, true); });
+        check (effects.hasPedalboard (t), "any audio track can show one");
+
+        const auto guitar = tracks.addGuitarTrack();
+        const auto chorus = effects.addEffect (guitar, "chorus");
+        checkUndoRoundTrip (engine, "Hide Pedalboard", [&] { effects.setPedalboardShown (guitar, false); });
+        check (! effects.hasPedalboard (guitar) && effects.getEffectChain (guitar).size() == 1,
+               "a guitar track can hide its pedalboard (and keeps its pedals)");
+
+        const auto instrument = tracks.addInstrumentTrack();
+        effects.setPedalboardShown (instrument, true);
+        check (! effects.hasPedalboard (instrument), "an instrument track can't have one");
+
+        const auto session = dir.getChildFile ("Pedalboards");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        auto list = tracks.getTracks();
+        TrackId vocal = 0, guitarAgain = 0;
+
+        for (auto& info : list)
+        {
+            if (info.kind == TrackKind::audio && info.icon == "guitar")     guitarAgain = info.id;
+            else if (info.kind == TrackKind::audio)                         vocal = info.id;
+        }
+
+        check (vocal != 0 && guitarAgain != 0 && effects.hasPedalboard (vocal) && ! effects.hasPedalboard (guitarAgain),
+               "shown and hidden pedalboards survive save and reopen");
+
+        // Back to just the vocal track for the checks below (they find it as
+        // the last track).
+        juce::ignoreUnused (chorus);
+        // Every ID in the session as it opened (the highest is the guitar's
+        // or the instrument track's, about to be deleted).
+        std::uint64_t highestId = 0;
+
+        for (auto& itemId : tracktion::EditItemID::findAllIDs (TestAudioDevice::getEditOf (engine)->state))
+            highestId = std::max<std::uint64_t> (highestId, itemId.getRawID());
+
+        tracks.deleteTrack (guitarAgain);
+        tracks.deleteTrack (list.back().id);   // the instrument track added above
+
+        // A new effect never reuses a deleted track's IDs: its plug-ins live
+        // on (in the undo history, and for a while in Tracktion's cache).
+        const auto added = effects.addEffect (vocal, "reverb");
+        check (added > highestId, "an effect added after deleting tracks gets a new ID, not a deleted plug-in's");
+        effects.removeEffect (vocal, added);
+        t = vocal;
+        effects.setPedalboardShown (t, false);
+        removeAll (t);
         pumpMessages();
     }
 

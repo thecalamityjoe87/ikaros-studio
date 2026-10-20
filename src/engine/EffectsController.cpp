@@ -892,12 +892,19 @@ std::vector<EffectType> EffectsController::getAvailableEffects() const
     return effects;
 }
 
+// An audio track's pedalboard shown (true) or hidden (false) by the user;
+// not there = the default (see hasPedalboard).
+static const juce::Identifier pedalboardProp ("ikarosPedalboard");
+
 bool EffectsController::hasPedalboard (TrackId id) const
 {
     auto* t = findTrack (owner.getEdit(), id);
 
     if (t == nullptr || ! isAudioTrack (*t))
         return false;
+
+    if (t->state.hasProperty (pedalboardProp))
+        return (bool) t->state.getProperty (pedalboardProp);
 
     const auto icon = t->state.getProperty (iconProp).toString();
 
@@ -906,6 +913,17 @@ bool EffectsController::hasPedalboard (TrackId id) const
 
     auto effects = effectsOn (t->pluginList);
     return std::any_of (effects.begin(), effects.end(), [] (te::Plugin* p) { return isPedal (*p); });
+}
+
+void EffectsController::setPedalboardShown (TrackId id, bool shown)
+{
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr || ! isAudioTrack (*t) || hasPedalboard (id) == shown)
+        return;
+
+    owner.beginUndoStep (shown ? "Show Pedalboard" : "Hide Pedalboard");
+    t->state.setProperty (pedalboardProp, shown, &owner.getEdit()->getUndoManager());
 }
 
 void EffectsController::showPluginWindow (TrackId id, PluginId pluginId)

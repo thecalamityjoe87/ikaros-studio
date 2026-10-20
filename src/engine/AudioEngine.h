@@ -29,6 +29,8 @@ class SongExporter;
 class RecordingGuard;
 class AudioDeviceWatcher;
 class Tuner;
+class LiveWaveform;
+struct LiveRecording;
 
 //==============================================================================
 /** What the engine hands the UI when a third-party plug-in's window should
@@ -382,6 +384,15 @@ public:
         settings::muteWhileTuning says so. */
     Tuner& getTuner() noexcept                  { return *tuner; }
 
+    /** The audio take being recorded, drawn live in the arrangement (see
+        LiveWaveform): updateLiveRecording() takes in what the input has
+        sent since the last call (the UI's timer calls it), and
+        getLiveRecording() is what to draw. Empty while not recording audio.
+        Message thread. */
+    void updateLiveRecording();
+    const LiveRecording& getLiveRecording() const;
+    LiveWaveform& getLiveWaveform() noexcept    { return *liveWaveform; }
+
     /** Sets how plug-in windows are framed (see PluginWindowRequest). Without
         one, plug-in windows don't open. */
     void setPluginWindowFactory (PluginWindowFactory);
@@ -471,6 +482,7 @@ private:
     std::unique_ptr<SongExporter> exporter;
     std::unique_ptr<RecordingGuard> recordingGuard;
     std::unique_ptr<Tuner> tuner;
+    std::unique_ptr<LiveWaveform> liveWaveform;
     std::unique_ptr<AudioDeviceWatcher> deviceWatcher;
     juce::Component::SafePointer<juce::Component> audioSettings;
 

@@ -1,6 +1,7 @@
 #include "ui/arrangement/ArrangementLane.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/arrangement/ArrangementRegionDrag.h"
+#include "engine/LiveWaveform.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 
@@ -168,6 +169,59 @@ void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
 
     g.setFont (fonts::uiBold (textSize::xs));
     g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
+
+    paintLiveWaveform (g, r.withTrimmedTop (18.0f).reduced (0.0f, 4.0f));
+}
+
+void ArrangementView::Lane::paintLiveWaveform (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    // An audio take's waveform so far, as the input sends it (see
+    // LiveWaveform). It's replaced by the take's real waveform when
+    // recording stops.
+    const auto& live = owner.engine.getLiveRecording();
+
+    if (live.track != trackId || live.isEmpty() || area.getHeight() <= 2.0f)
+        return;
+
+    auto& geo = owner.geometry;
+    const int left = juce::jmax (0, (int) std::floor (area.getX()));
+    const int right = juce::jmin (getWidth(), (int) std::ceil (area.getRight()));
+
+    if (right <= left)
+        return;
+
+    // The loudest slice under each pixel column. Slices left of the screen
+    // are skipped with a binary search (their beats rise).
+    std::vector<float> columns ((size_t) (right - left), 0.0f);
+    auto first = std::lower_bound (live.beats.begin(), live.beats.end(), geo.xToBeat ((float) left));
+    auto i = (size_t) std::distance (live.beats.begin(), first);
+    i = i > 0 ? i - 1 : 0;
+
+    for (; i < live.peaks.size(); ++i)
+    {
+        const int column = (int) std::floor (geo.beatToX (live.beats[i])) - left;
+
+        if (column >= (int) columns.size())
+            break;
+
+        if (column >= 0)
+            columns[(size_t) column] = juce::jmax (columns[(size_t) column], live.peaks[i]);
+    }
+
+    // Mirrored about the middle, like a finished region's waveform.
+    const auto mid = area.getCentreY(), halfHeight = area.getHeight() * 0.5f;
+    juce::Path wave;
+    wave.startNewSubPath ((float) left, mid);
+
+    for (int x = 0; x < (int) columns.size(); ++x)
+        wave.lineTo ((float) (left + x), mid - columns[(size_t) x] * halfHeight);
+
+    for (int x = (int) columns.size(); --x >= 0;)
+        wave.lineTo ((float) (left + x), mid + columns[(size_t) x] * halfHeight);
+
+    wave.closeSubPath();
+    g.setColour (theme().arrangement.record.withAlpha (0.85f));
+    g.fillPath (wave);
 }
 
 void ArrangementView::Lane::paint (juce::Graphics& g)

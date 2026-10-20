@@ -153,7 +153,7 @@ namespace
         p.tintDark            = hex (0xff000000);
 
         p.pedalboardFloor     = hex (0xff0e1013);
-        p.pedalboardCable     = hex (0xff050608);
+        p.pedalboardCable     = hex (0xff4a505b);   // lighter than the floor, so it shows
 
         p.scrim               = juce::Colours::black.withAlpha (0.55f);
         p.scrimStrong         = juce::Colours::black.withAlpha (0.6f);    // session chooser

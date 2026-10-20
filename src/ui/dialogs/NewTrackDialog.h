@@ -8,9 +8,9 @@ namespace ikaros
 
 //==============================================================================
 /**
-    The "New Track" chooser, like GarageBand's: pick a Software Instrument, a
-    Real Instrument (a microphone or anything else plugged in) or Guitar or
-    Bass (a Real Instrument with a pedalboard), then Create.
+    The "New Track" chooser, like GarageBand's: pick a Software Instrument,
+    Audio (a microphone or anything else plugged in) or Guitar or Bass (an
+    audio track with a pedalboard), then Create.
 
     Shown inside the main window over a dimmed background (see show()), so it
     looks the same on every OS. Deletes itself when closed.

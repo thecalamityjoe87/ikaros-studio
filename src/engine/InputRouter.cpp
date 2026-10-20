@@ -2,6 +2,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/TrackHelpers.h"
 #include "engine/Tuner.h"
+#include "engine/LiveWaveform.h"
 #include <map>
 
 namespace te = tracktion;
@@ -250,6 +251,24 @@ void InputRouter::routeAudioInputs()
     }
 
     tuner.setInputChannels (tunerChannels[0], tunerChannels[1]);
+
+    // The live waveform (see LiveWaveform) listens to the input the takes
+    // are recorded from: the armed (or else selected) audio track's.
+    int takeChannels[2] = { -1, -1 };
+
+    for (auto* in : dm.getWaveInputDevices())
+    {
+        if (settings.inputId.isNotEmpty() && in->getDeviceID() == settings.inputId && in->isEnabled())
+        {
+            int n = 0;
+
+            for (auto& ci : in->getChannels())
+                if (n < 2)
+                    takeChannels[n++] = ci.indexInDevice;
+        }
+    }
+
+    owner.getLiveWaveform().setInputChannels (takeChannels[0], takeChannels[1]);
     const bool tunerMutes = tuner.isActive() && owner.getPreferences().get (ikaros::settings::muteWhileTuning);   // ikaros:: because the local `settings` hides the namespace
 
     for (auto* instance : edit->getAllInputDevices())

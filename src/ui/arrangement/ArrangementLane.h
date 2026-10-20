@@ -35,6 +35,7 @@ public:
     /** The take being recorded on this lane, from startBeat to the playhead
         (nothing when endBeat <= startBeat). */
     void setRecordingRange (double startBeat, double endBeat);
+    void paintLiveWaveform (juce::Graphics&, juce::Rectangle<float> area);   // in the recording region
 
     void paintOverChildren (juce::Graphics&) override;
     void paint (juce::Graphics&) override;

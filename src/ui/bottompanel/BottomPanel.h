@@ -30,9 +30,11 @@ namespace ikaros
       Editor: the selected region, close up: the piano roll for a MIDI
               region, the audio editor for an audio region (tracks only)
       EQ:     a 4-band EQ
-      Pedals: a guitar or bass track's pedalboard (the segment only shows
-              for those; see EffectsController::hasPedalboard). The header
-              gets Tuner and Add Pedal buttons on this tab.
+      Pedals: an audio track's pedalboard (the segment only shows when the
+              track has one: guitar and bass tracks do by default, other
+              audio tracks once View > Pedalboard turns it on; see
+              EffectsController::hasPedalboard). The header gets Tuner and
+              Add Pedal buttons on this tab.
       Mixer:  every track's fader at once (and the master's, fixed on the
               right), across the whole panel
 
