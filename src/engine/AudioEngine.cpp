@@ -838,12 +838,16 @@ private:
         if (edit != nullptr && ! userHasMadeChanges)
         {
             edit->getUndoManager().clearUndoHistory();
-            edit->resetChangedStatus();
+            edit->resetChangedStatus();   // (delivers the history's change message first)
+            autosaver.clearUserChanges();
             addPending ({});   // nothing to re-read, but Undo is no longer available
         }
 
         if (edit != nullptr && std::exchange (keepUnsavedAfterSetup, false))
+        {
             edit->markAsChanged();
+            autosaver.markUserChanges();
+        }
     }
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override
@@ -999,6 +1003,7 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
     // Building the template isn't something to undo.
     impl->edit->getUndoManager().clearUndoHistory();
     impl->edit->resetChangedStatus();
+    impl->autosaver.clearUserChanges();
     impl->startFromCleanSlateSoon();
     notifyModelChanged();
 }
@@ -1766,6 +1771,7 @@ bool AudioEngine::recoverSession (const RecoverableSession& session)
     impl->startFromCleanSlateSoon();
     impl->keepUnsavedAfterSetup = true;
     impl->edit->markAsChanged();
+    impl->autosaver.markUserChanges();
 
     // A fresh recovery copy with the takes in it (this also replaces the old
     // Recovery.json, takes and all).
@@ -1793,7 +1799,7 @@ void AudioEngine::setAutosaveTiming (int quietMs, int minIntervalMs, int maxWait
 
 bool AudioEngine::hasUnsavedChanges() const
 {
-    return impl->edit != nullptr && impl->edit->hasChangedSinceSaved();
+    return impl->edit != nullptr && impl->edit->hasChangedSinceSaved() && impl->autosaver.hasUserChanges();
 }
 
 void AudioEngine::notifyModelChanged (const ModelChanges& changes)

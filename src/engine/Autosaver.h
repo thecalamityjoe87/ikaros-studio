@@ -80,6 +80,13 @@ public:
 
     juce::Time getLastAutosaveTime() const     { return lastAutosaveTime; }
 
+    /** Whether the user has changed the session since it was opened or saved.
+        Tracktion's own changed flag also trips on plug-ins reporting their
+        own parameter changes (during playback, say), which isn't the user. */
+    bool hasUserChanges() const                { return userChanged; }
+    void markUserChanges()                     { userChanged = true; }
+    void clearUserChanges()                    { userChanged = false; }
+
 private:
     struct LiveTake;   // defined in the .cpp (it holds Tracktion types)
 
@@ -89,6 +96,7 @@ private:
     std::unique_ptr<platform::FileLock> lock;
 
     Timing timing;
+    bool userChanged = false;          // an undoable change since opened or saved
     bool pending = false;              // changes since the last autosave
     bool ignoringChanges = false;      // while autosaveNow itself touches the undo manager
     juce::uint32 firstChange = 0, lastChange = 0, lastAutosave = 0;

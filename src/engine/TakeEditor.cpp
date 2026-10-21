@@ -190,6 +190,30 @@ static std::vector<juce::ValueTree> midiTakeListsOf (te::MidiClip& clip)
 }
 
 //==============================================================================
+// Tracktion names a recording "<track> Recording 1" (the first number free
+// on its track). On a region with takes, that number follows the take it
+// plays, so the name agrees with the take badge. A name the user typed
+// (anything not ending in "Recording <number>") is left alone.
+static void numberAfterCurrentTake (te::Clip& clip)
+{
+    const int current = currentTakeIndex (clip);
+
+    if (countTakes (clip) == 0 || current < 0)
+        return;
+
+    const auto name = clip.getName();
+    const juce::String word (" Recording ");
+    const int at = name.lastIndexOf (word);
+
+    if (at < 0)
+        return;
+
+    const auto number = name.substring (at + word.length());
+
+    if (number.isNotEmpty() && number.containsOnly ("0123456789"))
+        clip.setName (name.substring (0, at + word.length()) + juce::String (current + 1));
+}
+
 TakeEditor::TakeEditor (AudioEngine& o) : owner (o)
 {
 }
@@ -228,6 +252,7 @@ bool TakeEditor::setCurrentTake (RegionId id, int takeIndex)
         playWaveTake (*wave, takeIndex);
     }
 
+    numberAfterCurrentTake (*clip);
     return true;
 }
 
@@ -264,6 +289,7 @@ bool TakeEditor::deleteUnusedTakes (RegionId id)
                 takes.removeChild (i, um);
     }
 
+    numberAfterCurrentTake (*clip);   // the one left is Take 1
     return true;
 }
 
@@ -403,6 +429,7 @@ static void addTakesTo (te::WaveAudioClip& existing, te::WaveAudioClip& recorded
     }
 
     playWaveTake (existing, first + recordedCurrent);
+    numberAfterCurrentTake (existing);
     recorded.removeFromParent();
 }
 
@@ -639,6 +666,7 @@ static void gatherMidi (te::MidiClip& clip, const std::set<RegionId>& recorded)
                 takes.addChild (list.createCopy(), -1, um);
 
             other->setCurrentTake (first + current);
+            numberAfterCurrentTake (*other);
             clip.removeFromParent();
             return;
         }
@@ -671,6 +699,11 @@ void TakeEditor::gatherRecordedTakes (const std::vector<RegionId>& recordedIds, 
             else if (auto* midi = dynamic_cast<te::MidiClip*> (clip); midi != nullptr && midiCycleTakes)
                 gatherMidi (*midi, recorded);
         }
+
+        // Still there (it didn't join another region's takes): its takes
+        // are its cycle passes and/or what it recorded over.
+        if (auto* clip = findClip (edit, id))
+            numberAfterCurrentTake (*clip);
     }
 }
 
