@@ -2221,12 +2221,13 @@ void AudioEngine::changeTempoMap (const std::vector<TempoChange>& tempos, const 
     // notes where (in beats) every region, loop range and automation point
     // is, then puts them back on those beats after the change. Regions of
     // loops and auto-tempo audio are stretched to fit, so they follow the
-    // new tempo; recordings just move (they keep their length in seconds).
+    // new tempo; other audio files just move (they keep their length in
+    // seconds).
     //
     // Curves on missing plug-ins have no parameters for the remapper to
-    // see; the automation editor keeps those on their beats. Flexed
-    // recordings follow the tempo too (their markers stay on their beats),
-    // which the remapper doesn't know about: see FlexHelpers.h.
+    // see; the automation editor keeps those on their beats. Recordings
+    // (and everything on a Flex track) follow the tempo too, through their
+    // warp markers, which the remapper doesn't know about: see FlexHelpers.h.
     trackController->automation().keepUnloadedCurvesOnBeats ([&]
     {
         te::EditTimecodeRemapperSnapshot snapshot;

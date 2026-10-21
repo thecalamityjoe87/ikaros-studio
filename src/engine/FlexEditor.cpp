@@ -1,6 +1,7 @@
 #include "engine/FlexEditor.h"
 #include "engine/AudioEngine.h"
 #include "engine/FlexHelpers.h"
+#include "engine/TakeHelpers.h"
 #include "engine/TrackHelpers.h"
 
 namespace te = tracktion;
@@ -61,6 +62,24 @@ static bool isFlexActive (const te::Clip& clip)
     return track != nullptr && isFlexTrack (*track) && canFlex (clip);
 }
 
+bool isRecordingFile (const juce::File& file)
+{
+    // "_take_" (any case) followed by a number, anywhere in the name.
+    const auto name = file.getFileNameWithoutExtension();
+
+    for (int at = name.indexOfIgnoreCase ("_take_"); at >= 0; at = name.indexOfIgnoreCase (at + 1, "_take_"))
+        if (juce::CharacterFunctions::isDigit (name[at + 6]))
+            return true;
+
+    return false;
+}
+
+bool followsTempo (const te::Clip& clip)
+{
+    auto* wave = asWave (clip);
+    return wave != nullptr && (isFlexActive (clip) || (isRecordingFile (wave->getOriginalFile()) && canFlex (clip)));
+}
+
 std::vector<WarpPoint> getWarpPoints (const te::AudioClipBase& clip)
 {
     std::vector<WarpPoint> points;
@@ -72,13 +91,27 @@ std::vector<WarpPoint> getWarpPoints (const te::AudioClipBase& clip)
     return points;
 }
 
+// Hits moved: markers of the user's own, besides the ends of the recording
+// and the tempo markers.
+static bool hasHitEdits (const std::vector<WarpPoint>& points)
+{
+    return points.size() > 2 && std::any_of (points.begin() + 1, points.end() - 1, [] (const WarpPoint& p) { return ! p.tempoMarker; });
+}
+
+bool hasHitEdits (const te::Clip& clip)
+{
+    auto* wave = asWave (clip);
+    return wave != nullptr && hasHitEdits (getWarpPoints (*wave));
+}
+
 // Tracktion only warps a clip (renders a stretched copy of its recording)
 // with its warpTime switch on. Ikaros keeps that switch on only while the
-// markers actually move something: a Flex region nobody has touched plays
-// its recording directly, with nothing to wait for and nothing stretched.
+// markers actually move something: a region nobody has touched, at the
+// tempo it was recorded at, plays its recording directly, with nothing to
+// wait for and nothing stretched.
 static void updateWarpSwitch (te::WaveAudioClip& clip)
 {
-    const bool warped = isFlexActive (clip) && flexmap::isWarped (getWarpPoints (clip));
+    const bool warped = followsTempo (clip) && flexmap::isWarped (getWarpPoints (clip));
 
     if (clip.getWarpTime() != warped)
         clip.setWarpTime (warped);   // a CachedValue bound to the state, with the undo manager
@@ -135,19 +168,6 @@ static void ensureWarpState (te::WaveAudioClip& clip)
 
         clip.state.addChild (manager.state, -1, um);
     }
-}
-
-void applyTrackFlex (te::Clip& clip)
-{
-    auto* wave = asWave (clip);
-
-    if (wave == nullptr)
-        return;
-
-    if (isFlexActive (clip))
-        ensureWarpState (*wave);
-
-    updateWarpSwitch (*wave);
 }
 
 void setWarpPoints (te::AudioClipBase& clip, const std::vector<WarpPoint>& points)
@@ -219,7 +239,7 @@ te::TimeDuration contentLengthOf (const te::AudioClipBase& clip)
 {
     const auto points = getWarpPoints (clip);
 
-    if (isFlexActive (clip) && points.size() >= 2)
+    if (followsTempo (clip) && points.size() >= 2)
         return te::TimeDuration::fromSeconds (points.back().warp);
 
     return te::TimeDuration::fromSeconds (recordingLengthOf (clip));
@@ -274,74 +294,54 @@ static void addTempoMarkerAt (std::vector<FlexMarker>& markers, double beat)
     markers.insert (next, { source, beat, true });
 }
 
-std::optional<FlexLayout> captureFlexLayout (const te::Clip& clip)
+// A marker at each end of the clip's recording, each in its own place: the
+// recording as it is.
+static std::vector<WarpPoint> plainPoints (const te::AudioClipBase& clip)
 {
-    auto* wave = asWave (clip);
+    const double length = recordingLengthOf (clip);
+    return { { 0.0, 0.0 }, { length, length } };
+}
 
-    if (wave == nullptr || ! isFlexActive (clip))
-        return std::nullopt;
-
-    const auto points = getWarpPoints (*wave);
+// Markers in seconds (warp seconds counted from `contentStart`) as beats
+// from the content start. Where the tempo changes between two of them, the
+// audio plays evenly in seconds but not in beats: a point there (a tempo
+// marker, where the audio plays now) keeps that bend.
+static std::vector<FlexMarker> markersInBeats (te::Edit& edit, const std::vector<WarpPoint>& points, te::TimePosition contentStart)
+{
+    std::vector<FlexMarker> markers;
 
     if (points.size() < 2)
-        return std::nullopt;
+        return markers;
 
-    auto& edit = clip.edit;
-    const auto contentStart = contentStartOf (clip);
-
-    FlexLayout layout;
-    layout.startBeat = clip.getStartBeat().inBeats();
-    layout.endBeat = clip.getEndBeat().inBeats();
-    layout.contentStartBeat = timeToBeat (edit, contentStart);
-
-    auto beatOf = [&] (double contentSeconds)
-    {
-        return timeToBeat (edit, contentStart + te::TimeDuration::fromSeconds (contentSeconds)) - layout.contentStartBeat;
-    };
+    const double contentStartBeat = timeToBeat (edit, contentStart);
 
     for (auto& p : points)
-        layout.markers.push_back ({ p.source, beatOf (p.warp), p.tempoMarker });
+        markers.push_back ({ p.source, timeToBeat (edit, contentStart + te::TimeDuration::fromSeconds (p.warp)) - contentStartBeat, p.tempoMarker });
 
-    // Where the tempo changes now, between two markers, the audio plays
-    // evenly in seconds but not in beats. A point there (where the audio
-    // plays now, from the markers in seconds) keeps that bend in the layout.
     for (double beat : tempoChangeBeats (edit))
     {
         const double warp = (beatToTime (edit, beat) - contentStart).inSeconds();
 
         if (warp > points.front().warp && warp < points.back().warp && flexmap::indexOf (points, flexmap::toSource (points, warp)) < 0)
         {
-            const FlexMarker m { flexmap::toSource (points, warp), beat - layout.contentStartBeat, true };
-            auto at = std::upper_bound (layout.markers.begin(), layout.markers.end(), m.sourceSeconds,
+            const FlexMarker m { flexmap::toSource (points, warp), beat - contentStartBeat, true };
+            auto at = std::upper_bound (markers.begin(), markers.end(), m.sourceSeconds,
                                         [] (double s, const FlexMarker& other) { return s < other.sourceSeconds; });
-            layout.markers.insert (at, m);
+            markers.insert (at, m);
         }
     }
 
-    if (clip.isLooping())
-    {
-        layout.looped = true;
-        layout.loopStartBeats = beatOf (wave->getLoopStart().inSeconds());
-        layout.loopEndBeats = beatOf ((wave->getLoopStart() + wave->getLoopLength()).inSeconds());
-    }
-
-    return layout;
+    return markers;
 }
 
-void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBeats)
+// The other way: markers in beats from the content start (at
+// `contentStartBeat`) as warp markers in seconds at the tempo now, with
+// tempo markers where the tempo changes inside them now.
+static std::vector<WarpPoint> markersInSeconds (te::Edit& edit, std::vector<FlexMarker> markers, double contentStartBeat)
 {
-    auto* wave = asWave (clip);
-
-    if (wave == nullptr || layout.markers.size() < 2)
-        return;
-
-    auto& edit = clip.edit;
-    auto* um = &edit.getUndoManager();
-    const double contentStartBeat = layout.contentStartBeat + shiftBeats;
     const auto contentStart = beatToTime (edit, contentStartBeat);
 
     // Tempo markers where the tempo changes now (in beats from the content start)...
-    auto markers = layout.markers;
     std::vector<double> changes;
 
     for (double beat : tempoChangeBeats (edit))
@@ -367,6 +367,142 @@ void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBe
             ++i;
     }
 
+    std::vector<WarpPoint> points;
+
+    for (auto& m : markers)
+        points.push_back ({ m.sourceSeconds, (beatToTime (edit, contentStartBeat + m.beat) - contentStart).inSeconds(), m.tempoMarker });
+
+    return points;
+}
+
+// The same, for the clip where it is now.
+static std::vector<WarpPoint> markersInSeconds (const te::Clip& clip, const std::vector<FlexMarker>& markers)
+{
+    return markersInSeconds (clip.edit, markers, timeToBeat (clip.edit, contentStartOf (clip)));
+}
+
+// Markers in beats, as a tree of POINTs (see pointType), and back.
+static juce::ValueTree makePointsTree (const juce::Identifier& type, const std::vector<FlexMarker>& markers)
+{
+    juce::ValueTree tree (type);
+
+    for (auto& m : markers)
+    {
+        juce::ValueTree point (pointType);
+        point.setProperty (te::IDs::sourceTime, m.sourceSeconds, nullptr);   // not in the Edit yet: no undo needed
+        point.setProperty (te::IDs::beat, m.beat, nullptr);
+
+        if (m.tempoMarker)
+            point.setProperty (tempoMarkerProp, true, nullptr);
+
+        tree.appendChild (point, nullptr);
+    }
+
+    return tree;
+}
+
+static std::vector<FlexMarker> readPoints (const juce::ValueTree& tree)
+{
+    std::vector<FlexMarker> markers;
+
+    for (auto point : tree)
+        if (point.hasType (pointType))
+            markers.push_back ({ (double) point[te::IDs::sourceTime], (double) point[te::IDs::beat],
+                                 (bool) point.getProperty (tempoMarkerProp, false) });
+
+    return markers;
+}
+
+// Puts `tree` on `parent` in place of any child of the same type (part of
+// the open undo step).
+static void replaceChild (juce::ValueTree parent, juce::ValueTree tree, juce::UndoManager* um)
+{
+    if (auto old = parent.getChildWithName (tree.getType()); old.isValid())
+        parent.removeChild (old, um);
+
+    parent.addChild (tree, -1, um);
+}
+
+// Where the clip's recording sits in beats with no hits moved: its beat map,
+// or, if it hasn't got one yet (the tempo hasn't changed since it was
+// recorded), where its recording plays as it is.
+static std::vector<FlexMarker> beatMapOf (const te::AudioClipBase& clip)
+{
+    auto markers = readPoints (clip.state.getChildWithName (beatMapType));
+
+    if (markers.size() < 2)
+        markers = markersInBeats (clip.edit, plainPoints (clip), contentStartOf (clip));
+
+    return markers;
+}
+
+// Writes the clip's markers, making its warp state first if they need it
+// (it costs a search for hits, so a clip whose markers would change nothing
+// doesn't get one).
+static void writeWarpPoints (te::WaveAudioClip& clip, const std::vector<WarpPoint>& points)
+{
+    if (! markersTreeOf (clip).isValid())
+    {
+        if (! flexmap::isWarped (points) && ! hasHitEdits (points))
+        {
+            updateWarpSwitch (clip);
+            return;
+        }
+
+        ensureWarpState (clip);
+    }
+
+    setWarpPoints (clip, points);
+}
+
+std::optional<FlexLayout> captureFlexLayout (const te::Clip& clip)
+{
+    auto* wave = asWave (clip);
+
+    if (wave == nullptr || ! followsTempo (clip))
+        return std::nullopt;
+
+    auto points = getWarpPoints (*wave);
+
+    if (points.size() < 2)
+        points = plainPoints (*wave);   // never warped: it plays its recording as it is
+
+    auto& edit = clip.edit;
+    const auto contentStart = contentStartOf (clip);
+
+    FlexLayout layout;
+    layout.startBeat = clip.getStartBeat().inBeats();
+    layout.endBeat = clip.getEndBeat().inBeats();
+    layout.contentStartBeat = timeToBeat (edit, contentStart);
+    layout.markers = markersInBeats (edit, points, contentStart);
+
+    if (clip.isLooping())
+    {
+        auto beatOf = [&] (double contentSeconds)
+        {
+            return timeToBeat (edit, contentStart + te::TimeDuration::fromSeconds (contentSeconds)) - layout.contentStartBeat;
+        };
+
+        layout.looped = true;
+        layout.loopStartBeats = beatOf (wave->getLoopStart().inSeconds());
+        layout.loopEndBeats = beatOf ((wave->getLoopStart() + wave->getLoopLength()).inSeconds());
+    }
+
+    return layout;
+}
+
+void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBeats)
+{
+    auto* wave = asWave (clip);
+
+    if (wave == nullptr || layout.markers.size() < 2)
+        return;
+
+    auto& edit = clip.edit;
+    auto* um = &edit.getUndoManager();
+    const double contentStartBeat = layout.contentStartBeat + shiftBeats;
+    const auto contentStart = beatToTime (edit, contentStartBeat);
+
     // Seconds into the content of a beat (counted from the content start).
     auto secondsAt = [&] (double beatsFromContentStart)
     {
@@ -374,12 +510,7 @@ void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBe
     };
 
     // The markers first: they decide how long the content is.
-    std::vector<WarpPoint> points;
-
-    for (auto& m : markers)
-        points.push_back ({ m.sourceSeconds, secondsAt (m.beat), m.tempoMarker });
-
-    setWarpPoints (*wave, points);
+    writeWarpPoints (*wave, markersInSeconds (edit, layout.markers, contentStartBeat));
 
     // The loop (in the content's seconds). Written straight to the state:
     // setLoopRange clamps to the warped recording's length, which is unknown
@@ -408,14 +539,140 @@ void restoreFlexLayout (te::Clip& clip, const FlexLayout& layout, double shiftBe
         clip.setPosition ({ { start, end }, offset });
 }
 
+void applyTrackFlex (te::Clip& clip)
+{
+    auto* wave = asWave (clip);
+
+    if (wave == nullptr)
+        return;
+
+    auto* um = &clip.edit.getUndoManager();
+
+    if (isFlexActive (clip))
+    {
+        ensureWarpState (*wave);
+
+        // Flex back on: the edits set aside come back, on their beats.
+        if (auto aside = clip.state.getChildWithName (setAsideFlexType); aside.isValid())
+        {
+            const auto markers = readPoints (aside);
+            clip.state.removeChild (aside, um);
+
+            if (markers.size() >= 2)
+                setWarpPoints (*wave, markersInSeconds (clip, markers));
+        }
+    }
+    else if (followsTempo (clip))
+    {
+        // A recording on a track with Flex off plays as it was recorded,
+        // following the tempo: any moved hits are set aside (in beats). So
+        // are markers that are warped while the clip isn't (left from Flex
+        // being turned off in a session from before recordings followed the
+        // tempo, which then played their recording as it is).
+        const auto points = getWarpPoints (*wave);
+
+        if (hasHitEdits (points) || (! wave->getWarpTime() && flexmap::isWarped (points)))
+        {
+            replaceChild (clip.state, makePointsTree (setAsideFlexType, markersInBeats (clip.edit, points, contentStartOf (clip))), um);
+            writeWarpPoints (*wave, markersInSeconds (clip, beatMapOf (*wave)));
+        }
+    }
+
+    updateWarpSwitch (*wave);
+}
+
+// Where take `take` of the clip would start its content (the same
+// moment of its audio as contentStartOf for the take playing now): takes
+// are lined up by their align (see takeAlignProp), which moves the offset.
+static te::TimePosition takeContentStart (te::WaveAudioClip& clip, const juce::ValueTree& take)
+{
+    auto takes = getTakesTree (clip);
+    const auto current = takes.getChild (currentTakeIndex (clip));
+    const double alignChange = (double) take.getProperty (takeAlignProp, 0.0) - (double) current.getProperty (takeAlignProp, 0.0);
+    return contentStartOf (clip) - te::TimeDuration::fromSeconds (alignChange);
+}
+
+// Before a tempo change: a clip following the tempo that hasn't got a beat
+// map yet gets one, where its recording sits in beats now (it hasn't been
+// stretched since it was recorded). So does each of its other takes that's
+// a recording, as it would play now; their markers saved in seconds (in
+// sessions from before takeFlexType) are kept in beats from now on.
+static void noteBeatMaps (te::WaveAudioClip& clip)
+{
+    auto& edit = clip.edit;
+    auto* um = &edit.getUndoManager();
+
+    if (! clip.state.getChildWithName (beatMapType).isValid())
+        clip.state.addChild (makePointsTree (beatMapType, beatMapOf (clip)), -1, um);
+
+    auto takes = getTakesTree (clip);
+    const int current = currentTakeIndex (clip);
+
+    for (int i = 0; i < takes.getNumChildren(); ++i)
+    {
+        auto take = takes.getChild (i);
+        const auto file = te::SourceFileReference (edit, take, te::IDs::source).getFile();
+
+        if (i == current || ! (isRecordingFile (file) || isFlexActive (clip)))
+            continue;
+
+        const auto contentStart = takeContentStart (clip, take);
+        auto saved = take.getChildWithName (takeFlexType);
+
+        if (auto old = take.getChildWithName (takeWarpMarkersType); old.isValid())
+        {
+            std::vector<WarpPoint> points;
+
+            for (auto m : old.getChildWithName (te::IDs::WARPMARKERS))
+                points.push_back ({ (double) m[te::IDs::sourceTime], (double) m[te::IDs::warpTime], (bool) m.getProperty (tempoMarkerProp, false) });
+
+            take.removeChild (old, um);
+
+            if (! saved.isValid() && points.size() >= 2)
+            {
+                saved = makePointsTree (takeFlexType, markersInBeats (edit, points, contentStart));
+                take.addChild (saved, -1, um);
+            }
+        }
+
+        if (saved.getChildWithName (beatMapType).isValid())
+            continue;
+
+        const double length = te::AudioFile (edit.engine, file).getLength();
+
+        if (length <= 0.0)
+            continue;
+
+        auto beatMap = makePointsTree (beatMapType, markersInBeats (edit, { { 0.0, 0.0 }, { length, length } }, contentStart));
+
+        if (saved.isValid())
+        {
+            saved.addChild (beatMap, -1, um);
+        }
+        else
+        {
+            juce::ValueTree holder (takeFlexType);
+            holder.appendChild (beatMap, nullptr);   // not in the Edit yet: no undo needed
+            take.addChild (holder, -1, um);
+        }
+    }
+}
+
 void FlexBeatKeeper::capture (te::Edit& edit)
 {
     clips.clear();
 
     for (auto* track : te::getAudioTracks (edit))
+    {
         for (auto* clip : track->getClips())
+        {
             if (auto layout = captureFlexLayout (*clip))
+            {
+                noteBeatMaps (*asWave (*clip));
                 clips.emplace_back (clip, std::move (*layout));
+            }
+        }
+    }
 }
 
 void FlexBeatKeeper::restore()
@@ -427,40 +684,67 @@ void FlexBeatKeeper::restore()
 }
 
 //==============================================================================
-void switchTakeWarp (te::WaveAudioClip& clip, juce::ValueTree fromTake, juce::ValueTree toTake)
+void setAsideTakeFlex (te::WaveAudioClip& clip, juce::ValueTree fromTake)
 {
-    auto markers = markersTreeOf (clip);
-
-    if (! markers.isValid())
-        return;   // never flexed: nothing to swap
+    if (! fromTake.isValid())
+        return;
 
     auto* um = &clip.edit.getUndoManager();
 
-    // The take that was playing keeps its markers (a copy, on its TAKE).
-    if (fromTake.isValid())
+    // Its markers as they play now (in beats, so a tempo change while
+    // another take plays leaves them right)...
+    juce::ValueTree saved (takeFlexType);
+
+    if (auto points = getWarpPoints (clip); points.size() >= 2)
+        saved = makePointsTree (takeFlexType, markersInBeats (clip.edit, points, contentStartOf (clip)));
+
+    // ...and its beat map and set-aside edits, which belong to its recording.
+    for (const auto& type : { beatMapType, setAsideFlexType })
     {
-        if (auto old = fromTake.getChildWithName (takeWarpMarkersType); old.isValid())
+        if (auto tree = clip.state.getChildWithName (type); tree.isValid())
+        {
+            // A copy: Undo puts the tree itself back on the clip.
+            clip.state.removeChild (tree, um);
+            saved.appendChild (tree.createCopy(), nullptr);   // not in the Edit yet: no undo needed
+        }
+    }
+
+    for (const auto& type : { takeFlexType, takeWarpMarkersType })
+        if (auto old = fromTake.getChildWithName (type); old.isValid())
             fromTake.removeChild (old, um);
 
-        auto saved = markers.createCopy();
-        juce::ValueTree holder (takeWarpMarkersType);
-        holder.addChild (saved, -1, nullptr);   // not in the Edit yet: no undo needed
-        fromTake.addChild (holder, -1, um);
-    }
+    if (saved.getNumChildren() > 0)
+        fromTake.addChild (saved, -1, um);
+}
 
-    // The new one gets its own back, or plain ones if it never had any.
+void bringBackTakeFlex (te::WaveAudioClip& clip, juce::ValueTree toTake)
+{
+    auto* um = &clip.edit.getUndoManager();
     std::vector<WarpPoint> points;
 
-    for (auto m : toTake.getChildWithName (takeWarpMarkersType).getChildWithName (te::IDs::WARPMARKERS))
-        points.push_back ({ (double) m[te::IDs::sourceTime], (double) m[te::IDs::warpTime], (bool) m.getProperty (tempoMarkerProp, false) });
-
-    if (points.size() < 2)
+    if (auto saved = toTake.getChildWithName (takeFlexType); saved.isValid())
     {
-        const double length = recordingLengthOf (clip);
-        points = { { 0.0, 0.0 }, { length, length } };
+        for (const auto& type : { beatMapType, setAsideFlexType })
+            if (auto tree = saved.getChildWithName (type); tree.isValid())
+                replaceChild (clip.state, tree.createCopy(), um);
+
+        if (auto markers = readPoints (saved); markers.size() >= 2)
+            points = markersInSeconds (clip, markers);
+    }
+    else
+    {
+        // Saved in seconds, by a session from before takeFlexType.
+        for (auto m : toTake.getChildWithName (takeWarpMarkersType).getChildWithName (te::IDs::WARPMARKERS))
+            points.push_back ({ (double) m[te::IDs::sourceTime], (double) m[te::IDs::warpTime], (bool) m.getProperty (tempoMarkerProp, false) });
     }
 
-    setWarpPoints (clip, points);
+    // Never played with markers: as it was recorded, following the tempo
+    // if it does.
+    if (points.size() < 2)
+        points = followsTempo (clip) ? markersInSeconds (clip, beatMapOf (clip)) : plainPoints (clip);
+
+    writeWarpPoints (clip, points);
+    applyTrackFlex (clip);
 }
 
 //==============================================================================
@@ -703,8 +987,7 @@ FlexInfo FlexEditor::getFlex (RegionId id) const
         points = { { 0.0, 0.0 }, { length, length } };
     }
 
-    info.hasEdits = flexmap::isWarped (points)
-                     || std::any_of (points.begin() + 1, points.end() - 1, [] (const WarpPoint& p) { return ! p.tempoMarker; });
+    info.hasEdits = hasHitEdits (points);
     const auto contentStart = contentStartOf (*wave);
 
     auto beatOf = [&] (double source)
@@ -842,15 +1125,13 @@ bool FlexEditor::resetFlex (RegionId id)
     if (wave == nullptr || ! markersTreeOf (*wave).isValid())
         return false;
 
-    const auto points = getWarpPoints (*wave);
-
-    if (points.size() <= 2 && ! flexmap::isWarped (points))
+    if (! hasHitEdits (getWarpPoints (*wave)))
         return false;
 
-    // Back to a marker at each end of the recording, each in its own place.
-    const double length = recordingLengthOf (*wave);
+    // Back to the recording as it was played, on its beats at the tempo
+    // now (a marker at each end, and tempo markers where they're needed).
     owner.beginUndoStep ("Reset Flex");
-    setWarpPoints (*wave, { { 0.0, 0.0 }, { length, length } });
+    setWarpPoints (*wave, followsTempo (*wave) ? markersInSeconds (*wave, beatMapOf (*wave)) : plainPoints (*wave));
     return true;
 }
 

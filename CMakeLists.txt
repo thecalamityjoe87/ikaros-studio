@@ -598,7 +598,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner,pedals,amp)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,followtempo,tuner,pedals,amp)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -634,6 +634,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Flex PROPERTIES LABELS "flex")
     add_test(NAME EngineSmokeTest.Quantize COMMAND IkarosEngineSmokeTest --only=quantize)
     set_tests_properties(EngineSmokeTest.Quantize PROPERTIES LABELS "quantize")
+    add_test(NAME EngineSmokeTest.FollowTempo COMMAND IkarosEngineSmokeTest --only=followtempo)
+    set_tests_properties(EngineSmokeTest.FollowTempo PROPERTIES LABELS "followtempo")
     add_test(NAME EngineSmokeTest.Tuner COMMAND IkarosEngineSmokeTest --only=tuner)
     set_tests_properties(EngineSmokeTest.Tuner PROPERTIES LABELS "tuner")
     add_test(NAME EngineSmokeTest.Pedals COMMAND IkarosEngineSmokeTest --only=pedals)
