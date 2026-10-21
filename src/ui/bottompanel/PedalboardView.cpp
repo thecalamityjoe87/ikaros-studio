@@ -1,4 +1,5 @@
 #include "ui/bottompanel/PedalboardView.h"
+#include "ui/bottompanel/AmpView.h"
 #include "ui/dialogs/AddPedalDialog.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -47,14 +48,15 @@ namespace
 }
 
 //==============================================================================
-// The dashed "+ Add pedal" slot after the last pedal. A real button, so the
-// keyboard reaches it too.
+// The dashed "+ Add pedal" slot after the last pedal, and "+ Add amp" where
+// a guitar or bass track's Amp would be. A real button, so the keyboard
+// reaches it too.
 class PedalboardView::AddSlot  : public juce::Button
 {
 public:
-    AddSlot() : juce::Button ("Add pedal")
+    AddSlot (const juce::String& text, const juce::String& tooltip) : juce::Button (text)
     {
-        setTooltip ("Add a pedal at the end of the board");
+        setTooltip (tooltip);
         setMouseClickGrabsKeyboardFocus (false);
     }
 
@@ -82,7 +84,7 @@ public:
                      theme().textSoft, 20.0f);
         g.setColour (theme().textSoft);
         g.setFont (fonts::uiSemiBold (textSize::md));
-        g.drawText ("Add pedal", juce::Rectangle<float> (r.getWidth(), 20.0f).withCentre (centre.translated (0.0f, 14.0f)),
+        g.drawText (getName(), juce::Rectangle<float> (r.getWidth(), 20.0f).withCentre (centre.translated (0.0f, 14.0f)),
                     juce::Justification::centred);
 
         if (hasKeyboardFocus (false))
@@ -101,9 +103,14 @@ public:
     {
         addSlot.onClick = [this] { owner.showAddPedal (addSlot); };
         addChildComponent (addSlot);
+
+        addAmpSlot.onClick = [this] { owner.engine.getTracks().effects().addAmp (trackId); };
+        addChildComponent (addAmpSlot);
     }
 
-    void refresh (TrackId newTrack)
+    // `guitarOrBass`: the track has the guitar or bass icon, so it offers
+    // an Amp when it has none.
+    void refresh (TrackId newTrack, bool guitarOrBass)
     {
         auto& effects = owner.engine.getTracks().effects();
         const bool sameTrack = newTrack == trackId;
@@ -161,11 +168,31 @@ public:
         if (dragged != nullptr && ! pedals.contains (dragged))
             endDrag();
 
+        // The Amp, after the pedals (or the Add amp slot in its place).
+        const bool hadAmp = amp != nullptr, hadAmpSlot = addAmpSlot.isVisible();
+        const auto ampSettings = trackId != 0 ? effects.getAmp (trackId) : EffectsController::AmpSettings();
+
+        if (ampSettings.exists)
+        {
+            if (amp == nullptr)
+            {
+                amp = std::make_unique<AmpView> (owner.engine);
+                addAndMakeVisible (*amp);
+            }
+
+            amp->update (trackId, ampSettings);
+        }
+        else
+        {
+            amp.reset();   // (a deleted component leaves its parent by itself)
+        }
+
         addSlot.setVisible (trackId != 0 && ! chainFull);
+        addAmpSlot.setVisible (trackId != 0 && ! ampSettings.exists && guitarOrBass && ! chainFull);
         updateSize();
         layoutPedals();
 
-        if (! sameTrack || pedalIds() != pedalsBefore)
+        if (! sameTrack || pedalIds() != pedalsBefore || hadAmp != (amp != nullptr) || hadAmpSlot != addAmpSlot.isVisible())
             repaint();
 
         // A pedal was just added on this track: scroll it into view.
@@ -179,14 +206,15 @@ public:
     void updateSize()
     {
         const int items = pedals.size() + (addSlot.isVisible() ? 1 : 0);
-        const int idealWidth = sidePadding + inWidth + firstGap + items * (PedalView::width + pedalGap) + sidePadding;
+        const int ampWidth = amp != nullptr || addAmpSlot.isVisible() ? AmpView::width + pedalGap : 0;
+        const int idealWidth = sidePadding + inWidth + firstGap + items * (PedalView::width + pedalGap) + ampWidth + sidePadding;
         auto& viewport = owner.viewport;
 
         // The scrollbars take some of the viewport's room once the board
         // overflows it, so work the size out twice.
         for (int pass = 0; pass < 2; ++pass)
             setSize (juce::jmax (viewport.getMaximumVisibleWidth(), idealWidth),
-                     juce::jmax (viewport.getMaximumVisibleHeight(), PedalView::height + verticalPadding * 2));
+                     juce::jmax (viewport.getMaximumVisibleHeight(), itemHeight + verticalPadding * 2));
     }
 
     void paint (juce::Graphics& g) override
@@ -195,13 +223,34 @@ public:
 
         // One cable from the IN marker to the last item: the pedals are
         // drawn over it, so it only shows in the gaps between them.
-        const int cableEnd = addSlot.isVisible() ? addSlot.getX()
-                           : pedals.isEmpty()   ? inArea().getRight()
-                                                : pedals.getLast()->getX();
+        const int cableEnd = amp != nullptr            ? amp->getX()
+                           : addAmpSlot.isVisible()    ? addAmpSlot.getX()
+                           : addSlot.isVisible()       ? addSlot.getX()
+                           : pedals.isEmpty()          ? inArea().getRight()
+                                                       : pedals.getLast()->getX();
+        // The dashed Add slots are see-through, so the cable mustn't run
+        // across them: it's drawn in pieces, stopping at a slot's left edge
+        // and carrying on from its right edge (the slots are in x order).
         g.setColour (theme().pedalboardCable);
-        g.fillRoundedRectangle (juce::Rectangle<int> (inArea().getRight(), cableY - cableThickness / 2,
-                                                      juce::jmax (0, cableEnd - inArea().getRight()), cableThickness).toFloat(),
-                                cableThickness * 0.5f);
+        int cableStart = inArea().getRight();
+
+        auto drawCable = [&] (int from, int to)
+        {
+            if (to > from)
+                g.fillRoundedRectangle (juce::Rectangle<int> (from, cableY - cableThickness / 2, to - from, cableThickness).toFloat(),
+                                        cableThickness * 0.5f);
+        };
+
+        for (auto* slot : { &addSlot, &addAmpSlot })
+        {
+            if (slot->isVisible() && slot->getX() < cableEnd)
+            {
+                drawCable (cableStart, slot->getX());
+                cableStart = slot->getRight();
+            }
+        }
+
+        drawCable (cableStart, cableEnd);
 
         // IN: where the track's input comes in.
         const auto in = inArea().toFloat();
@@ -215,6 +264,9 @@ public:
 
         for (auto* pedal : pedals)
             PedalView::drawShadow (g, *pedal, pedalShadow);
+
+        if (amp != nullptr)
+            AmpView::drawShadow (g, *amp, ampShadow);
     }
 
     void resized() override
@@ -229,7 +281,13 @@ private:
     bool chainFull = false;
     juce::OwnedArray<PedalView> pedals;   // in chain order
     CachedShadow pedalShadow;             // under every pedal (see PedalView::drawShadow)
-    AddSlot addSlot;
+    AddSlot addSlot { "Add pedal", "Add a pedal at the end of the board" };
+    std::unique_ptr<AmpView> amp;         // the track's Amp, after the pedals (null: it has none)
+    CachedShadow ampShadow;
+    AddSlot addAmpSlot { "Add amp", "Add an amp after the pedals" };
+
+    // Pedals and the Amp are the same height (they line up on the cable).
+    static constexpr int itemHeight = juce::jmax (PedalView::height, AmpView::height);
 
     // Dragging a pedal sideways to reorder it.
     PedalView* dragged = nullptr;
@@ -237,7 +295,7 @@ private:
     bool dragMoved = false;           // it has moved far enough to count as a drag
     int dropIndex = -1;               // where it would land, among the pedals
 
-    int pedalTop() const    { return juce::jmax (verticalPadding, (getHeight() - PedalView::height) / 2); }
+    int pedalTop() const    { return juce::jmax (verticalPadding, (getHeight() - itemHeight) / 2); }
     int pedalX (int slot) const    { return sidePadding + inWidth + firstGap + slot * (PedalView::width + pedalGap); }
 
     juce::Rectangle<int> inArea() const
@@ -280,6 +338,14 @@ private:
 
         // The same size as a pedal: the space the next one will take.
         addSlot.setBounds (pedalX (pedals.size()), pedalTop(), PedalView::width, PedalView::height);
+
+        // The Amp (or its slot) after the Add pedal slot.
+        const auto ampArea = juce::Rectangle<int> (pedalX (pedals.size() + (addSlot.isVisible() ? 1 : 0)), pedalTop(),
+                                                   AmpView::width, AmpView::height);
+        addAmpSlot.setBounds (ampArea);
+
+        if (amp != nullptr)
+            amp->setBounds (ampArea);
     }
 
     //==============================================================================
@@ -409,7 +475,7 @@ void PedalboardView::refresh()
 {
     const auto track = engine.getTracks().getTrack (selection.getTrack());
     trackId = track.has_value() && track->kind == TrackKind::audio ? track->id : 0;
-    board->refresh (trackId);
+    board->refresh (trackId, trackId != 0 && (track->icon == "guitar" || track->icon == "bass"));
 }
 
 bool PedalboardView::canAddPedal() const

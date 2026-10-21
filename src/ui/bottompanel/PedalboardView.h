@@ -12,7 +12,7 @@ namespace ikaros
     EffectsController::hasPedalboard): the track's pedals as a row of
     stompboxes on a darker floor, like a guitarist's pedalboard.
 
-        IN ---[pedal]---[pedal]---[pedal]---[ + Add pedal ]
+        IN ---[pedal]---[pedal]---[pedal]---[ + Add pedal ]---[    Amp    ]
 
     The panel's header names the track and holds the Tuner and Add Pedal
     buttons (see BottomPanel), so the board itself is all floor.
@@ -22,6 +22,9 @@ namespace ikaros
     effects, so both always agree. Drag a pedal sideways to reorder it;
     right-click it (or Shift+F10) for Move, Replace and Remove. The board
     scrolls sideways when the pedals don't fit.
+
+    The track's Amp (see AmpView) comes last, joined by the same cable. A
+    guitar or bass track without one shows an "Add amp" slot there instead.
 */
 class PedalboardView  : public juce::Component
 {

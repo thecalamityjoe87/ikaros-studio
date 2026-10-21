@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine/EngineTypes.h"
+#include "engine/AmpStyles.h"
+#include <array>
 #include <optional>
 
 namespace ikaros
@@ -65,17 +67,19 @@ public:
     void showPluginWindow (TrackId, PluginId);
 
     // Pedals (effects with a PedalStyle, see PedalStyles.h) stay at the
-    // start of an audio track's chain, before its other effects: adding,
-    // moving and replacing keep them there, whatever position is asked
-    // for. An effect added at the end (-1) goes after the last pedal if
-    // it's a pedal. Instrument tracks and the master keep any order. Older
-    // sessions open in the order they were saved in.
+    // start of an audio track's chain, then the Amp (see AmpPlugin.h), then
+    // its other effects: adding, moving and replacing keep that order,
+    // whatever position is asked for. A pedal added at the end (-1) goes
+    // after the last pedal. Instrument tracks and the master keep any
+    // order. Older sessions open in the order they were saved in. A track
+    // has at most one Amp: adding (or replacing an effect with) a second
+    // one does nothing.
 
     /** True for an audio track that shows a pedalboard (the bottom panel's
         Pedals tab). Any audio track can (setPedalboardShown); until it's set,
         guitar and bass tracks do (their icon is "guitar" or "bass", see
         TrackController::addGuitarTrack), and so do tracks that already have
-        pedals. Instrument tracks and the master never do. */
+        pedals or an Amp. Instrument tracks and the master never do. */
     bool hasPedalboard (TrackId) const;
 
     /** Shows or hides an audio track's pedalboard, in one undo step (View >
@@ -94,6 +98,43 @@ public:
     /** A built-in effect's settings (third-party plug-ins have their own window). */
     std::vector<ParameterInfo> getEffectParameters (TrackId, PluginId) const;
     void setEffectParameter (TrackId, PluginId, int parameterIndex, float normalised0to1);
+
+    //==============================================================================
+    // The Amp at the end of the pedalboard (see AmpPlugin.h). Turning it
+    // off (bypass) and removing it are setEffectEnabled and removeEffect.
+    struct AmpSettings
+    {
+        bool exists = false;            // the track has an Amp
+        PluginId pluginId = 0;
+        bool on = false;                // ...and it isn't bypassed
+        int voice = 0;                  // getAmpVoices() index
+        int cab = 0;                    // getAmpCabs() index, or getAmpCabs().size() for Off
+        bool bright = false;
+        std::array<float, ampKnobCount> knobs {};           // 0..1, in ampKnobIds' order
+        std::array<juce::String, ampKnobCount> knobText;    // e.g. "62%"
+    };
+
+    AmpSettings getAmp (TrackId) const;
+
+    /** Adds an Amp after the track's pedals, with a voice's starting
+        settings (-1: the track's own, see getDefaultAmpVoiceFor), in an
+        undo step of its own ("Add Amp") or, with newUndoStep false, in the
+        current one. Returns 0 if the track already has one, or no room. */
+    PluginId addAmp (TrackId, int voice = -1, bool newUndoStep = true);
+
+    /** Picks a voice: its amp model and tone stack, and its cab, Bright and
+        knob settings, in one undo step ("Amp Voice"). */
+    void setAmpVoice (TrackId, int voice);
+
+    /** Picks a cab (or Off), changing nothing else. One undo step ("Amp Cab"). */
+    void setAmpCab (TrackId, int cab);
+
+    /** One undo step ("Amp Bright On"/"Amp Bright Off"). */
+    void setAmpBright (TrackId, bool on);
+
+    /** Turns one of the six knobs (ampKnobIds' order). Doesn't start an undo
+        step: the UI starts one when a drag begins. */
+    void setAmpKnob (TrackId, int knob, float normalised0to1);
 
     //==============================================================================
     // The track inspector's "Noise Gate" section: a shortcut to the first

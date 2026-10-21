@@ -42,11 +42,18 @@ inline Family familyOf (const juce::String& category)
     return Family::loops;
 }
 
-/** A track's family. Audio (recorded) tracks are always audio blue,
-    whatever was dropped on them; instrument tracks follow their sound. */
+/** A track's family. Instrument tracks follow their sound. Audio (recorded)
+    tracks are audio blue, whatever was dropped on them, except guitar and
+    bass tracks (by their icon, see TrackController::addGuitarTrack), which
+    take the guitar and bass colours. */
 inline Family familyOf (const TrackInfo& t)
 {
-    return t.kind == TrackKind::audio ? Family::audio : familyOf (t.category);
+    if (t.kind != TrackKind::audio)
+        return familyOf (t.category);
+
+    return t.icon == "guitar" ? Family::guitar
+         : t.icon == "bass"   ? Family::bass
+                              : Family::audio;
 }
 
 /** Shorthands for painting: the colour of a category's or a track's family

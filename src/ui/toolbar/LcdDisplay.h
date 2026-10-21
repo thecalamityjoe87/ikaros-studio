@@ -15,6 +15,9 @@ namespace ikaros
       01.1        [120.0 ⌃⌄]  [4/4]  [C maj ⌄]
       BAR · BEAT   BPM         TIME   KEY
 
+    Clicking the position switches it between bars and beats and the song's
+    time (minutes, seconds and tenths: 1:23.4, MIN · SEC), and back.
+
     Each field is a slightly lighter box that brightens on hover:
       - BPM: click to type, drag up/down, scroll, or use the small steppers.
       - Time signature: opens a small editor (beats per bar, beat value).
@@ -28,7 +31,8 @@ namespace ikaros
     The note and cents are amber, and green once in tune (within 3 cents);
     the needle moves along the scale from 50 cents flat to 50 sharp.
 */
-class LcdDisplay  : public juce::Component
+class LcdDisplay  : public juce::Component,
+                    public juce::TooltipClient   // a tooltip for the position (see getTooltip)
 {
 public:
     LcdDisplay();
@@ -62,6 +66,9 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    juce::String getTooltip() override;
 
     //==============================================================================
     /** One clickable value with its caption under it. Paints the lighter
@@ -138,6 +145,8 @@ private:
     Field keyField { "Key", "KEY", true };
 
     juce::String positionText { "01.1" };
+    juce::String barText { "01.1" }, timeText { "0:00.0" }, countInText;   // the position each way (countInText: during a count-in)
+    bool showsTime = false;            // the position as the song's time, not bars and beats
     int keyRoot = 0;
     bool keyMinor = false;
     double bpm = 120.0;

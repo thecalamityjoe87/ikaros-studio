@@ -15,6 +15,7 @@
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
+#include "engine/AmpPlugin.h"
 #include "engine/LiveWaveform.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
@@ -2904,7 +2905,7 @@ static void runFlexSection (const juce::File& dir)
            "a new tempo keeps the markers (and the region's length) on their beats");
     check (hitsAt ("at 100 BPM", { 5, 6.25, 7, 8, 9, 10 }, 0.6), "at a new tempo, the flexed hits play on their beats");
 
-    // A plain recording keeps its timing in seconds, as before Flex.
+    // An imported file on a track without Flex keeps its timing in seconds.
     const auto plain = regions.importAudioFiles (other, { clicksFile.getFullPathName() }, 20.0).front();
     pumpMessages();
     const double plainLength = regions.getRegion (plain)->lengthBeats;
@@ -3447,6 +3448,273 @@ static void runQuantizeSection (const juce::File& dir)
 }
 
 //==============================================================================
+// Recordings follow the tempo (as in GarageBand), with Flex on or off: a
+// click track recorded at 84 BPM, played at other tempos. Where each click
+// lands in beats comes from the recorded file itself, so the checks don't
+// depend on how the recording lines up with the timeline.
+static void runFollowTempoSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    std::cout << "Recordings follow the tempo\n";
+
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice::Settings settings;
+    auto device = std::make_unique<TestAudioDevice> (engine, settings);
+    const auto rate = settings.sampleRate;
+
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& flex = tracks.flex();
+    auto& takes = tracks.takes();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    engine.setBpm (84.0);
+    engine.setCountInEnabled (false);
+    engine.setMetronomeEnabled (false);
+
+    auto inputs = tracks.inputs().getAudioInputs();
+    check (! inputs.empty(), "(the pretend device has inputs)");
+
+    if (inputs.empty())
+        return;
+
+    const auto rec = tracks.addAudioTrack();
+    tracks.inputs().setTrackInput (rec, inputs[0].id);
+    tracks.setSelectedTrack (rec);
+    tracks.inputs().setArmed (rec, true);
+    runAudio (*device, 0.3);
+
+    auto clipOf = [&] (RegionId id) { return dynamic_cast<te::WaveAudioClip*> (detail::findClip (TestAudioDevice::getEditOf (engine), id)); };
+
+    // A click every 0.4 s of input (not on the beats: any timing will do).
+    const InputMaker clicks = [&] (juce::int64 start, int num)
+    {
+        juce::AudioBuffer<float> b (settings.numInputs, num);
+        b.clear();
+        const auto every = (juce::int64) (0.4 * rate), width = (juce::int64) (0.001 * rate);
+
+        for (int i = 0; i < num; ++i)
+            if ((start + i) % every < width)
+                for (int ch = 0; ch < b.getNumChannels(); ++ch)
+                    b.setSample (ch, i, 0.5f);
+
+        return b;
+    };
+
+    // One pass of a cycle recording over beats `from` to `to`, at `bpm`.
+    auto recordPass = [&] (double from, double to, double bpm)
+    {
+        engine.setLooping (true);
+        engine.setLoopRangeBeats (from, to);
+        engine.setPositionBeats (from);
+        engine.toggleRecord();
+        const bool started = engine.getTransportState().recording;
+        runAudio (*device, (to - from) * 60.0 / bpm + 0.05, clicks);
+        engine.toggleRecord();
+        pumpMessages();
+        engine.setLooping (false);
+        return started;
+    };
+
+    // Where the clicks of the region's current take are, in beats, as it
+    // plays at `bpm` (the whole song's tempo) with its recording as it is.
+    // (Not the ones right at its edges, where its fades are.)
+    auto clickBeats = [&] (RegionId id, double bpm)
+    {
+        std::vector<double> beats;
+        auto* clip = clipOf (id);
+
+        if (clip == nullptr)
+            return beats;
+
+        const auto found = findClicks (clip->getOriginalFile());
+        const auto pos = clip->getPosition();
+        const double contentStart = pos.getStartOfSource().inSeconds();
+
+        for (auto s : found.starts)
+            if (const double t = contentStart + (double) s / found.sampleRate; t > pos.getStart().inSeconds() + 0.1 && t < pos.getEnd().inSeconds() - 0.1)
+                beats.push_back (t * bpm / 60.0);
+
+        return beats;
+    };
+
+    int exportNumber = 0;
+    auto hitsOnBeats = [&] (const char* what, const std::vector<double>& beats, double bpm)
+    {
+        std::vector<double> expected;
+
+        for (auto b : beats)
+            expected.push_back (b * 60.0 / bpm);
+
+        const auto worst = worstHitErrorMs (exportForHits (engine, dir.getChildFile ("Follow Export"), ++exportNumber), expected);
+        std::cout << "  (" << what << ": " << beats.size() << " hits within " << worst << " ms)\n";
+        return ! beats.empty() && worst < 5.0;
+    };
+
+    check (recordPass (8.0, 16.0, 84.0), "(recording)");
+    auto list = regions.getRegions (rec);
+    check (list.size() == 1, "(the recording makes a region)");
+
+    if (list.size() != 1)
+        return;
+
+    const auto region = list[0].id;
+    const auto recorded = clickBeats (region, 84.0);
+    check (recorded.size() >= 10, "(with the clicks in it)");
+    check (detail::isRecordingFile (clipOf (region)->getOriginalFile()) && detail::followsTempo (*clipOf (region)),
+           "a recording follows the tempo, with Flex off");
+    check (! clipOf (region)->getWarpTime() && ! clipOf (region)->state.getChildWithName (te::IDs::WARPTIME).isValid(),
+           "at the tempo it was recorded at, it plays its recording as it is (nothing stretched or analysed)");
+    check (hitsOnBeats ("at 84, as recorded", recorded, 84.0), "(its hits, where they were recorded)");
+
+    // (Not checkUndoRoundTrip: the loop range used for recording is part of
+    // the transport, which a tempo change moves without an undo step.)
+    engine.setBpm (100.0);
+    pumpMessages();
+    check (std::abs (regions.getRegion (region)->lengthBeats - list[0].lengthBeats) < 1.0e-6 && clipOf (region)->getWarpTime(),
+           "at a new tempo, the recording keeps its length in beats, stretched to fit");
+    check (hitsOnBeats ("at 100, Flex off", recorded, 100.0), "...and every hit stays on its beat");
+
+    engine.undo();
+    pumpMessages();
+    check (! clipOf (region)->getWarpTime() && hitsOnBeats ("undone, at 84", recorded, 84.0), "undoing the tempo change plays the recording as it is again");
+    engine.redo();
+    pumpMessages();
+
+    //==============================================================================
+    std::cout << "Recordings follow the tempo: Flex\n";
+
+    checkUndoRoundTrip (engine, "Flex On", [&] { flex.setFlexOn (rec, true); });
+    check (hitsOnBeats ("at 100, Flex on", recorded, 100.0), "turning Flex on leaves the hits on their beats");
+
+    FlexInfo info = flex.getFlex (region);
+
+    for (int i = 0; i < 400 && info.analysing; ++i)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+        info = flex.getFlex (region);
+    }
+
+    check (! info.hasEdits, "following the tempo isn't a Flex edit (Reset Flex has nothing to do)");
+
+    // The hit nearest the region's middle, a fifth of a beat later.
+    auto edited = recorded;
+    const auto middle = std::min_element (edited.begin(), edited.end(), [] (double a, double b) { return std::abs (a - 12.0) < std::abs (b - 12.0); });
+    const auto hit = std::min_element (info.transients.begin(), info.transients.end(),
+                                       [&] (const FlexMarker& a, const FlexMarker& b) { return std::abs (a.beat - *middle) < std::abs (b.beat - *middle); });
+    check (hit != info.transients.end() && std::abs (hit->beat - *middle) < 0.01, "the hits are found where they play now");
+
+    if (hit == info.transients.end())
+        return;
+
+    *middle += 0.2;
+    check (flex.moveMarker (region, hit->sourceSeconds, *middle), "(moving a hit)");
+    pumpMessages();
+    check (hitsOnBeats ("a hit moved", edited, 100.0), "a hit in a stretched recording can be moved with Flex");
+
+    checkUndoRoundTrip (engine, "Flex Off", [&] { flex.setFlexOn (rec, false); });
+    check (! flex.getFlex (region).hasEdits && clipOf (region)->getWarpTime(), "Flex off sets the moved hit aside, and the recording still follows the tempo");
+    check (hitsOnBeats ("Flex off again", recorded, 100.0), "...with every hit back on its recorded beat");
+
+    engine.setBpm (90.0);
+    pumpMessages();
+    check (hitsOnBeats ("at 90, Flex off", recorded, 90.0), "a tempo change with Flex off keeps them there");
+
+    checkUndoRoundTrip (engine, "Flex On", [&] { flex.setFlexOn (rec, true); });
+    check (flex.getFlex (region).hasEdits && hitsOnBeats ("at 90, Flex back on", edited, 90.0),
+           "Flex back on brings the moved hit back, on its beat at the new tempo");
+
+    checkUndoRoundTrip (engine, "Reset Flex", [&] { flex.resetFlex (region); });
+    check (! flex.getFlex (region).hasEdits && clipOf (region)->getWarpTime() && hitsOnBeats ("reset at 90", recorded, 90.0),
+           "Reset Flex goes back to the recording's own beats, still following the tempo");
+    flex.setFlexOn (rec, false);
+    pumpMessages();
+
+    //==============================================================================
+    std::cout << "Recordings follow the tempo: imported files don't\n";
+    {
+        const auto other = tracks.addAudioTrack();
+        const auto file = dir.getChildFile ("Imported Clicks.wav");
+        writeClickWav (file, rate, 4.0, { 0.5, 1.0, 1.5 }, 0.5f);
+        const auto imported = regions.importAudioFiles (other, { file.getFullPathName() }, 40.0).front();
+        pumpMessages();
+        const double length = regions.getRegion (imported)->lengthBeats;
+        engine.setBpm (120.0);
+        pumpMessages();
+        check (! detail::followsTempo (*clipOf (imported)) && ! clipOf (imported)->getWarpTime()
+                 && std::abs (regions.getRegion (imported)->lengthBeats - length * 120.0 / 90.0) < 1.0e-3,
+               "an imported audio file keeps its own speed (its length in seconds)");
+        engine.undo();
+        pumpMessages();
+        tracks.deleteTrack (other);
+        pumpMessages();
+    }
+
+    //==============================================================================
+    std::cout << "Recordings follow the tempo: takes\n";
+
+    // The same beats again, at 90.
+    check (recordPass (8.0, 16.0, 90.0), "(recording)");
+    list = regions.getRegions (rec);
+    check (list.size() == 1 && list[0].id == region && list[0].takeCount == 2 && list[0].currentTake == 1,
+           "recording the same beats again at another tempo adds a take (the first one was stretched)");
+
+    if (list.size() != 1 || list[0].takeCount != 2)
+    {
+        std::cout << "         " << list.size() << " regions, " << (list.empty() ? 0 : list[0].takeCount) << " takes\n";
+        return;
+    }
+
+    const auto second = clickBeats (region, 90.0);
+    check (! clipOf (region)->getWarpTime() && hitsOnBeats ("take 2, at 90", second, 90.0), "the new take plays as it was recorded");
+
+    checkUndoRoundTrip (engine, "Choose Take", [&] { takes.setCurrentTake (region, 0); });
+    check (clipOf (region)->getWarpTime() && hitsOnBeats ("take 1, at 90", recorded, 90.0), "the first take still follows the tempo");
+
+    engine.setBpm (110.0);
+    pumpMessages();
+    check (hitsOnBeats ("take 1, at 110", recorded, 110.0), "...through another tempo change");
+    takes.setCurrentTake (region, 1);
+    pumpMessages();
+    check (hitsOnBeats ("take 2, at 110", second, 110.0), "and so does the take that wasn't playing, from the tempo it was recorded at");
+
+    // Recording over part of the stretched region: what it played there
+    // becomes the new region's first take.
+    check (recordPass (12.0, 16.0, 110.0), "(recording)");
+    list = regions.getRegions (rec);
+    check (list.size() == 2, "recording over part of a region cuts it back");
+
+
+    if (list.size() != 2)
+        for (auto& r : list)
+            std::cout << "         (region at " << r.startBeat << ", " << r.lengthBeats << " beats, " << r.takeCount << " takes)\n";
+
+    if (list.size() == 2)
+    {
+        const auto& added = list[0].startBeat > list[1].startBeat ? list[0] : list[1];
+        check (added.takeCount == 2, "...and what it played there becomes a take of the new region");
+        takes.setCurrentTake (added.id, 0);
+        pumpMessages();
+
+        std::vector<double> covered;
+
+        for (auto b : second)
+            if (b > 12.1 && b < 15.9)
+                covered.push_back (b);
+
+        check (hitsOnBeats ("covered take, at 110", covered, 110.0), "...playing the stretched audio it played");
+        engine.undo();
+        pumpMessages();
+    }
+
+    engine.undo();   // the recording
+    pumpMessages();
+    checkSaveAndReopen (engine, dir.getChildFile ("Follow Tempo"));
+    check (hitsOnBeats ("reopened", second, 110.0), "a reopened session plays the takes the same");
+}
+
+//==============================================================================
 // The tuner: the pitch detector on generated guitar notes, the steadying,
 // and the engine side (which input it listens to, Mute while tuning).
 static void runTunerSection()
@@ -3910,8 +4178,8 @@ static void runPedalsSection (const juce::File& dir)
         const auto guitar = tracks.addGuitarTrack();
         const auto chorus = effects.addEffect (guitar, "chorus");
         checkUndoRoundTrip (engine, "Hide Pedalboard", [&] { effects.setPedalboardShown (guitar, false); });
-        check (! effects.hasPedalboard (guitar) && effects.getEffectChain (guitar).size() == 1,
-               "a guitar track can hide its pedalboard (and keeps its pedals)");
+        check (! effects.hasPedalboard (guitar) && effects.getEffectChain (guitar).size() == 2,
+               "a guitar track can hide its pedalboard (and keeps its pedal and amp)");
 
         const auto instrument = tracks.addInstrumentTrack();
         effects.setPedalboardShown (instrument, true);
@@ -4433,6 +4701,482 @@ static void runPedalsSection (const juce::File& dir)
         t = tracks.getTracks().back().id;
         check (types.size() == 12 && typesOn (t) == before, "twelve of them on a track come back, in order");
         check (knobs() == knobsBefore, "with their knobs");
+    }
+
+    device.reset();
+}
+
+//==============================================================================
+// Reads a whole audio file (every channel), or an empty buffer if it can't.
+static juce::AudioBuffer<float> readAudioFile (const juce::File& f, double* sampleRate = nullptr)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+
+    if (reader == nullptr)
+        return {};
+
+    juce::AudioBuffer<float> samples ((int) reader->numChannels, (int) reader->lengthInSamples);
+    reader->read (&samples, 0, samples.getNumSamples(), 0, true, true);
+
+    if (sampleRate != nullptr)
+        *sampleRate = reader->sampleRate;
+
+    return samples;
+}
+
+static void runAmpSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    auto device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    const auto& voices = getAmpVoices();
+    const auto offCab = AmpPlugin::getOffCab();
+
+    auto typesOn = [&] (TrackId track)
+    {
+        juce::StringArray types;
+
+        for (auto& slot : effects.getEffectChain (track))
+            types.add (slot.type);
+
+        return types.joinIntoString (",");
+    };
+
+    // The settings match a voice's starting ones.
+    auto hasVoiceDefaults = [&] (const EffectsController::AmpSettings& amp, int voice)
+    {
+        auto& v = voices[(size_t) voice];
+        bool same = amp.exists && amp.voice == voice && amp.cab == v.cab && amp.bright == v.bright;
+
+        for (int i = 0; i < ampKnobCount; ++i)
+            same = same && std::abs (amp.knobs[(size_t) i] - v.knobDefaults[(size_t) i]) < 1.0e-4f;
+
+        return same;
+    };
+
+    // The track's Amp itself (the Plugin::Ptr must be let go before the Edit goes).
+    auto ampPluginOn = [&] (TrackId track) -> AmpPlugin*
+    {
+        auto* t = detail::findTrack (TestAudioDevice::getEditOf (engine), track);
+        return t != nullptr ? t->pluginList.findFirstPluginOfType<AmpPlugin>() : nullptr;
+    };
+
+    std::cout << "Voices and cabs\n";
+    {
+        juce::StringArray names, cabNames;
+
+        for (auto& v : voices)
+            names.add (v.name);
+
+        for (int i = 0; i <= offCab; ++i)
+            cabNames.add (getAmpCabName (i));
+
+        check (names.joinIntoString (",") == "Clean,Crunch,Chime,British,High Gain,Bass", "six voices, in order");
+        check (cabNames.size() == 19 && cabNames[offCab] == "Off", "every Guitarix cab (18), then Off");
+
+        // No brand or amp names in the cab list.
+        bool plain = true;
+
+        for (auto& name : cabNames)
+            for (auto* brand : { "Twin", "Bassman", "Marshall", "AC30", "Mesa", "mesa", "Princeton", "Fender", "Vox", "Ampeg" })
+                plain = plain && ! name.containsIgnoreCase (brand);
+
+        check (plain, "the cabs have plain names");
+        check (getAmpCabName (voices[0].cab) == juce::String::fromUTF8 ("2\xc3\x97" "12 Open Back")
+                 && getAmpCabName (voices[5].cab) == juce::String::fromUTF8 ("1\xc3\x97" "15"),
+               "Clean plays the 2x12 Open Back, Bass the 1x15");
+    }
+
+    std::cout << "New guitar and bass tracks\n";
+    TrackId guitar = 0, bass = 0;
+    {
+        checkUndoRoundTrip (engine, "Add Guitar Track", [&] { guitar = tracks.addGuitarTrack(); });
+        check (typesOn (guitar) == AmpPlugin::xmlTypeName, "a new guitar track has an Amp (and nothing else)");
+        check (hasVoiceDefaults (effects.getAmp (guitar), 0) && effects.getAmp (guitar).on, "on the Clean voice, switched on");
+
+        checkUndoRoundTrip (engine, "Add Bass Track", [&] { bass = tracks.addGuitarTrack (true); });
+        const auto info = tracks.getTrack (bass);
+        check (info.has_value() && info->name == "Bass 1" && info->icon == "bass" && effects.hasPedalboard (bass),
+               "a bass track is called Bass 1, with the bass icon and a pedalboard");
+        check (hasVoiceDefaults (effects.getAmp (bass), 5), "and its Amp is on the Bass voice");
+
+        const auto vocal = tracks.addAudioTrack();
+        check (! effects.getAmp (vocal).exists && ! effects.hasPedalboard (vocal), "a plain audio track gets no Amp");
+        check (effects.addAmp (vocal) != 0 && effects.hasPedalboard (vocal) && effects.getAmp (vocal).voice == 0,
+               "but one can be added (Clean), and then it has a pedalboard");
+        tracks.deleteTrack (vocal);
+        pumpMessages();
+    }
+
+    std::cout << "Where the Amp sits\n";
+    {
+        const auto reverb = effects.addEffect (guitar, "reverb");
+        effects.addEffect (guitar, "chorus");
+        effects.addEffect (guitar, YellowDrivePlugin::xmlTypeName);
+        check (typesOn (guitar) == "chorus,ikarosYellowDrive,ikarosAmp,reverb", "after the pedals, before other effects");
+
+        const auto ampId = effects.getAmp (guitar).pluginId;
+        effects.moveEffect (guitar, ampId, 0);
+        check (typesOn (guitar) == "chorus,ikarosYellowDrive,ikarosAmp,reverb", "it can't be moved in front of the pedals");
+        effects.moveEffect (guitar, reverb, 0);
+        check (typesOn (guitar) == "chorus,ikarosYellowDrive,ikarosAmp,reverb", "and other effects can't go in front of it");
+
+        check (effects.addEffect (guitar, AmpPlugin::xmlTypeName) == 0 && effects.addAmp (guitar) == 0
+                 && effects.replaceEffect (guitar, reverb, AmpPlugin::xmlTypeName) == 0,
+               "a track can't have a second Amp");
+
+        checkUndoRoundTrip (engine, "Remove Effect", [&] { effects.removeEffect (guitar, ampId); });
+        check (! effects.getAmp (guitar).exists, "it can be removed");
+        checkUndoRoundTrip (engine, "Add Amp", [&] { effects.addAmp (guitar); });
+        check (typesOn (guitar) == "chorus,ikarosYellowDrive,ikarosAmp,reverb", "and added back after the pedals");
+
+        for (auto& slot : effects.getEffectChain (guitar))
+            if (slot.type != AmpPlugin::xmlTypeName)
+                effects.removeEffect (guitar, slot.id);
+    }
+
+    std::cout << "Each voice sets the model, tone stack, cab and knobs\n";
+    {
+        const std::array<const char*, 6> expectedDsp {
+            "gxamp16 + tonestack_fender_default", "gxamp7 + tonestack_bassman", "gxamp + tonestack_ac30",
+            "gxamp5 + tonestack_jcm800", "gxamp9 + tonestack_engl", "gxamp8 + tonestack_ampeg" };
+
+        for (int voice = 0; voice < (int) voices.size(); ++voice)
+        {
+            // Off the voice's defaults first, so the change touches everything.
+            engine.beginUndoStep ("Amp Gain");
+            effects.setAmpKnob (guitar, 0, 0.93f);
+            effects.setAmpCab (guitar, offCab);
+            effects.setAmpVoice (guitar, (voice + 1) % (int) voices.size());
+            effects.setAmpBright (guitar, ! voices[(size_t) voice].bright);
+            pumpMessages();
+
+            const auto name = voices[(size_t) voice].name;
+            checkUndoRoundTrip (engine, "Amp Voice", [&] { effects.setAmpVoice (guitar, voice); });
+            check (hasVoiceDefaults (effects.getAmp (guitar), voice), (name + ": its cab, Bright and knobs, in one undo step").toRawUTF8());
+
+            auto* amp = ampPluginOn (guitar);
+            check (amp != nullptr && AmpPlugin::getVoiceDspNames (amp->getVoice()) == expectedDsp[(size_t) voice],
+                   (name + ": " + expectedDsp[(size_t) voice]).toRawUTF8());
+        }
+
+        // The Plug-ins inspector's Voice knob does the same.
+        auto* amp = ampPluginOn (guitar);
+        const auto ampId = effects.getAmp (guitar).pluginId;
+        auto params = effects.getEffectParameters (guitar, ampId);
+        const auto voiceIndex = (int) std::distance (params.begin(), std::find_if (params.begin(), params.end(),
+                                                     [] (const ParameterInfo& p) { return p.id == "voice"; }));
+        engine.beginUndoStep ("Amp Voice");
+        effects.setEffectParameter (guitar, ampId, voiceIndex, 1.0f / 5.0f);   // Crunch
+        check (amp != nullptr && hasVoiceDefaults (effects.getAmp (guitar), 1), "the Plug-ins inspector's Voice knob sets the rest too");
+    }
+
+    std::cout << "The cab on its own\n";
+    {
+        engine.beginUndoStep ("Amp Treble");
+        effects.setAmpKnob (guitar, 3, 0.81f);
+        pumpMessages();
+        const auto before = effects.getAmp (guitar);
+        checkUndoRoundTrip (engine, "Amp Cab", [&] { effects.setAmpCab (guitar, 15); });
+        const auto after = effects.getAmp (guitar);
+        check (after.cab == 15 && after.voice == before.voice && after.bright == before.bright && after.knobs == before.knobs,
+               "changing the cab changes nothing else");
+        checkUndoRoundTrip (engine, "Amp Bright On", [&] { effects.setAmpBright (guitar, true); });   // (Crunch starts with it off)
+        checkUndoRoundTrip (engine, "Amp Master", [&]
+        {
+            engine.beginUndoStep ("Amp Master");
+            effects.setAmpKnob (guitar, 5, 0.3f);
+        });
+        checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (guitar, after.pluginId, false); });
+        effects.setEffectEnabled (guitar, after.pluginId, true);
+    }
+
+    std::cout << "Saving and reopening\n";
+    {
+        // One track per voice (the guitar track is Crunch, the bass track Bass).
+        for (int voice : { 0, 2, 3, 4 })
+            effects.setAmpVoice (tracks.addGuitarTrack(), voice);
+
+        effects.setAmpVoice (bass, 5);
+        pumpMessages();
+
+        // In track order, as they'll be read back.
+        std::vector<EffectsController::AmpSettings> saved;
+        juce::Array<int> savedVoices;
+
+        for (auto& info : tracks.getTracks())
+        {
+            if (effects.getAmp (info.id).exists)
+            {
+                saved.push_back (effects.getAmp (info.id));
+                savedVoices.addIfNotAlreadyThere (saved.back().voice);
+            }
+        }
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Amps"));
+
+        // The tracks come back in the same order.
+        auto list = tracks.getTracks();
+        std::vector<EffectsController::AmpSettings> reopened;
+
+        for (auto& info : list)
+            if (effects.getAmp (info.id).exists)
+                reopened.push_back (effects.getAmp (info.id));
+
+        bool same = reopened.size() == saved.size();
+
+        for (size_t i = 0; same && i < saved.size(); ++i)
+        {
+            // (The guitar track's are its own, not a voice's defaults: compare as saved.)
+            auto& a = saved[i];
+            auto& b = reopened[i];
+            same = a.voice == b.voice && a.cab == b.cab && a.bright == b.bright && a.on == b.on && a.knobs == b.knobs;
+        }
+
+        check (same && saved.size() == 6 && savedVoices.size() == 6, "every voice, and each Amp's cab, Bright, knobs and on/off, survive save and reopen");
+    }
+
+    std::cout << "Sound\n";
+    {
+        const auto di = readAudioFile (juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals/di_guitar.wav"));
+        check (di.getNumSamples() == 96000, "(the DI guitar is two seconds long)");
+        auto* edit = TestAudioDevice::getEditOf (engine);
+        constexpr int blockSize = 512;
+
+        // Plays the DI guitar into both channels, in blocks the way Tracktion does.
+        auto render = [&] (tracktion::Plugin& plugin, double sampleRate, const std::function<void (int block)>& beforeBlock = {})
+        {
+            plugin.initialise ({ tracktion::TimePosition(), sampleRate, blockSize });
+            plugin.reset();
+            juce::AudioBuffer<float> buffer (2, di.getNumSamples());
+
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.copyFrom (ch, 0, di, 0, 0, di.getNumSamples());
+
+            for (int start = 0, block = 0; start < buffer.getNumSamples(); start += blockSize, ++block)
+            {
+                if (beforeBlock)
+                    beforeBlock (block);
+
+                tracktion::PluginRenderContext context (&buffer, start, std::min (blockSize, buffer.getNumSamples() - start),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            return buffer;
+        };
+
+        auto allFinite = [] (const juce::AudioBuffer<float>& b)
+        {
+            for (int ch = 0; ch < b.getNumChannels(); ++ch)
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                    if (! std::isfinite (b.getSample (ch, i)))
+                        return false;
+
+            return true;
+        };
+
+        auto dB = [] (float gain)    { return juce::Decibels::gainToDecibels (gain, -200.0f); };
+
+        bool finite = true, sensible = true, sameOnBoth = true, latencyOk = true;
+
+        for (int voice = 0; voice < (int) voices.size(); ++voice)
+        {
+            auto plugin = edit->getPluginCache().createNewPlugin (AmpPlugin::createState (voice));
+
+            for (double rate : { 44100.0, 48000.0, 96000.0 })
+            {
+                const auto out = render (*plugin, rate);
+                const auto rms = dB (out.getRMSLevel (0, 0, out.getNumSamples()));
+                const auto peak = dB (out.getMagnitude (0, 0, out.getNumSamples()));
+                const auto latency = plugin->getLatencySeconds();
+                std::cout << "    (" << voices[(size_t) voice].name << " at " << rate / 1000.0 << " kHz: "
+                          << juce::String (rms, 1) << " dBFS RMS, peak " << juce::String (peak, 1) << " dBFS, latency "
+                          << juce::String (latency * 1000.0, 2) << " ms)\n";
+
+                finite = finite && allFinite (out);
+                sensible = sensible && rms > -30.0f && rms < -12.0f && peak < -0.5f;
+                latencyOk = latencyOk && std::isfinite (latency) && latency >= 0.0 && latency < 0.01;
+
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                    sameOnBoth = sameOnBoth && out.getSample (0, i) == out.getSample (1, i);
+            }
+        }
+
+        check (finite, "every voice's output is finite (no NaN or inf) at 44.1, 48 and 96 kHz");
+        check (sensible, "at a sensible level (-30 to -12 dBFS RMS, peaks under full scale)");
+        check (sameOnBoth, "the same sound on both channels");
+        check (latencyOk, "and its latency is reported (none: zero-latency convolution)");
+
+        {
+            // Switching voice and cab every few blocks, as automation might.
+            auto plugin = edit->getPluginCache().createNewPlugin (AmpPlugin::createState (0));
+            auto* amp = dynamic_cast<AmpPlugin*> (plugin.get());
+            const auto out = render (*plugin, 48000.0, [&] (int block)
+            {
+                if (block % 8 == 0)
+                {
+                    amp->getAutomatableParameterByID ("voice")->setParameter ((float) ((block / 8) % 6), juce::sendNotificationSync);
+                    amp->getAutomatableParameterByID ("cab")->setParameter ((float) ((block / 8) % (offCab + 1)), juce::sendNotificationSync);
+                }
+            });
+            check (allFinite (out) && out.getMagnitude (0, 0, out.getNumSamples()) < 1.0f,
+                   "switching voice and cab while playing stays finite and under full scale");
+        }
+
+        {
+            // Cab Off is the amp without a cabinet: convolving its output with
+            // a cab's IR by hand gives what the Amp plays with that cab.
+            auto plugin = edit->getPluginCache().createNewPlugin (AmpPlugin::createState (1));
+            auto cabParam = plugin->getAutomatableParameterByID ("cab");
+            const int cab = 9;   // 2x12 Open Back (a 48 kHz IR, like the test's rate)
+            cabParam->setParameter ((float) offCab, juce::sendNotificationSync);
+            const auto dry = render (*plugin, 48000.0);
+            cabParam->setParameter ((float) cab, juce::sendNotificationSync);
+            const auto withCab = render (*plugin, 48000.0);
+
+            double irRate = 0.0;
+            const auto ir = AmpPlugin::getCabinetIR (cab, irRate);
+            double error = 0.0, reference = 0.0;
+
+            for (int i = 0; i < dry.getNumSamples(); ++i)
+            {
+                double y = 0.0;
+
+                for (int k = 0; k < ir.getNumSamples() && k <= i; ++k)
+                    y += (double) ir.getSample (0, k) * dry.getSample (0, i - k);
+
+                error += (y - withCab.getSample (0, i)) * (y - withCab.getSample (0, i));
+                reference += y * y;
+            }
+
+            const auto belowDb = 10.0 * std::log10 (reference / std::max (error, 1.0e-30));
+            std::cout << "    (cab by hand vs the Amp's cab: the difference is " << juce::String (belowDb, 1) << " dB down)\n";
+            check (irRate == 48000.0 && belowDb > 80.0, "cab Off passes the amp's output through untouched");
+        }
+
+        {
+            // How much of one core the Amp needs at 48 kHz: each voice alone,
+            // then behind a full pedalboard (11 pedals, the most that fit
+            // with it). A Debug build is much slower than the app.
+            auto timeIt = [&] (std::vector<tracktion::Plugin::Ptr>& chain)
+            {
+                for (auto& p : chain)
+                {
+                    p->initialise ({ tracktion::TimePosition(), 48000.0, blockSize });
+                    p->reset();
+                }
+
+                juce::AudioBuffer<float> buffer (2, di.getNumSamples());
+
+                for (int ch = 0; ch < 2; ++ch)
+                    buffer.copyFrom (ch, 0, di, 0, 0, di.getNumSamples());
+
+                const auto start = juce::Time::getHighResolutionTicks();
+
+                for (int at = 0; at < buffer.getNumSamples(); at += blockSize)
+                {
+                    tracktion::PluginRenderContext context (&buffer, at, std::min (blockSize, buffer.getNumSamples() - at),
+                                                            nullptr, 0.0, {}, true, false, true, false);
+
+                    for (auto& p : chain)
+                        p->applyToBuffer (context);
+                }
+
+                const auto seconds = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+                return seconds / (buffer.getNumSamples() / 48000.0) * 100.0;   // % of one core
+            };
+
+            juce::StringArray perVoice;
+            double worst = 0.0;
+
+            for (int voice = 0; voice < (int) voices.size(); ++voice)
+            {
+                std::vector<tracktion::Plugin::Ptr> chain { edit->getPluginCache().createNewPlugin (AmpPlugin::createState (voice)) };
+                const auto percent = timeIt (chain);
+                worst = std::max (worst, percent);
+                perVoice.add (voices[(size_t) voice].name + " " + juce::String (percent, 1) + "%");
+            }
+
+            std::vector<tracktion::Plugin::Ptr> board;
+
+            for (auto& style : getPedalStyles())
+                if ((int) board.size() < EffectsController::maxEffectsPerTrack - 1)
+                    board.push_back (edit->getPluginCache().createNewPlugin (style.pluginType, {}));
+
+            board.push_back (edit->getPluginCache().createNewPlugin (AmpPlugin::createState (4)));
+            const auto boardPercent = timeIt (board);
+
+            std::cout << "    (CPU, one core at 48 kHz, "
+                     #if defined (NDEBUG)
+                      << "Release"
+                     #else
+                      << "Debug"
+                     #endif
+                      << " build: " << perVoice.joinIntoString (", ") << "; 11 pedals + the Amp "
+                      << juce::String (boardPercent, 1) << "%)\n";
+           #if defined (NDEBUG)
+            check (worst < 10.0, "one Amp needs less than a tenth of one core");
+           #else
+            juce::ignoreUnused (worst);
+           #endif
+        }
+    }
+
+    std::cout << "Sessions from before the Amp\n";
+    {
+        // Saved and exported by the app before this milestone (see
+        // tests/fixtures/sessions/README).
+        const auto fixtures = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("sessions");
+        const auto session = dir.getChildFile ("Before Amp.iksession");
+        fixtures.getChildFile ("Before Amp.iksession").copyFileTo (session);
+        check (engine.openSession (session), "(open)");
+        pumpMessages();
+
+        auto list = tracks.getTracks();
+        bool noAmp = ! list.empty(), pedalboards = ! list.empty();
+        juce::StringArray chains;
+
+        for (auto& info : list)
+        {
+            noAmp = noAmp && ! effects.getAmp (info.id).exists;
+
+            // (It also has the instrument track every new session starts with.)
+            if (info.kind == TrackKind::audio)
+            {
+                pedalboards = pedalboards && effects.hasPedalboard (info.id);
+                chains.add (typesOn (info.id));
+            }
+        }
+
+        check (noAmp, "it opens with no Amp added");
+        check (pedalboards && chains.joinIntoString ("|") == "ikarosYellowDrive,ikarosStackDrive,delay|ikarosGoldenBoost",
+               "its guitar and bass tracks keep their pedals as they were");
+
+        ExportSettings settings;
+        settings.quality = 24;
+        settings.destination = dir.getChildFile ("Before Amp, now.wav");
+        bool done = false;
+        check (! engine.getExporter().start (settings, [&] (const ExportResult&) { done = true; }).failed(), "(export)");
+
+        for (int i = 0; i < 1200 && ! done; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        const auto now = readAudioFile (settings.destination);
+        const auto before = readAudioFile (fixtures.getChildFile ("Before Amp.wav"));
+        bool identical = now.getNumChannels() == before.getNumChannels() && now.getNumSamples() == before.getNumSamples()
+                           && now.getNumSamples() > 0;
+
+        for (int ch = 0; identical && ch < now.getNumChannels(); ++ch)
+            identical = std::memcmp (now.getReadPointer (ch), before.getReadPointer (ch), sizeof (float) * (size_t) now.getNumSamples()) == 0;
+
+        check (identical, "and it renders bit-identical to the render made before the Amp");
     }
 
     device.reset();
@@ -7303,11 +8047,17 @@ int main (int argc, char* argv[])
     if (runs ("quantize"))
         runQuantizeSection (dir);
 
+    if (runs ("followtempo"))
+        runFollowTempoSection (dir);
+
     if (runs ("tuner"))
         runTunerSection();
 
     if (runs ("pedals"))
         runPedalsSection (dir);
+
+    if (runs ("amp"))
+        runAmpSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

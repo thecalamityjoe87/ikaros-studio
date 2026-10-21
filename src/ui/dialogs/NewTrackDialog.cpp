@@ -122,6 +122,14 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     inputBox.setTitle ("Input");
     addChildComponent (inputBox);
 
+    // Guitar or Bass: a bass track starts with the amp's Bass voice.
+    playsBox.addItem ("Guitar", 1);
+    playsBox.addItem ("Bass", 2);
+    playsBox.setSelectedId (1, juce::dontSendNotification);
+    playsBox.setTitle ("Plays");
+    playsBox.setTooltip ("A bass track's amp starts on the Bass voice");
+    addChildComponent (playsBox);
+
     monitorToggle.setTooltip ("Use headphones, or a microphone near your speakers will feed back.");
     addChildComponent (monitorToggle);
 
@@ -167,6 +175,7 @@ void NewTrackDialog::choose (Kind kind)
     // Audio and guitar tracks record an input.
     inputBox.setVisible (recordsInput());
     monitorToggle.setVisible (recordsInput());
+    playsBox.setVisible (chosen == Kind::guitar);
     repaint();
 }
 
@@ -177,7 +186,7 @@ void NewTrackDialog::create()
 
     if (recordsInput())
     {
-        id = chosen == Kind::guitar ? tracks.addGuitarTrack() : tracks.addAudioTrack();
+        id = chosen == Kind::guitar ? tracks.addGuitarTrack (playsBox.getSelectedId() == 2) : tracks.addAudioTrack();
 
         if (id != 0)
         {
@@ -262,6 +271,9 @@ void NewTrackDialog::paint (juce::Graphics& g)
         g.setFont (fonts::ui (textSize::md));
         g.drawText ("Input", audioOptionsArea.withWidth (60), juce::Justification::centredLeft);
 
+        if (chosen == Kind::guitar)
+            g.drawText ("Plays", playsLabelArea, juce::Justification::centredRight);
+
         if (inputs.empty())
             g.drawText ("Connect an audio interface, or pick one in File > Audio & MIDI Settings.",
                         audioOptionsArea.translated (0, 34), juce::Justification::centredLeft, true);
@@ -290,6 +302,8 @@ void NewTrackDialog::resized()
     options.removeFromLeft (60);
     inputBox.setBounds (options.removeFromLeft (160));
     options.removeFromLeft (16);
+    playsBox.setBounds (options.removeFromRight (110));
+    playsLabelArea = options.removeFromRight (56).withTrimmedRight (10);
     monitorToggle.setBounds (options);
 
     auto buttons = panel.reduced (28, 24).removeFromBottom (36);

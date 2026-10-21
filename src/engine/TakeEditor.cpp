@@ -106,15 +106,18 @@ static void playWaveTake (te::WaveAudioClip& clip, int index)
     const double fromAlign = current >= 0 ? alignOf (takes.getChild (current)) : 0.0;
     const double offset = clip.getPosition().getOffset().inSeconds() + alignOf (next) - fromAlign;
 
+    // Flex edits pin moments of one take's recording, and a recording's beat
+    // map belongs to it too, so each take keeps its own: the old take's wait
+    // on it for when it's chosen again (noted while it still plays), and the
+    // new take plays with whatever it had (as it was recorded, the first time).
+    setAsideTakeFlex (clip, current >= 0 ? takes.getChild (current) : juce::ValueTree());
+
     // Tracktion reloads the clip's audio when its source property changes
     // (and again when Undo puts the old one back).
     clip.state.setProperty (te::IDs::source, next[te::IDs::source], undoManagerOf (clip));
     clip.setOffset (te::TimeDuration::fromSeconds (juce::jmax (0.0, offset)));
 
-    // Flex edits pin moments of one take's recording, so each take keeps its
-    // own: the new take plays with whatever Flex edits it had (none, the
-    // first time), and the old take's wait on it for when it's chosen again.
-    switchTakeWarp (clip, current >= 0 ? takes.getChild (current) : juce::ValueTree(), next);
+    bringBackTakeFlex (clip, next);
 }
 
 // An audio clip's take list, made (with the clip's own file as its only
@@ -287,13 +290,14 @@ bool TakeEditor::flattenTakes (RegionId id)
 
 // Regions whose audio can be kept as a take: plain recordings or files, not
 // looped, stretched, pitched, reversed or flexed (their take would sound
-// different). A Flex track's region whose hits haven't been moved (it plays
-// its recording as it is) can.
+// different). A region whose hits haven't been moved can, even if it's
+// stretched to follow the tempo: that's how its recording plays at this
+// tempo (see writeCoveredAudio).
 static bool canBecomeTake (te::WaveAudioClip& clip)
 {
     return ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getAutoPitch() && clip.getSpeedRatio() == 1.0
             && clip.getPitchChange() == 0.0f && clip.getTransposeSemiTones (false) == 0 && ! clip.getIsReversed()
-            && ! usesFlex (clip) && clip.getSourceFileReference().getFile().existsAsFile();
+            && ! hasHitEdits (clip) && clip.getSourceFileReference().getFile().existsAsFile();
 }
 
 static bool sameRange (te::Clip& a, te::Clip& b)
@@ -431,7 +435,11 @@ static juce::File writeCoveredAudio (te::WaveAudioClip& clip, std::vector<te::Wa
 
     for (auto* other : covered)
     {
-        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (other->getSourceFileReference().getFile()));
+        // A region following the tempo plays a stretched copy of its
+        // recording, lined up the same way: that's what it played. (Until
+        // the copy has been made, the region is silent and left as it is.)
+        const auto heardFile = usesFlex (*other) ? other->getPlaybackFile().getFile() : other->getSourceFileReference().getFile();
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (heardFile));
 
         // A file at another sample rate would need resampling: it's left as it is.
         if (reader == nullptr || reader->sampleRate != rate)

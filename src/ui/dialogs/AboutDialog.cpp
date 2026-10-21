@@ -255,6 +255,9 @@ void AboutDialog::paint (juce::Graphics& g)
     auto r = contentArea.reduced (40, 0);
     r.removeFromTop (8);
 
+    // drawImage draws at the current colour's opacity, and the last colour set
+    // (the tabs' translucent outline) would leave the icon almost invisible.
+    g.setOpacity (1.0f);
     g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
     g.drawImage (icon, r.removeFromTop (112).toFloat(), juce::RectanglePlacement::centred);
     r.removeFromTop (10);

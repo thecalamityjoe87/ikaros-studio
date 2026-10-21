@@ -440,7 +440,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     }
 
     // Pedals only shows while an audio track is selected (see showTabPage).
-    pedalsTab.setTooltip ("The track's pedalboard: stompbox effects for guitar and bass");
+    pedalsTab.setTooltip ("The track's rig: its pedalboard and amp, for guitar and bass");
     pedalsTab.onClick = [this] { setTab (Tab::pedals); if (onViewStateChanged) onViewStateChanged(); };
 
     // Mixer is the switch's last segment, but a view of its own rather than
@@ -518,7 +518,7 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     addAndMakeVisible (inspectorButton);
 
-    // The Pedals tab's own buttons, in the header (so the board below is all
+    // The Rig tab's own buttons, in the header (so the board below is all
     // pedals). Tuner lights up while the tuner is on (see update()).
     for (auto* b : { &tunerButton, &addPedalButton })
     {
@@ -792,7 +792,7 @@ void BottomPanel::refreshTrack()
         closeEffect();
 
     // The Pedals segment comes and goes with guitar and bass tracks; off
-    // one, the Pedals tab gives way to Sound.
+    // one, the Rig tab gives way to Sound.
     updatePedalboardAvailable();
 
     if (tab == Tab::pedals && ! isPedalboardAvailable())
@@ -1056,7 +1056,7 @@ void BottomPanel::resized()
     inspectorButton.setBounds (header.removeFromRight (96).withSizeKeepingCentre (96, 30));
     header.removeFromRight (14);
 
-    // On the Pedals tab: Tuner and Add Pedal, left of Inspector.
+    // On the Rig tab: Tuner and Add Pedal, left of Inspector.
     if (addPedalButton.isVisible())
     {
         addPedalButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 30));

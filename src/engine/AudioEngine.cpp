@@ -3,6 +3,7 @@
 #include "engine/AudioPreview.h"
 #include "engine/BuiltInEffects.h"
 #include "engine/PortedPedals.h"
+#include "engine/AmpPlugin.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
@@ -277,6 +278,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<SlowSwellPlugin>();
         engine.getPluginManager().createBuiltInType<JetFlangerPlugin>();
         engine.getPluginManager().createBuiltInType<SpringTankPlugin>();
+
+        // The Amp that follows the pedals (see AmpPlugin.h).
+        engine.getPluginManager().createBuiltInType<AmpPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
@@ -2217,12 +2221,13 @@ void AudioEngine::changeTempoMap (const std::vector<TempoChange>& tempos, const 
     // notes where (in beats) every region, loop range and automation point
     // is, then puts them back on those beats after the change. Regions of
     // loops and auto-tempo audio are stretched to fit, so they follow the
-    // new tempo; recordings just move (they keep their length in seconds).
+    // new tempo; other audio files just move (they keep their length in
+    // seconds).
     //
     // Curves on missing plug-ins have no parameters for the remapper to
-    // see; the automation editor keeps those on their beats. Flexed
-    // recordings follow the tempo too (their markers stay on their beats),
-    // which the remapper doesn't know about: see FlexHelpers.h.
+    // see; the automation editor keeps those on their beats. Recordings
+    // (and everything on a Flex track) follow the tempo too, through their
+    // warp markers, which the remapper doesn't know about: see FlexHelpers.h.
     trackController->automation().keepUnloadedCurvesOnBeats ([&]
     {
         te::EditTimecodeRemapperSnapshot snapshot;

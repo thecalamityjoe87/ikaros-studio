@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/BuiltInEffects.h"
 #include "engine/PortedPedals.h"
+#include "engine/AmpPlugin.h"
 #include "engine/PedalStyles.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
@@ -42,6 +43,7 @@ namespace
             { SunFuzzPlugin::xmlTypeName,        SunFuzzPlugin::getPluginName(),     "Distortion" },
             { VintageFuzzPlugin::xmlTypeName,    VintageFuzzPlugin::getPluginName(), "Distortion" },
             { SuperFuzzPlugin::xmlTypeName,      SuperFuzzPlugin::getPluginName(),   "Distortion" },
+            { AmpPlugin::xmlTypeName,            AmpPlugin::getPluginName(),         "Distortion" },
             { te::ReverbPlugin::xmlTypeName,     "Reverb",                "Space" },
             { te::DelayPlugin::xmlTypeName,      "Echo",                  "Space" },
             { SpringTankPlugin::xmlTypeName,     SpringTankPlugin::getPluginName(),  "Space" },
@@ -128,8 +130,22 @@ namespace
     }
 
     //==============================================================================
-    // Pedals first (see EffectsController.h).
+    // Pedals first, then the Amp (see EffectsController.h).
     bool isPedal (te::Plugin& p)    { return findPedalStyle (getPluginTypeString (p)) != nullptr; }
+    bool isAmp (te::Plugin& p)      { return dynamic_cast<AmpPlugin*> (&p) != nullptr; }
+
+    // Where an effect belongs in an audio track's chain: 0 = with the
+    // pedals, 1 = the Amp, 2 = with the other effects.
+    int chainRank (te::Plugin& p)   { return isPedal (p) ? 0 : isAmp (p) ? 1 : 2; }
+
+    AmpPlugin* findAmp (te::PluginList& list)
+    {
+        for (auto* p : list)
+            if (auto* amp = dynamic_cast<AmpPlugin*> (p))
+                return amp;
+
+        return nullptr;
+    }
 
     // Only audio tracks keep their pedals first: they're the ones with a
     // pedalboard. (findTrack is null for the master.)
@@ -139,12 +155,13 @@ namespace
         return t != nullptr && isAudioTrack (*t);
     }
 
-    // How many effects at the start of the chain are pedals.
-    int countLeadingPedals (const std::vector<te::Plugin*>& effects)
+    // How many effects at the start of the chain rank no higher than
+    // `rank` (0: the leading pedals; 1: those and the Amp after them).
+    int countLeading (const std::vector<te::Plugin*>& effects, int rank)
     {
         int n = 0;
 
-        while (n < (int) effects.size() && isPedal (*effects[(size_t) n]))
+        while (n < (int) effects.size() && chainRank (*effects[(size_t) n]) <= rank)
             ++n;
 
         return n;
@@ -152,15 +169,18 @@ namespace
 
     // Where an effect may go among `others` (the chain without it) when
     // `position` is asked for (-1 = the end): a pedal no further than the
-    // end of the pedals, any other effect no earlier.
-    int positionKeepingPedalsFirst (bool pedal, const std::vector<te::Plugin*>& others, int position)
+    // end of the pedals, the Amp just after them, any other effect after
+    // both. (A pedal added "at the end" goes after the last pedal.)
+    int positionKeepingPedalsFirst (te::Plugin& effect, const std::vector<te::Plugin*>& others, int position)
     {
-        const int pedals = countLeadingPedals (others);
+        const int rank = chainRank (effect);
+        const int earliest = rank == 0 ? 0 : countLeading (others, rank - 1);
 
-        if (pedal)
-            return position < 0 ? pedals : juce::jmin (position, pedals);
+        if (rank == 2)
+            return position < 0 ? -1 : juce::jmax (position, earliest);
 
-        return position < 0 ? -1 : juce::jmax (position, pedals);
+        const int latest = countLeading (others, rank);
+        return position < 0 ? latest : juce::jlimit (earliest, latest, position);
     }
 
     PluginSlot makeSlot (te::Plugin& p)
@@ -926,7 +946,7 @@ bool EffectsController::hasPedalboard (TrackId id) const
         return true;
 
     auto effects = effectsOn (t->pluginList);
-    return std::any_of (effects.begin(), effects.end(), [] (te::Plugin* p) { return isPedal (*p); });
+    return std::any_of (effects.begin(), effects.end(), [] (te::Plugin* p) { return isPedal (*p) || isAmp (*p); });
 }
 
 void EffectsController::setPedalboardShown (TrackId id, bool shown)
@@ -958,6 +978,10 @@ PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int
     if (list == nullptr || (int) effectsOn (*list).size() >= maxEffectsPerTrack)
         return 0;
 
+    // At most one Amp per track.
+    if (type == AmpPlugin::xmlTypeName && findAmp (*list) != nullptr)
+        return 0;
+
     // A third-party plug-in can take a moment to load, so do it before the
     // undo step starts.
     auto plugin = createPlugin (*edit, type);
@@ -966,7 +990,7 @@ PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int
         return 0;
 
     if (keepsPedalsFirst (edit, id))
-        position = positionKeepingPedalsFirst (isPedal (*plugin), effectsOn (*list), position);
+        position = positionKeepingPedalsFirst (*plugin, effectsOn (*list), position);
 
     owner.beginUndoStep ("Add Effect");
 
@@ -981,6 +1005,10 @@ PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const 
     auto* old = list != nullptr ? findEffect (*list, pluginId) : nullptr;
 
     if (old == nullptr)
+        return 0;
+
+    // At most one Amp per track (replacing the Amp with another is fine).
+    if (newType == AmpPlugin::xmlTypeName && findAmp (*list) != nullptr && ! isAmp (*old))
         return 0;
 
     auto plugin = createPlugin (*edit, newType);
@@ -998,7 +1026,7 @@ PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const 
         auto effects = effectsOn (*list);
         const auto oldPosition = (int) std::distance (effects.begin(), std::find (effects.begin(), effects.end(), old));
         effects.erase (effects.begin() + oldPosition);
-        const auto position = positionKeepingPedalsFirst (isPedal (*plugin), effects, oldPosition);
+        const auto position = positionKeepingPedalsFirst (*plugin, effects, oldPosition);
         old->removeFromParent();
         list->insertPlugin (plugin, pluginListIndexForPosition (*list, position), nullptr);
     }
@@ -1046,7 +1074,7 @@ void EffectsController::moveEffect (TrackId id, PluginId pluginId, int newPositi
     {
         auto others = effects;
         others.erase (others.begin() + oldPosition);
-        newPosition = positionKeepingPedalsFirst (isPedal (*plugin), others, newPosition);
+        newPosition = positionKeepingPedalsFirst (*plugin, others, newPosition);
 
         if (newPosition < 0)
             newPosition = (int) others.size();
@@ -1114,7 +1142,12 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
 
             if (auto* param = params[index])
             {
-                setEffectKnob (*param, value);
+                // The Amp's Voice brings the voice's other settings with it
+                // (see AmpPlugin::setVoice).
+                if (auto* amp = dynamic_cast<AmpPlugin*> (p); amp != nullptr && param->paramID == "voice")
+                    amp->setVoice (juce::roundToInt (param->valueRange.convertFrom0to1 (value)));
+                else
+                    setEffectKnob (*param, value);
             }
             else
             {
@@ -1137,6 +1170,103 @@ void EffectsController::setEffectParameter (TrackId id, PluginId pluginId, int i
             }
         }
     }
+}
+
+//==============================================================================
+// The Amp
+static AmpPlugin* ampOn (te::Edit* edit, TrackId id)
+{
+    auto* list = findPluginList (edit, id);
+    return list != nullptr ? findAmp (*list) : nullptr;
+}
+
+EffectsController::AmpSettings EffectsController::getAmp (TrackId id) const
+{
+    AmpSettings result;
+    auto* amp = ampOn (owner.getEdit(), id);
+
+    if (amp == nullptr)
+        return result;
+
+    result.exists = true;
+    result.pluginId = amp->itemID.getRawID();
+    result.on = amp->isEnabled();
+    result.voice = amp->getVoice();
+    result.cab = amp->getCab();
+    result.bright = amp->isBright();
+
+    for (int i = 0; i < ampKnobCount; ++i)
+    {
+        auto& knob = amp->getKnob (i);
+        result.knobs[(size_t) i] = knob.getCurrentNormalisedValue();
+        result.knobText[(size_t) i] = knob.getCurrentValueAsString();
+    }
+
+    return result;
+}
+
+PluginId EffectsController::addAmp (TrackId id, int voice, bool newUndoStep)
+{
+    auto* edit = owner.getEdit();
+    auto* list = findPluginList (edit, id);
+
+    if (list == nullptr || findAmp (*list) != nullptr || (int) effectsOn (*list).size() >= maxEffectsPerTrack)
+        return 0;
+
+    if (voice < 0)
+    {
+        auto* track = findTrack (edit, id);
+        voice = getDefaultAmpVoiceFor (track != nullptr ? track->state.getProperty (iconProp).toString() : juce::String());
+    }
+
+    // The voice's settings go into the state before the Amp is created, so
+    // they aren't separate undo steps.
+    auto plugin = edit->getPluginCache().createNewPlugin (AmpPlugin::createState (voice));
+
+    if (plugin == nullptr)
+        return 0;
+
+    const auto position = keepsPedalsFirst (edit, id) ? positionKeepingPedalsFirst (*plugin, effectsOn (*list), -1) : -1;
+
+    if (newUndoStep)
+        owner.beginUndoStep ("Add Amp");
+
+    list->insertPlugin (plugin, pluginListIndexForPosition (*list, position), nullptr);
+    return plugin->itemID.getRawID();
+}
+
+void EffectsController::setAmpVoice (TrackId id, int voice)
+{
+    if (auto* amp = ampOn (owner.getEdit(), id))
+    {
+        owner.beginUndoStep ("Amp Voice");
+        amp->setVoice (voice);
+    }
+}
+
+void EffectsController::setAmpCab (TrackId id, int cab)
+{
+    if (auto* amp = ampOn (owner.getEdit(), id); amp != nullptr && amp->getCab() != cab)
+    {
+        owner.beginUndoStep ("Amp Cab");
+        amp->setCab (cab);
+    }
+}
+
+void EffectsController::setAmpBright (TrackId id, bool on)
+{
+    if (auto* amp = ampOn (owner.getEdit(), id); amp != nullptr && amp->isBright() != on)
+    {
+        owner.beginUndoStep (on ? "Amp Bright On" : "Amp Bright Off");
+        amp->setBright (on);
+    }
+}
+
+void EffectsController::setAmpKnob (TrackId id, int knob, float normalised0to1)
+{
+    // No beginUndoStep() here: the UI starts one on knob drag start.
+    if (auto* amp = ampOn (owner.getEdit(), id); amp != nullptr && juce::isPositiveAndBelow (knob, ampKnobCount))
+        setEffectKnob (amp->getKnob (knob), juce::jlimit (0.0f, 1.0f, normalised0to1));
 }
 
 //==============================================================================

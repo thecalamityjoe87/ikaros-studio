@@ -426,6 +426,9 @@ juce::PopupMenu PluginChainView::buildEffectMenu (std::function<void (const Effe
         makerMenu = {};
     };
 
+    // A track has at most one Amp.
+    const bool hasAmp = engine.getTracks().effects().getAmp (trackId).exists;
+
     for (auto& effect : engine.getTracks().effects().getAvailableEffects())
     {
         if (effect.category != currentCategory)
@@ -439,7 +442,8 @@ juce::PopupMenu PluginChainView::buildEffectMenu (std::function<void (const Effe
         }
 
         // PopupMenu items can run a lambda directly when chosen.
-        (effect.isThirdParty ? makerMenu : menu).addItem (effect.name, [onChosen, effect] { onChosen (effect); });
+        (effect.isThirdParty ? makerMenu : menu).addItem (effect.name, ! (hasAmp && effect.type == ampPluginType), false,
+                                                          [onChosen, effect] { onChosen (effect); });
     }
 
     finishMaker();

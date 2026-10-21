@@ -180,20 +180,23 @@ TrackId TrackController::addAudioTrack()
     return createAudioTrack ({});
 }
 
-TrackId TrackController::addGuitarTrack()
+TrackId TrackController::addGuitarTrack (bool bass)
 {
-    int guitarCount = 1;
+    const juce::String icon = bass ? "bass" : "guitar";
+    int count = 1;
 
     for (auto* t : getUserTracks (*owner.getEdit()))
-        if (isAudioTrack (*t) && t->state.getProperty (iconProp).toString() == "guitar")
-            ++guitarCount;
+        if (isAudioTrack (*t) && t->state.getProperty (iconProp).toString() == icon)
+            ++count;
 
-    owner.beginUndoStep ("Add Guitar Track");
-    const auto id = createAudioTrack ("Guitar " + juce::String (guitarCount));
+    owner.beginUndoStep (bass ? "Add Bass Track" : "Add Guitar Track");
+    const auto id = createAudioTrack ((bass ? "Bass " : "Guitar ") + juce::String (count));
 
     if (auto* t = findTrack (owner.getEdit(), id))
-        t->state.setProperty (iconProp, "guitar", &owner.getEdit()->getUndoManager());
+        t->state.setProperty (iconProp, icon, &owner.getEdit()->getUndoManager());
 
+    // The Amp, as part of this undo step, on the voice for the icon set above.
+    effectsController->addAmp (id, -1, false);
     return id;
 }
 
