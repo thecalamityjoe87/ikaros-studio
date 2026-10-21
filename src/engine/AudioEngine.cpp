@@ -859,39 +859,88 @@ private:
 };
 
 //==============================================================================
-AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice)
-    : impl (std::make_unique<Impl> (*this, settingsName, openAudioDevice))
+AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice, bool startNow)
 {
-    // The first run after an update takes the choices from Tracktion's settings file.
-    auto& storage = impl->engine.getPropertyStorage();
-    preferences = std::make_unique<Preferences> (storage.getAppPrefsFolder().getChildFile ("Preferences.xml"),
-                                                 &storage.getPropertiesFile());
+    // Starting is a list of stages, so the app can show each one while it
+    // runs (see runNextStartupStage). Each stage's work stays in the same
+    // order as it always was.
+    startupStages =
+    {
+        { "Starting audio engine...", [this, settingsName, openAudioDevice]
+        {
+            impl = std::make_unique<Impl> (*this, settingsName, openAudioDevice);
+        } },
 
-    recordingGuard = std::make_unique<RecordingGuard> (*this);
-    tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
-    liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
-    deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
-    sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
-    packStore = std::make_unique<PackStore> (*sounds);
-    packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
-    freesoundStore = std::make_unique<FreesoundStore> (*sounds, *preferences);
-    freesoundStore->onLibraryChanged = [this] { soundPacksChanged (FreesoundStore::packId); };
-    plugins = std::make_unique<PluginLibrary> (*this);
-    preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
-                                              impl->engine.getAudioFileFormatManager().readFormatManager);
-    trackController = std::make_unique<TrackController> (*this);
-    exporter = std::make_unique<SongExporter> (*this);
+        { "Loading preferences...", [this]
+        {
+            // The first run after an update takes the choices from Tracktion's settings file.
+            auto& storage = impl->engine.getPropertyStorage();
+            preferences = std::make_unique<Preferences> (storage.getAppPrefsFolder().getChildFile ("Preferences.xml"),
+                                                         &storage.getPropertiesFile());
+        } },
 
-    // Turning the tuner on or off mutes or unmutes the input it listens to.
-    tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+        { "Setting up audio inputs...", [this]
+        {
+            recordingGuard = std::make_unique<RecordingGuard> (*this);
+            tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
+            liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
+            deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
+        } },
 
-    preferences->addListener (this);
-    newSession();
+        { "Loading sound library...", [this]
+        {
+            sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
+            packStore = std::make_unique<PackStore> (*sounds);
+            packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
+            freesoundStore = std::make_unique<FreesoundStore> (*sounds, *preferences);
+            freesoundStore->onLibraryChanged = [this] { soundPacksChanged (FreesoundStore::packId); };
+        } },
+
+        { "Loading plug-ins...", [this]
+        {
+            plugins = std::make_unique<PluginLibrary> (*this);
+            preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
+                                                      impl->engine.getAudioFileFormatManager().readFormatManager);
+            trackController = std::make_unique<TrackController> (*this);
+            exporter = std::make_unique<SongExporter> (*this);
+
+            // Turning the tuner on or off mutes or unmutes the input it listens to.
+            tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+
+            preferences->addListener (this);
+        } },
+
+        { "Preparing session...", [this] { newSession(); } },
+    };
+
+    if (startNow)
+        while (getNextStartupStage().has_value())
+            runNextStartupStage();
+}
+
+std::optional<AudioEngine::StartupStage> AudioEngine::getNextStartupStage() const
+{
+    if (nextStartupStage >= startupStages.size())
+        return std::nullopt;
+
+    return StartupStage { startupStages[nextStartupStage].description,
+                          (float) nextStartupStage / (float) startupStages.size() };
+}
+
+void AudioEngine::runNextStartupStage()
+{
+    if (nextStartupStage < startupStages.size())
+        startupStages[nextStartupStage++].run();
 }
 
 AudioEngine::~AudioEngine()
 {
-    preferences->removeListener (this);
+    // Nothing to undo if the app quit before the first start-up stage ran.
+    if (impl == nullptr)
+        return;
+
+    if (preferences != nullptr)
+        preferences->removeListener (this);
 
     // Order matters: stop playback and drop anything that references the Edit
     // before the Edit itself goes away, and the Edit before the Engine.

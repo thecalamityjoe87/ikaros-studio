@@ -5256,6 +5256,37 @@ int main (int argc, char* argv[])
 
     if (runs ("main"))
     {
+        std::cout << "Starting in stages\n";
+        {
+            AudioEngine staged { testSettings, false, false };
+            check (staged.getNextStartupStage().has_value(), "an engine started later has stages waiting");
+
+            auto last = -1.0f;
+            auto rising = true, described = true;
+            auto count = 0;
+
+            while (auto stage = staged.getNextStartupStage())
+            {
+                rising = rising && stage->fractionDone > last && stage->fractionDone < 1.0f;
+                described = described && stage->description.isNotEmpty();
+                last = stage->fractionDone;
+                staged.runNextStartupStage();
+                ++count;
+            }
+
+            check (count > 1 && rising && described, "each stage says what it loads, and the progress rises");
+            check (staged.getSessionName().isNotEmpty(), "a session is open after the last stage");
+        }
+        {
+            AudioEngine neverStarted { testSettings, false, false };   // quit before the first stage
+        }
+        {
+            AudioEngine partlyStarted { testSettings, false, false };  // quit in the middle
+            partlyStarted.runNextStartupStage();
+            partlyStarted.runNextStartupStage();
+        }
+        check (true, "closing an engine that didn't finish starting is safe");
+
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
 
