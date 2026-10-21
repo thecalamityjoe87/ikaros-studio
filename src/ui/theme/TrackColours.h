@@ -32,6 +32,7 @@ inline Family familyOf (const juce::String& category)
         { "Woodwinds",   Family::woodwinds },
         { "Brass",       Family::brass },
         { "Loops",       Family::loops },
+        { "Plug-ins",    Family::plugins },
         { "Audio Files", Family::audio },
     };
 
