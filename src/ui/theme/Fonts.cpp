@@ -13,6 +13,7 @@ namespace
         juce::Typeface::Ptr regular  = load (BinaryData::FigtreeRegular_ttf,       BinaryData::FigtreeRegular_ttfSize);
         juce::Typeface::Ptr semiBold = load (BinaryData::FigtreeSemiBold_ttf,      BinaryData::FigtreeSemiBold_ttfSize);
         juce::Typeface::Ptr bold     = load (BinaryData::FigtreeBold_ttf,          BinaryData::FigtreeBold_ttfSize);
+        juce::Typeface::Ptr extraBold = load (BinaryData::FigtreeExtraBold_ttf,    BinaryData::FigtreeExtraBold_ttfSize);
         juce::Typeface::Ptr mono     = load (BinaryData::JetBrainsMonoMedium_ttf,  BinaryData::JetBrainsMonoMedium_ttfSize);
         juce::Typeface::Ptr monoBold = load (BinaryData::JetBrainsMonoBold_ttf,    BinaryData::JetBrainsMonoBold_ttfSize);
 
@@ -38,6 +39,7 @@ namespace
 juce::Font ui (float h)          { return make (get().regular, h); }
 juce::Font uiSemiBold (float h)  { return make (get().semiBold, h); }
 juce::Font uiBold (float h)      { return make (get().bold, h); }
+juce::Font uiExtraBold (float h) { return make (get().extraBold, h); }
 juce::Font mono (float h)        { return make (get().mono, h); }
 juce::Font monoBold (float h)    { return make (get().monoBold, h); }
 

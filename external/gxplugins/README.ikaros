@@ -1,0 +1,41 @@
+The DSP of some of Hermann Meyer's (brummer10) GxPlugins, and of two
+Guitarix effects, used by Ikaros Studio's pedals. GxPlugins are GPL 3 (each
+pedal's folder keeps its repository's LICENSE); Guitarix is GPL 2 or later
+(guitarix/COPYING).
+
+Only the Faust-generated DSP is kept (dsp/*.cc, the tables they include and
+the gx_pluginlv2.h they need). The LV2 wrappers (plugin/), GUIs (gui/) and
+the bundled zita-resampler are not used. ikaros/ is ours: one small file per
+pedal that compiles its DSP portably (see ikaros/GxDsp.h), and the CMake
+build.
+
+  Folder             Repository                                      Commit
+  GxSD1              https://github.com/brummer10/GxSD1.lv2              706407c0fecb9525ec87b4f2f23a8c1870701687
+  GxGuvnor           https://github.com/brummer10/GxGuvnor.lv2           bf908c2e6f2c396f745cf3b8d07fb4dec4c0e96c
+  GxHotBox           https://github.com/brummer10/GxHotBox.lv2           99098c026cc09cdea5bc312a06830ee1b270a38c
+  GxBottleRocket     https://github.com/brummer10/GxBottleRocket.lv2     2db1f0e91c6caa446068e9bdae072f6fe3c52a12
+  GxEternity         https://github.com/brummer10/GxEternity.lv2         bae424274b92dab90f62eb58323dde29f797c841
+  GxSunFace          https://github.com/brummer10/GxSunFace.lv2          329f0e37311da238b1df2eb113f6960601f930bf
+  GxSuppaToneBender  https://github.com/brummer10/GxSuppaToneBender.lv2  44fb845ff433eb9828492413e09ad7da3a3bb233
+  GxSuperFuzz        https://github.com/brummer10/GxSuperFuzz.lv2        eda1d498e71605d398781153c71ef2b373d72814
+  GxQuack            https://github.com/brummer10/GxQuack.lv2            f77734abe6bcf899f14dcfde5094d6a415a833f0
+  GxSlowGear         https://github.com/brummer10/GxSlowGear.lv2         20866563995ea1281b0ffd56b8ea248017e7fff7
+  guitarix           https://github.com/brummer10/guitarix               666b564bb8a7194f200029fdbfbec2abe035f777
+                     (trunk/src/LV2/faust-generated/gx_flanger.cc and stereoverb.cc,
+                      trunk/src/LV2/DSP/gx_pluginlv2.h)
+
+Changed files. Everything is unchanged except three files whose oversampling
+used zita-resampler (which needs threads MSVC lacks) and a variable-length
+array (which MSVC doesn't accept): GxEternity/dsp/eternity.cc,
+GxSuppaToneBender/dsp/vstb_clip.cc and GxSuperFuzz/dsp/sfp_clip.cc. Each says
+so at the top and marks every change "Ikaros:". The resampling is taken out
+and Ikaros oversamples those stages itself (juce::dsp::Oversampling, see
+GxPedalPlugin in src/engine/PortedPedals.h).
+
+Also not used: the SuppaToneBender and SuperFuzz wrappers' step that runs
+the DSP at 48 kHz when the session runs at 96 kHz or more (a CPU saving).
+Here they run at the session's rate.
+
+To add a pedal: copy its dsp/ folder and LICENSE here, add a file like
+ikaros/GxSD1.cpp and a namespace in ikaros/GxDsp.h, and list the file in
+ikaros/CMakeLists.txt.

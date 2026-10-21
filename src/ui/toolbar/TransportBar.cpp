@@ -1,6 +1,7 @@
 #include "ui/toolbar/TransportBar.h"
 #include "engine/AudioEngine.h"
 #include "engine/TempoMap.h"
+#include "engine/Tuner.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -20,7 +21,7 @@ namespace
 
 TransportBar::TransportBar (AudioEngine& e) : engine (e)
 {
-    for (auto* b : { &toStartButton, &recordButton, &loopButton, &metronomeButton, &countInButton })
+    for (auto* b : { &toStartButton, &recordButton, &loopButton, &tunerButton, &metronomeButton, &countInButton })
     {
         b->setCornerRadius (size::radiusLarge);
         addAndMakeVisible (b);
@@ -51,6 +52,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     // the engine is updated from onClick. update() keeps them in sync if the
     // state changes elsewhere (menu, keyboard shortcut, loading a session).
     loopButton.setClickingTogglesState (true);
+    tunerButton.setClickingTogglesState (true);
     metronomeButton.setClickingTogglesState (true);
     countInButton.setClickingTogglesState (true);
 
@@ -67,6 +69,16 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
     loopButton.onClick      = [this] { engine.setLooping (loopButton.getToggleState()); };
     metronomeButton.onClick = [this] { engine.setMetronomeEnabled (metronomeButton.getToggleState()); };
     countInButton.onClick   = [this] { engine.setCountInEnabled (countInButton.getToggleState()); };
+
+    // The tuner turns the LCD into a tuner for the selected track's input
+    // (update() switches the LCD over). Escape or a second click turns it off.
+    tunerButton.setTooltip ("Tuner: tune the selected track's input (Esc to close)");
+    tunerButton.onClick = [this] { engine.getTuner().setActive (tunerButton.getToggleState()); };
+    lcd.onTunerMuteClicked = [this]
+    {
+        auto& prefs = engine.getPreferences();
+        prefs.set (settings::muteWhileTuning, ! prefs.get (settings::muteWhileTuning));
+    };
 
     lcd.onBpmChanged = [this] (double bpm) { engine.setBpm (bpm); };
 
@@ -93,7 +105,7 @@ TransportBar::TransportBar (AudioEngine& e) : engine (e)
 
 int TransportBar::getPreferredWidth() const
 {
-    return padding * 2 + buttonSize * 4 + playWidth + countInWidth + LcdDisplay::preferredWidth + gap * 6 + 4;
+    return padding * 2 + buttonSize * 5 + playWidth + countInWidth + LcdDisplay::preferredWidth + gap * 7 + 4;
 }
 
 void TransportBar::update()
@@ -115,6 +127,13 @@ void TransportBar::update()
     metronomeButton.setToggleState (state.metronome, juce::dontSendNotification);
     countInButton.setToggleState (state.countIn, juce::dontSendNotification);
     lcd.setState (state, engine.getKeyName());
+
+    auto& tuner = engine.getTuner();
+    tunerButton.setToggleState (tuner.isActive(), juce::dontSendNotification);
+    lcd.setTunerShown (tuner.isActive());
+
+    if (tuner.isActive())
+        lcd.setTunerState (tuner.getReading(), tuner.hasInput(), engine.getPreferences().get (settings::muteWhileTuning));
 }
 
 void TransportBar::paint (juce::Graphics& g)
@@ -149,7 +168,8 @@ void TransportBar::resized()
     r.removeFromLeft (4);
     // The LCD takes what's left after the gap behind it, the metronome, its
     // gap and Count-in, so Count-in keeps the same inset as Go to start.
-    place (lcd, juce::jmax (120, r.getWidth() - gap - (buttonSize + gap) - countIn));
+    place (lcd, juce::jmax (120, r.getWidth() - gap - (buttonSize + gap) * 2 - countIn));
+    place (tunerButton, buttonSize);
     place (metronomeButton, buttonSize);
     place (countInButton, countIn);
 }

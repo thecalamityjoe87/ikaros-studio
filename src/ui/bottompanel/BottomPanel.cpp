@@ -1,4 +1,5 @@
 #include "ui/bottompanel/BottomPanel.h"
+#include "engine/Tuner.h"
 #include "ui/widgets/AutomationHint.h"
 #include "ui/widgets/Knob.h"
 #include "ui/bottompanel/PianoKeyboard.h"
@@ -94,6 +95,18 @@ public:
             rangePending = ! isAudioTrack;
         }
 
+        // What paint() draws, before and after: it's only repainted when that
+        // changes, not on every refresh (many a second while automation
+        // plays). The knobs repaint themselves.
+        const auto look = [this]
+        {
+            return juce::String ((int) isAudioTrack) + (hasKnobs ? "k" : "-") + juce::String (shownKnobs) + "|" + soundName
+                   + "|" + (instrument.has_value() ? instrument->name + instrument->missingPackId + instrument->missingPackName
+                                                     + (instrument->missing ? "m" : "") + (instrument->isThirdParty ? "t" : "")
+                                                   : juce::String ("none"));
+        };
+        const auto lookBefore = look();
+
         auto controls = tc.effects().getSoundControls (id);
         automated = track.has_value() ? track->automated : juce::StringArray();
         instrument = isAudioTrack ? std::nullopt : tc.effects().getInstrument (id);
@@ -122,7 +135,9 @@ public:
         }
 
         resized();
-        repaint();
+
+        if (look() != lookBefore)
+            repaint();
     }
 
     // ~30 Hz. A newly chosen sampled instrument loads in the background (big ones take a while, and
@@ -404,11 +419,12 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     masterPage = std::make_unique<MasterPage> (engine);
     addChildComponent (*masterPage);
     addChildComponent (eqView);
+    addChildComponent (pedalboard);
     addChildComponent (pianoRoll);
     addChildComponent (audioEditor);
     addChildComponent (mixer);
 
-    // Segmented controls (Sound | Editor | EQ | Mixer, and the inspector's
+    // Segmented controls (Sound | Editor | EQ | Pedals | Mixer, and the inspector's
     // Track | Master): the panel draws the shared rounded background (see
     // paint), and the chosen segment is a rounded pill inside it, like the
     // rest of the app's buttons. Chosen segments are neutral
@@ -423,12 +439,16 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
         ++index;
     }
 
+    // Pedals only shows while an audio track is selected (see showTabPage).
+    pedalsTab.setTooltip ("The track's pedalboard: stompbox effects for guitar and bass");
+    pedalsTab.onClick = [this] { setTab (Tab::pedals); if (onViewStateChanged) onViewStateChanged(); };
+
     // Mixer is the switch's last segment, but a view of its own rather than
     // a tab: it covers the whole panel until a tab is picked again.
     mixerButton.setTooltip ("Every track's fader at once");
     mixerButton.onClick = [this] { setMixerShown (true); if (onViewStateChanged) onViewStateChanged(); };
 
-    for (auto* b : { &soundTab, &editorTab, &eqTab, &mixerButton })
+    for (auto* b : { &soundTab, &editorTab, &eqTab, &pedalsTab, &mixerButton })
     {
         b->setColours (IconButton::segmentColours);
         b->setCornerRadius (segmentRadius);
@@ -498,6 +518,20 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     };
     addAndMakeVisible (inspectorButton);
 
+    // The Pedals tab's own buttons, in the header (so the board below is all
+    // pedals). Tuner lights up while the tuner is on (see update()).
+    for (auto* b : { &tunerButton, &addPedalButton })
+    {
+        b->setColours (IconButton::raisedColours);
+        b->setFont (fonts::ui (textSize::md));
+        b->setIconSize (16.0f);
+        addChildComponent (b);
+    }
+
+    tunerButton.setTooltip ("Tune up: the transport readout becomes a tuner for this track's input");
+    tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
+    addPedalButton.onClick = [this] { pedalboard.showAddPedal (addPedalButton); };
+
     // An ordinary button, like the rest of the header's.
     collapseButton.setColours (IconButton::raisedColours);
     collapseButton.setTooltip ("Hide panel");
@@ -512,8 +546,19 @@ BottomPanel::~BottomPanel() = default;
 
 void BottomPanel::setTab (Tab t)
 {
+    // (The pedalboard may have just been shown from the menu, before the
+    // engine's change notice has come through.)
+    updatePedalboardAvailable();
+
+    if (t == Tab::pedals && ! isPedalboardAvailable())
+        t = Tab::sound;
+
     tab = t;
     mixerShown = false;   // picking a tab leaves the full mixer...
+
+    // The pedalboard is the selected track's, like the Editor.
+    if (tab == Tab::pedals)
+        masterMode = false;
 
     if (isShowingEffect())
         closeEffect();    // ...and the effect settings
@@ -526,6 +571,10 @@ void BottomPanel::setMasterMode (bool shouldShowMaster)
 {
     masterMode = shouldShowMaster;
     mixerShown = false;   // Track and Master are about one channel: leave the full mixer
+
+    // The master has no pedalboard: Master shows its Sound page instead.
+    if (masterMode && tab == Tab::pedals)
+        tab = Tab::sound;
 
     if (isShowingEffect())
         closeEffect();   // it was the other channel's effect
@@ -551,6 +600,20 @@ void BottomPanel::setMixerShown (bool shouldShow)
     refresh();
 }
 
+void BottomPanel::updatePedalboardAvailable()
+{
+    const auto id = track.has_value() ? track->id : TrackId (0);
+    const bool sameTrack = id == pedalboardTrack;
+    pedalboardTrack = id;
+
+    // A guitar or bass track (or one with pedals) has a pedalboard. The
+    // board also stays while it's showing for the same track (see
+    // isPedalboardAvailable).
+    const bool stays = sameTrack && pedalboardAvailable && tab == Tab::pedals
+                         && track.has_value() && track->kind == TrackKind::audio;
+    pedalboardAvailable = id != 0 && (engine.getTracks().effects().hasPedalboard (id) || stays);
+}
+
 TrackId BottomPanel::getTarget() const
 {
     return showsMaster() ? masterTrackId : selection.getTrack();
@@ -565,6 +628,7 @@ void BottomPanel::showTabPage()
     soundPage->setVisible (tabPage && tab == Tab::sound && ! masterMode);
     masterPage->setVisible (tabPage && tab == Tab::sound && masterMode);
     eqView.setVisible (tabPage && tab == Tab::eq);
+    pedalboard.setVisible (tabPage && tab == Tab::pedals);
     // The Editor is about a track's regions: a MIDI region's notes, or an audio region's waveform.
     pianoRoll.setVisible (tabPage && tab == Tab::editor && ! editingAudio);
     audioEditor.setVisible (tabPage && tab == Tab::editor && editingAudio);
@@ -588,6 +652,11 @@ void BottomPanel::showTabPage()
 
     for (auto* c : std::initializer_list<juce::Component*> { &inspectorButton, &soundTab, &eqTab, &editorTab, &mixerButton })
         c->setVisible (open);
+
+    pedalsShown = isPedalboardAvailable();
+    pedalsTab.setVisible (open && pedalsShown);
+    tunerButton.setVisible (tabPage && tab == Tab::pedals);
+    addPedalButton.setVisible (tabPage && tab == Tab::pedals);
 
     trackModeButton.setVisible (column);
     masterModeButton.setVisible (column && tab != Tab::editor);
@@ -689,6 +758,7 @@ void BottomPanel::updateTabButtons()
     soundTab.setToggleState (tabShowing && tab == Tab::sound, juce::dontSendNotification);
     eqTab.setToggleState (tabShowing && tab == Tab::eq, juce::dontSendNotification);
     editorTab.setToggleState (tabShowing && tab == Tab::editor, juce::dontSendNotification);
+    pedalsTab.setToggleState (tabShowing && tab == Tab::pedals, juce::dontSendNotification);
     trackModeButton.setToggleState (tab == Tab::editor ? ! regionMode : ! masterMode, juce::dontSendNotification);
     // Master and Region share a radio group with Track, so only the one that's
     // showing for this tab may be switched on (turning one on turns Track off).
@@ -721,15 +791,47 @@ void BottomPanel::refreshTrack()
     if (isShowingEffect() && effectEditor->getTrackId() != getTarget())
         closeEffect();
 
+    // The Pedals segment comes and goes with guitar and bass tracks; off
+    // one, the Pedals tab gives way to Sound.
+    updatePedalboardAvailable();
+
+    if (tab == Tab::pedals && ! isPedalboardAvailable())
+    {
+        tab = Tab::sound;
+        showTabPage();
+
+        if (onViewStateChanged)
+            onViewStateChanged();
+    }
+    else if (pedalsShown != isPedalboardAvailable())
+    {
+        showTabPage();
+    }
+
     inspector.refresh();
     soundPage->refresh (track);
+    pedalboard.refresh();
+    addPedalButton.setEnabled (pedalboard.canAddPedal());
+    addPedalButton.setTooltip (pedalboard.canAddPedal() ? juce::String ("Add a pedal at the end of the board")
+                                                        : "This track has " + juce::String (EffectsController::maxEffectsPerTrack)
+                                                            + " effects, the most a track can have");
     masterPage->refresh();
     eqView.setTarget (getTarget(), ! showsMaster() && track.has_value() ? colour::familyOf (*track) : Family::master);
 
     if (mixer.isVisible())
         mixer.refresh();
 
-    repaint (titleArea);
+    // The title (see paint), redrawn only when it changes: this runs on
+    // every knob change (many a second while automation plays).
+    const auto title = showsMaster() ? juce::String ("master")
+                     : track.has_value() ? track->name + "|" + track->soundName + "|" + colour::forTrack (*track).toString()
+                                         : juce::String();
+
+    if (title != shownTitle)
+    {
+        shownTitle = title;
+        repaint (titleArea);
+    }
 }
 
 void BottomPanel::refreshEditor()
@@ -788,6 +890,9 @@ void BottomPanel::update()
     inspector.update();
     soundPage->update();
 
+    if (tunerButton.isVisible())
+        tunerButton.setToggleState (engine.getTuner().isActive(), juce::dontSendNotification);
+
     if (mixerShown)
         mixer.updateMeters();
     else if (masterPage->isVisible())
@@ -829,8 +934,9 @@ void BottomPanel::paint (juce::Graphics& g)
 
     drawSegmentBackground (tabsArea, segmentOutlineRadius);
 
-    for (auto* b : { &soundTab, &editorTab, &eqTab, &mixerButton })
-        IconButton::drawSegmentShadow (g, *b);
+    for (auto* b : { &soundTab, &editorTab, &eqTab, &pedalsTab, &mixerButton })
+        if (b->isVisible())
+            IconButton::drawSegmentShadow (g, *b);
 
     g.setColour (theme().border);
     g.fillRect (headerDivider);
@@ -920,10 +1026,10 @@ void BottomPanel::resized()
 
     r.removeFromTop (handleHeight);
 
-    // The header row: Sound | Editor | EQ | Mixer on the left, a divider and
-    // the selected track's name, then Inspector and hide on the right.
-    // The divider sits on the inspector column's edge (and so the track
-    // headers' edge above), and the switch's four segments share the room
+    // The header row: Sound | Editor | EQ | (Pedals |) Mixer on the left, a
+    // divider and the selected track's name, then Inspector and hide on the
+    // right. The divider sits on the inspector column's edge (and so the
+    // track headers' edge above), and the switch's segments share the room
     // to its left.
     auto header = r.removeFromTop (headerHeight).reduced (padding, 0);
     const int dividerX = TrackInspector::preferredWidth - 1;   // where the inspector column draws its edge
@@ -932,10 +1038,13 @@ void BottomPanel::resized()
     auto tabs = beforeDivider.withTrimmedRight (dividerGap);
     tabsArea = tabs.withSizeKeepingCentre (tabs.getWidth(), tabHeight);
     auto t = tabsArea.reduced (segmentInset);
-    const int tabWidth = t.getWidth() / 4;
+    const int tabWidth = t.getWidth() / (pedalsShown ? 5 : 4);
 
     for (auto* b : { &soundTab, &editorTab, &eqTab })
         b->setBounds (t.removeFromLeft (tabWidth));
+
+    if (pedalsShown)
+        pedalsTab.setBounds (t.removeFromLeft (tabWidth));
 
     mixerButton.setBounds (t);   // the last segment takes any spare pixel
 
@@ -946,6 +1055,16 @@ void BottomPanel::resized()
     header.removeFromRight (8);
     inspectorButton.setBounds (header.removeFromRight (96).withSizeKeepingCentre (96, 30));
     header.removeFromRight (14);
+
+    // On the Pedals tab: Tuner and Add Pedal, left of Inspector.
+    if (addPedalButton.isVisible())
+    {
+        addPedalButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 30));
+        header.removeFromRight (8);
+        tunerButton.setBounds (header.removeFromRight (88).withSizeKeepingCentre (88, 30));
+        header.removeFromRight (14);
+    }
+
     titleArea = header;
 
     r.removeFromTop (1);   // the line under the header
@@ -973,7 +1092,7 @@ void BottomPanel::resized()
 
     contentArea = r;
 
-    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pianoRoll, &audioEditor, &mixer })
+    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pedalboard, &pianoRoll, &audioEditor, &mixer })
         page->setBounds (r);
 
     layoutEffectEditor();

@@ -31,6 +31,7 @@ namespace settings
     inline constexpr BoolSetting monitoringWarningShown { "monitoringWarningShown", false };
     namespace DeviceChange { enum { ask, alwaysSwitch, neverAsk }; }
     inline constexpr IntSetting  deviceChange        { "deviceChange", DeviceChange::ask };   // plugging in or unplugging an audio device
+    inline constexpr BoolSetting muteWhileTuning     { "muteWhileTuning", true };    // the tuner silences the input it's listening to
 
     // Recording
     inline constexpr IntSetting  countIn             { "countIn", 0 };                // bars: 0 (off), 1 or 2

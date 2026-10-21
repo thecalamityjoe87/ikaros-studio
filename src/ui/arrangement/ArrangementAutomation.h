@@ -43,6 +43,7 @@ private:
     const TrackId trackId;
     juce::String targetId;
     bool editable = true, dimmed = false;
+    float opacity = 1.0f;                  // less when the track is muted
 
     std::vector<AutomationPoint> points;   // sorted by beat
     std::vector<bool> selected;            // one per point

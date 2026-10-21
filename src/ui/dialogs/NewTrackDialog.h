@@ -8,8 +8,9 @@ namespace ikaros
 
 //==============================================================================
 /**
-    The "New Track" chooser, like GarageBand's: pick a Software Instrument or
-    a Real Instrument (microphone / guitar), then Create.
+    The "New Track" chooser, like GarageBand's: pick a Software Instrument,
+    Audio (a microphone or anything else plugged in) or Guitar or Bass (an
+    audio track with a pedalboard), then Create.
 
     Shown inside the main window over a dimmed background (see show()), so it
     looks the same on every OS. Deletes itself when closed.
@@ -34,21 +35,26 @@ private:
     AudioEngine& engine;
     std::function<void (TrackId)> onCreated;
 
-    std::unique_ptr<Card> instrumentCard, audioCard;
+    // The track types, in the cards' order (left to right).
+    enum class Kind { instrument, audio, guitar };
+
+    std::unique_ptr<Card> instrumentCard, audioCard, guitarCard;
     juce::ComboBox inputBox;
     juce::ToggleButton monitorToggle { "Hear the input while recording" };
     IconButton cancelButton { "Cancel", std::nullopt, "Cancel" };
     IconButton createButton { "Create", std::nullopt, "Create" };
 
-    bool audioChosen = false;
+    Kind chosen = Kind::instrument;
     std::vector<AudioInput> inputs;
     juce::Rectangle<int> panel, audioOptionsArea;
 
-    void choose (bool audio);
+    void choose (Kind);
+    Card& cardFor (Kind) const;
+    bool recordsInput() const noexcept     { return chosen != Kind::instrument; }   // audio and guitar tracks
     void create();
     void close();
 
-    static constexpr int panelWidth = 600, panelHeight = 400;
+    static constexpr int panelWidth = 800, panelHeight = 400;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewTrackDialog)
 };

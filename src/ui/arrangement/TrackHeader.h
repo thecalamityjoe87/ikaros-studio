@@ -86,6 +86,8 @@ private:
     bool renaming = false;
 
     juce::Rectangle<int> iconArea, nameArea, soundArea, pickerArea;
+    juce::String measuredFor;                       // the sound name and font the widths below are for (see paint)
+    float soundNameWidth = 0.0f, separatorWidth = 0.0f;
 
     void showIconMenu();
     void showAutomationMenu();

@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 7)
+set(IKAROS_MILESTONE 8)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -156,6 +156,12 @@ add_subdirectory(external/miniz "${CMAKE_BINARY_DIR}/miniz" EXCLUDE_FROM_ALL)
 # has no official git repository; see external/lame/README.ikaros.
 add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_ALL)
 
+# The DSP of the GxPlugins pedals (GPL 3) and two Guitarix effects (GPL 2+)
+# behind most of the pedalboard's pedals, kept in the repo (one GitHub
+# repository per pedal, and only their DSP is used); see
+# external/gxplugins/README.ikaros.
+add_subdirectory(external/gxplugins/ikaros "${CMAKE_BINARY_DIR}/gxplugins" EXCLUDE_FROM_ALL)
+
 # Rubber Band stretches audio regions in time and pitch (loops following the
 # song's tempo and key, Flex Time). Tracktion builds it into its own
 # time-stretch code from Rubber Band's single-file version
@@ -220,6 +226,7 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-Regular.ttf
         resources/fonts/Figtree-SemiBold.ttf
         resources/fonts/Figtree-Bold.ttf
+        resources/fonts/Figtree-ExtraBold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
         resources/fonts/JetBrainsMono-Bold.ttf
         resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
@@ -262,6 +269,9 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
+    src/engine/PortedPedals.h           src/engine/PortedPedals.cpp
+    src/engine/KlonCentaurDsp.h         src/engine/KlonCentaurDsp.cpp
+    src/engine/PedalStyles.h        src/engine/PedalStyles.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
@@ -276,8 +286,18 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/RecordingTypes.h
     src/engine/Preferences.h        src/engine/Preferences.cpp
     src/engine/RecordingGuard.h     src/engine/RecordingGuard.cpp
+    src/engine/PitchDetector.h      src/engine/PitchDetector.cpp
+    src/engine/Tuner.h              src/engine/Tuner.cpp
+    src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
+
+# The Golden Boost's circuit model (KlonCentaur, BSD 3-clause, with parts of
+# chowdsp_utils, GPL 3) is compiled in KlonCentaurDsp.cpp. Its files include
+# <pch.h>, our stand-in for ChowCentaur's own; see external/kloncentaur/README.ikaros.
+set_source_files_properties(src/engine/KlonCentaurDsp.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/external/kloncentaur/ikaros"
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")   # third-party code's warnings
 
 # The only OS-specific code.
 set(IKAROS_PLATFORM_SOURCES
@@ -305,6 +325,7 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
     src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
+    src/ui/widgets/CachedShadow.h           src/ui/widgets/CachedShadow.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
     src/ui/widgets/CollapsibleSection.h     src/ui/widgets/CollapsibleSection.cpp
     src/ui/widgets/FolderField.h            src/ui/widgets/FolderField.cpp
@@ -314,6 +335,7 @@ set(IKAROS_UI_SOURCES
 
     # dialogs shown over the window
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
+    src/ui/dialogs/AddPedalDialog.h         src/ui/dialogs/AddPedalDialog.cpp
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
     src/ui/dialogs/StartupSplash.h          src/ui/dialogs/StartupSplash.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
@@ -368,6 +390,8 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/PianoRollGestures.cpp
     src/ui/bottompanel/PianoRollPainting.cpp
     src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
+    src/ui/bottompanel/PedalView.h          src/ui/bottompanel/PedalView.cpp
+    src/ui/bottompanel/PedalboardView.h     src/ui/bottompanel/PedalboardView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
@@ -412,6 +436,7 @@ target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        ikaros_gxplugins
         ikaros_timestretch
         miniz
         mp3lame
@@ -536,6 +561,7 @@ if(IKAROS_BUILD_TESTS)
         ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        ikaros_gxplugins
         ikaros_timestretch
         miniz
         mp3lame
@@ -562,7 +588,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner,pedals)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -598,6 +624,10 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Flex PROPERTIES LABELS "flex")
     add_test(NAME EngineSmokeTest.Quantize COMMAND IkarosEngineSmokeTest --only=quantize)
     set_tests_properties(EngineSmokeTest.Quantize PROPERTIES LABELS "quantize")
+    add_test(NAME EngineSmokeTest.Tuner COMMAND IkarosEngineSmokeTest --only=tuner)
+    set_tests_properties(EngineSmokeTest.Tuner PROPERTIES LABELS "tuner")
+    add_test(NAME EngineSmokeTest.Pedals COMMAND IkarosEngineSmokeTest --only=pedals)
+    set_tests_properties(EngineSmokeTest.Pedals PROPERTIES LABELS "pedals")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

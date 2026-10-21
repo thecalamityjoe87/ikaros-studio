@@ -137,10 +137,14 @@ void IkarosLookAndFeel::styleInlineEditor (juce::TextEditor& editor)
 void IkarosLookAndFeel::setFamilyColour (juce::Slider& s, Family f, FamilyShade shade)
 {
     // getProperties() is a free-form NamedValueSet every component carries.
-    // A juce::var holds an int, not our enums, hence the casts.
-    s.getProperties().set ("family", static_cast<int> (f));
-    s.getProperties().set ("familyShade", static_cast<int> (shade));
-    s.repaint();
+    // A juce::var holds an int, not our enums, hence the casts. set() says
+    // whether the value changed: views call this on every refresh (many a
+    // second while automation plays), so only repaint when it did.
+    const bool familyChanged = s.getProperties().set ("family", static_cast<int> (f));
+    const bool shadeChanged = s.getProperties().set ("familyShade", static_cast<int> (shade));
+
+    if (familyChanged || shadeChanged)
+        s.repaint();
 }
 
 juce::Colour IkarosLookAndFeel::valueColourFor (juce::Slider& s, int colourId)
@@ -236,9 +240,66 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
         drawFocusRing (g, bounds.expanded (2.0f), size::radiusXs);
 }
 
+// A pedal's knob (see PedalView): a dark knob with a white pointer and the
+// value arc in the pedal's lettering colour (the slider's knobArcColourId).
+// Pedals look the same in both themes, so this uses fixed colours, not the
+// theme's.
+static void drawPedalKnob (juce::Graphics& g, juce::Rectangle<float> area, float pos,
+                           float startAngle, float endAngle, juce::Slider& s)
+{
+    const auto size = juce::jmin (area.getWidth(), area.getHeight());
+    const auto centre = area.getCentre();
+    const auto arcWidth = juce::jmax (2.0f, size * 0.09f);
+    const auto radius = (size - arcWidth) * 0.5f - 0.5f;
+    const auto valueAngle = startAngle + pos * (endAngle - startAngle);
+    const auto arcColour = s.findColour (IkarosLookAndFeel::knobArcColourId);
+    const juce::PathStrokeType stroke (arcWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+    juce::Path ring;
+    ring.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
+    g.setColour (arcColour.withAlpha (0.22f));
+    g.strokePath (ring, stroke);
+
+    if (valueAngle - startAngle > 0.02f)
+    {
+        juce::Path value;
+        value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, valueAngle, true);
+        g.setColour (arcColour);
+        g.strokePath (value, stroke);
+    }
+
+    // The knob: a small shadow under it, then a dark body lit from the top left.
+    const auto bodyRadius = radius - arcWidth * 0.5f - 2.0f;
+    const auto body = juce::Rectangle<float> (bodyRadius * 2.0f, bodyRadius * 2.0f).withCentre (centre);
+    juce::Path bodyPath;
+    bodyPath.addEllipse (body);
+    juce::DropShadow (juce::Colours::black.withAlpha (0.4f), 4, { 0, 2 }).drawForPath (g, bodyPath);
+
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff42454c), body.getX() + body.getWidth() * 0.3f, body.getY(),
+                                             juce::Colour (0xff121316), body.getCentreX(), body.getBottom(), true));
+    g.fillEllipse (body);
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.drawEllipse (body, 1.0f);
+
+    g.setColour (juce::Colours::white);
+    g.drawLine ({ centre.getPointOnCircumference (bodyRadius * 0.3f, valueAngle),
+                  centre.getPointOnCircumference (bodyRadius * 0.85f, valueAngle) }, juce::jmax (1.8f, size * 0.07f));
+
+    if (s.hasKeyboardFocus (false))
+        IkarosLookAndFeel::drawFocusRing (g, juce::Rectangle<float> (size, size).withCentre (centre).expanded (2.0f), size * 0.5f);
+}
+
 void IkarosLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
                                           float pos, float startAngle, float endAngle, juce::Slider& s)
 {
+    // A pedal's knob, on the pedalboard. Set with
+    // slider.getProperties().set ("pedal", true).
+    if ((bool) s.getProperties()["pedal"])
+    {
+        drawPedalKnob (g, juce::Rectangle<int> (x, y, w, h).toFloat(), pos, startAngle, endAngle, s);
+        return;
+    }
+
     // A small knob (e.g. a track header's pan knob) has its own proportions,
     // so its ring and needle stay visible at that size. Set with
     // slider.getProperties().set ("compact", true).

@@ -27,8 +27,8 @@ struct WaveformRange
     on every refresh.
 
     Two kinds:
-      - computePeaks: a small overview of a region (one value per column) for
-        the arrangement, read straight away.
+      - computePeaks: an overview of a region for the arrangement, read
+        straight away.
       - getOverview: a detailed overview of a whole file for the audio
         editor, which zooms right in. Reading a long recording takes a while,
         so that happens on a background thread: the first call starts it and
@@ -40,9 +40,14 @@ public:
     WaveformCache();
     ~WaveformCache();
 
-    /** The loudest sample (0..1) in each of `numColumns` slices of the part
-        of the file the clip plays. */
-    std::vector<float> computePeaks (tracktion::WaveAudioClip&, int numColumns);
+    /** The loudest sample (0..1) in each slice of the part of the file the
+        clip plays. A slice is 10 ms (as in the live waveform while
+        recording), so a take looks the same once it's finished; very short
+        and very long regions get between minPeaks and maxPeaks slices. */
+    std::vector<float> computePeaks (tracktion::WaveAudioClip&);
+
+    static constexpr double secondsPerPeak = 0.01;
+    static constexpr int minPeaks = 256, maxPeaks = 32768;
 
     //==============================================================================
     /** A whole file's waveform: the quietest and loudest sample (all channels

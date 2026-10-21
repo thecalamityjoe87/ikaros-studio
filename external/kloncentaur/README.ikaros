@@ -1,0 +1,22 @@
+The Golden Boost pedal's sound: Jatin Chowdhury's KlonCentaur circuit model
+(https://github.com/jatinchowdhury18/KlonCentaur, commit
+f3bb633a593b6fbb22a44c1ef9d1dbedbfe92d5b), BSD 3-clause (LICENSE).
+
+Kept, unchanged: ChowCentaur/CommonProcessors and the circuit model in
+ChowCentaur/GainStageProcessors (without GainStageProc.*, which needs the
+plugin's parameter tree; src/engine/KlonCentaurDsp.cpp does what it and
+ChowCentaurPlugin.cpp do, in the same order). Not used: the plugin itself,
+its GUI, the neural-network gain stage (RTNeural) and toms917.
+
+chowdsp_utils/ holds the four parts of chowdsp_utils
+(https://github.com/Chowdhury-DSP/chowdsp_utils, commit
+4830738ff7e2b7e0def7036fa3b0d8f75e2983f8, the one KlonCentaur uses) the
+model needs, unchanged: the WDF headers (DSP/WDF/wdf.h, wdf_t.h, omega.h,
+signum.h) and two filter headers (DSP/Filters/chowdsp_IIRFilter.h,
+chowdsp_BilinearUtils.h). chowdsp_utils was GPL 3 at that commit
+(chowdsp_utils/LICENSE).
+
+ikaros/pch.h is ours: it stands in for ChowCentaur's precompiled header,
+which every file of the model includes. The model's diode clipper also
+calls wrightomega() from toms917 (whose license isn't clear) to fill a
+lookup table; KlonCentaurDsp.cpp has its own for the real numbers needed.

@@ -2,6 +2,7 @@
 #include "engine/AudioDeviceWatcher.h"
 #include "engine/AudioPreview.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/PortedPedals.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
@@ -18,6 +19,8 @@
 #include "engine/FlexHelpers.h"
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
+#include "engine/Tuner.h"
+#include "engine/LiveWaveform.h"
 #include "platform/AppFolders.h"
 #include "platform/FileLock.h"
 
@@ -260,6 +263,21 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<DistortionPlugin>();
         engine.getPluginManager().createBuiltInType<TremoloPlugin>();
 
+        // The pedals ported from other projects (see PedalStyles.cpp).
+        engine.getPluginManager().createBuiltInType<GoldenBoostPlugin>();
+        engine.getPluginManager().createBuiltInType<YellowDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<MellowDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<TubeDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<HotPlatePlugin>();
+        engine.getPluginManager().createBuiltInType<StackDrivePlugin>();
+        engine.getPluginManager().createBuiltInType<SunFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<VintageFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<SuperFuzzPlugin>();
+        engine.getPluginManager().createBuiltInType<EnvelopeWahPlugin>();
+        engine.getPluginManager().createBuiltInType<SlowSwellPlugin>();
+        engine.getPluginManager().createBuiltInType<JetFlangerPlugin>();
+        engine.getPluginManager().createBuiltInType<SpringTankPlugin>();
+
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
         {
@@ -276,6 +294,7 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     ~Impl() override
     {
         stopTimer();
+        heldChanges.stopTimer();
         engine.getDeviceManager().removeChangeListener (this);
         cancelPendingUpdate();
         detachMasterMeter();
@@ -413,12 +432,21 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
         // Designated initialisers (C++20): name the Options fields we set; the
         // rest keep their defaults.
-        return te::Edit::createEdit ({ .engine = engine,
-                                       .editState = state,
-                                       .editProjectItemID = id,
-                                       .editFileRetriever = [this] { return sessionFile; },
-                                       .filePathResolver = [this] (const juce::String& path) { return resolvePath (path); },
-                                       .numAudioTracks = 0 });   // no default track: we add our own
+        auto edit = te::Edit::createEdit ({ .engine = engine,
+                                            .editState = state,
+                                            .editProjectItemID = id,
+                                            .editFileRetriever = [this] { return sessionFile; },
+                                            .filePathResolver = [this] (const juce::String& path) { return resolvePath (path); },
+                                            .numAudioTracks = 0 });   // no default track: we add our own
+
+        // Tracktion numbers new tracks, regions and plug-ins from one past the
+        // highest number in the session, worked out the first time it needs
+        // one. Have it work that out now, while the whole session is here:
+        // otherwise, after deleting a track, a new effect could get the
+        // number of one of its plug-ins (they live on in the undo history),
+        // and undoing the delete would bring back two plug-ins with one ID.
+        edit->createNewItemID();
+        return edit;
     }
 
     // Audio regions refer to their files by path, relative to the session
@@ -736,16 +764,56 @@ public:
 private:
     juce::ValueTree observedState;
 
+    // While the song plays, automation moves its settings, and Tracktion
+    // writes every new value back into the session tree: a "knob turned" for
+    // each automated setting on every audio block, hundreds a second. Each
+    // one makes the UI re-read its tracks and the bottom panel, which kept
+    // the message thread too busy to draw smoothly or take clicks. So while
+    // playing, changes that only touch knobs reach the listeners at most
+    // ~30 times a second (as often as the UI's own timer runs); anything
+    // else still goes out straight away, with them.
+    static constexpr juce::uint32 mixerOnlyIntervalMs = 33;
+    juce::uint32 lastDelivery = 0;
+
+    static bool isMixerOnly (const ModelChanges& c)
+    {
+        return c.mixer && ! (c.tracks || c.regions || c.notes || c.transport || c.automation || c.session)
+                && c.changedRegions.empty();
+    }
+
+    // Sends the held-back knob changes once the interval is up.
+    struct HeldChanges  : public juce::Timer
+    {
+        explicit HeldChanges (Impl& i) : impl (i) {}
+        void timerCallback() override   { stopTimer(); impl.triggerAsyncUpdate(); }
+        Impl& impl;
+    };
+
+    HeldChanges heldChanges { *this };
+
     void handleAsyncUpdate() override
     {
         ModelChanges changes;
+        const auto now = juce::Time::getMillisecondCounter();
 
         {
             const juce::ScopedLock sl (pendingLock);
+
+            if (isMixerOnly (pending) && edit != nullptr && edit->getTransport().isPlaying()
+                 && now - lastDelivery < mixerOnlyIntervalMs)
+            {
+                if (! heldChanges.isTimerRunning())
+                    heldChanges.startTimer ((int) (mixerOnlyIntervalMs - (now - lastDelivery)));
+
+                return;
+            }
+
             std::swap (changes, pending);
         }
 
-        lastModelChange = juce::Time::getMillisecondCounter();
+        heldChanges.stopTimer();
+        lastDelivery = now;
+        lastModelChange = now;
 
         // Spelled out in full: inside Impl, plain "Listener" would mean the
         // juce::ValueTree::Listener we inherit from.
@@ -792,6 +860,8 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                                  &storage.getPropertiesFile());
 
     recordingGuard = std::make_unique<RecordingGuard> (*this);
+    tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
+    liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
     deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
     sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
     packStore = std::make_unique<PackStore> (*sounds);
@@ -803,6 +873,10 @@ AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice
                                               impl->engine.getAudioFileFormatManager().readFormatManager);
     trackController = std::make_unique<TrackController> (*this);
     exporter = std::make_unique<SongExporter> (*this);
+
+    // Turning the tuner on or off mutes or unmutes the input it listens to.
+    tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+
     preferences->addListener (this);
     newSession();
 }
@@ -820,6 +894,8 @@ AudioEngine::~AudioEngine()
         impl->edit->getTransport().stop (false, true);
 
     recordingGuard.reset();
+    tuner.reset();
+    liveWaveform.reset();
 
     impl->detachMasterMeter();
     preview.reset();
@@ -1982,6 +2058,9 @@ void AudioEngine::preferenceChanged (const juce::String& key)
 
     if (all || key == settings::pluginFolders.key || key == settings::disabledPluginFormats.key)
         plugins->preferencesChanged();
+
+    if ((all || key == settings::muteWhileTuning.key) && tuner->isActive())
+        trackController->inputs().routeAudioInputs();
 }
 
 //==============================================================================
@@ -2430,10 +2509,42 @@ SystemStats AudioEngine::getSystemStats() const
     return s;
 }
 
+void AudioEngine::updateLiveRecording()
+{
+    auto* edit = impl->edit.get();
+    auto* track = edit != nullptr ? detail::findTrack (edit, impl->takeTrack) : nullptr;
+
+    if (track == nullptr || ! detail::isAudioTrack (*track) || ! edit->getTransport().isRecording())
+    {
+        if (liveWaveform->isRunning())
+            liveWaveform->stop();
+
+        return;
+    }
+
+    auto& tempo = edit->tempoSequence;
+
+    // A new take: its waveform starts where the take does (after any count-in).
+    if (! liveWaveform->isRunning() || liveWaveform->get().track != impl->takeTrack)
+        liveWaveform->start (impl->takeTrack, tempo.toTime (te::BeatPosition::fromBeats (impl->recordStartBeats)).inSeconds());
+
+    liveWaveform->collect (edit->getTransport().getPosition().inSeconds(), [&tempo] (double seconds)
+    {
+        return tempo.toBeats (te::TimePosition::fromSeconds (seconds)).inBeats();
+    });
+}
+
+const LiveRecording& AudioEngine::getLiveRecording() const
+{
+    return liveWaveform->get();
+}
+
 void AudioEngine::reattachAudioCallbacks()
 {
     preview->reattach();
     recordingGuard->reattach();
+    tuner->reattach();
+    liveWaveform->reattach();
 
     if (impl->realtimeThread != nullptr)
         impl->realtimeThread->reattach();

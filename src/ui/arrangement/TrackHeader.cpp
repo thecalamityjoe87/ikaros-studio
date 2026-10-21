@@ -199,9 +199,13 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     // buttons and knobs redraw themselves when their own values change.
     // (std::tie bundles references to the members, so the two sets compare
     // in one go.)
-    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.volumeDb, i.icon, i.soundIcon, i.category, i.kind,
+    auto drawn = [] (const TrackInfo& i) { return std::tie (i.name, i.soundName, i.icon, i.soundIcon, i.category, i.kind,
                                                             i.muted, i.silencedBySolo, i.automationShown, i.automationTarget); };
     bool needsRepaint = isSelected != selected || drawn (t) != drawn (info);
+
+    // The volume (in "Sound name · -3.0 dB") moves on every tick while
+    // automation plays: then only that line is redrawn, not the header.
+    const bool volumeTextChanged = decibelText (t.volumeDb) != decibelText (info.volumeDb);
 
     if (t.automationShown)
     {
@@ -253,6 +257,8 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
 
     if (needsRepaint)
         repaint();
+    else if (volumeTextChanged)
+        repaint (soundArea);
 }
 
 void TrackHeader::updateMeter()
@@ -456,29 +462,51 @@ void TrackHeader::paint (juce::Graphics& g)
     // Icon tile: tinted with the track colour, the icon in its ink shade
     // (deeper in light mode, so it reads on the pale tile). The icon the
     // user picked, or else the one the sound suggests, or else the category's.
-    g.setColour (trackColour.withAlpha (theme().trackTileAlpha));
-    g.fillRoundedRectangle (iconArea.toFloat(), size::radiusMedium);
-    icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
-                 iconArea.toFloat(), theme().ink (colour::familyOf (info)), 18.0f);
+    //
+    // Each part below is only drawn if it's in the area being repainted:
+    // the header is also repainted under its meter on every tick, and
+    // laying out text is the slow part of drawing it.
+    if (g.clipRegionIntersects (iconArea))
+    {
+        g.setColour (trackColour.withAlpha (theme().trackTileAlpha));
+        g.fillRoundedRectangle (iconArea.toFloat(), size::radiusMedium);
+        icons::draw (g, icons::forTrack (info.icon.isNotEmpty() ? info.icon : info.soundIcon, info.category),
+                     iconArea.toFloat(), theme().ink (colour::familyOf (info)), 18.0f);
+    }
 
     // The name, cut short with "..." if it doesn't fit.
-    g.setColour (info.silencedBySolo || info.muted ? theme().textSecondary : theme().text);
-    g.setFont (selected ? fonts::uiBold (textSize::md) : fonts::uiSemiBold (textSize::md));
-    g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+    if (g.clipRegionIntersects (nameArea))
+    {
+        g.setColour (info.silencedBySolo || info.muted ? theme().textSecondary : theme().text);
+        g.setFont (selected ? fonts::uiBold (textSize::md) : fonts::uiSemiBold (textSize::md));
+        g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+    }
 
     // "Sound name · −3.0 dB": the sound gives way (with "...") if there
     // isn't room, the volume always shows.
+    if (g.clipRegionIntersects (soundArea))
     {
         const auto nameFont = fonts::ui (textSize::xs);
         const auto dbFont = fonts::mono (textSize::xs);
         const auto db = decibelText (info.volumeDb);
         const juce::String separator (juce::String::fromUTF8 (" \xc2\xb7 "));   // " · "
 
+        // Measuring text is slow, and this line is redrawn on every tick
+        // while automation moves the volume: the sound name's and the
+        // separator's widths are kept until the sound (or the theme's
+        // fonts) change.
+        const auto widthsKey = info.soundName + "|" + nameFont.toString();
+
+        if (widthsKey != measuredFor)
+        {
+            measuredFor = widthsKey;
+            soundNameWidth = juce::GlyphArrangement::getStringWidth (nameFont, info.soundName);
+            separatorWidth = juce::GlyphArrangement::getStringWidth (nameFont, separator);
+        }
+
         auto row = soundArea.toFloat();
         const float dbWidth = juce::GlyphArrangement::getStringWidth (dbFont, db);
-        const float separatorWidth = juce::GlyphArrangement::getStringWidth (nameFont, separator);
-        const float soundWidth = juce::jmin (juce::GlyphArrangement::getStringWidth (nameFont, info.soundName) + 1.0f,
-                                             row.getWidth() - dbWidth - separatorWidth);
+        const float soundWidth = juce::jmin (soundNameWidth + 1.0f, row.getWidth() - dbWidth - separatorWidth);
 
         g.setColour (theme().textSecondary);
         g.setFont (nameFont);
@@ -488,7 +516,7 @@ void TrackHeader::paint (juce::Graphics& g)
         g.drawText (db, row, juce::Justification::centredLeft, false);
     }
 
-    if (info.automationShown)
+    if (info.automationShown && g.clipRegionIntersects (pickerArea))
     {
         // The automation picker: the setting's name (amber if it has
         // automation, like its control) and a chevron.

@@ -1,0 +1,15 @@
+diff --git a/modules/tracktion_engine/plugins/effects/tracktion_Delay.cpp b/modules/tracktion_engine/plugins/effects/tracktion_Delay.cpp
+index 639449c7a97..906a95d6d1b 100644
+--- a/modules/tracktion_engine/plugins/effects/tracktion_Delay.cpp
++++ b/modules/tracktion_engine/plugins/effects/tracktion_Delay.cpp
+@@ -42,7 +42,9 @@ const char* DelayPlugin::xmlTypeName = "delay";
+ 
+ void DelayPlugin::initialise (const PluginInitialisationInfo& info)
+ {
+-    const int lengthInSamples = (int) (lengthMs * info.sampleRate / 1000.0);
++    // Room for the longest delay a knob can set (2 s), so turning the time
++    // up while playing never allocates on the audio thread.
++    const int lengthInSamples = (int) (std::max (2000, lengthMs.get()) * info.sampleRate / 1000.0);
+     delayBuffer.ensureMaxBufferSize (lengthInSamples);
+     delayBuffer.clearBuffer();
+ }

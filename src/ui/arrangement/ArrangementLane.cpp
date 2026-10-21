@@ -1,6 +1,7 @@
 #include "ui/arrangement/ArrangementLane.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/arrangement/ArrangementRegionDrag.h"
+#include "engine/LiveWaveform.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 
@@ -42,16 +43,17 @@ void ArrangementView::Lane::focusGained (FocusChangeType cause)
 
 void ArrangementView::Lane::setTrackInfo (const TrackInfo& t, bool isSelected)
 {
-    // The lane's own drawing (the selected tint) only changes with the
-    // selection. (setAlpha repaints by itself, and only when it changes.)
-    if (isSelected != selected)
+    // Quieter when muted; fainter still under automation, so the curve stands out.
+    const float newFade = (t.silencedBySolo || t.muted ? 0.4f : 1.0f) * (t.automationShown ? 0.45f : 1.0f);
+
+    // The lane's own drawing only changes with the selection and the fade.
+    if (isSelected != selected || newFade != fade)
         repaint();
 
     family = colour::familyOf (t);
     selected = isSelected;
+    fade = newFade;
     isAudio = t.kind == TrackKind::audio;
-    // Quieter when muted; fainter still under automation, so the curve stands out.
-    setAlpha ((t.silencedBySolo || t.muted ? 0.4f : 1.0f) * (t.automationShown ? 0.45f : 1.0f));
     setTooltip (isAudio ? "Drop an audio file here, or press R to record"
                         : "Double-click to add a 4-bar chord region");
 }
@@ -153,21 +155,82 @@ void ArrangementView::Lane::setRecordingRange (double startBeat, double endBeat)
 
 void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
 {
-    if (recordEnd <= recordStart)
+    if (recordEnd > recordStart)
+    {
+        // A red region that grows with the playhead while recording.
+        auto& geo = owner.geometry;
+        auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
+        auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
+
+        g.setColour (theme().arrangement.record.withAlpha (0.25f));
+        g.fillRoundedRectangle (r, size::radius);
+        g.setColour (theme().arrangement.record);
+        g.drawRoundedRectangle (r, size::radius, 1.5f);
+
+        g.setFont (fonts::uiBold (textSize::xs));
+        g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
+
+        paintLiveWaveform (g, r.withTrimmedTop (18.0f).reduced (0.0f, 4.0f));
+    }
+
+    // Faded: a veil of the background the lane sits on. That looks just
+    // like setAlpha would (the lanes sit on a plain laneBg), but setAlpha
+    // draws the lane and its regions into a separate image and blends it
+    // back on every repaint, which was most of the drawing time with
+    // automation shown.
+    if (fade < 1.0f)
+        g.fillAll (theme().arrangement.laneBg.withAlpha (1.0f - fade));
+}
+
+void ArrangementView::Lane::paintLiveWaveform (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    // An audio take's waveform so far, as the input sends it (see
+    // LiveWaveform). It's replaced by the take's real waveform when
+    // recording stops.
+    const auto& live = owner.engine.getLiveRecording();
+
+    if (live.track != trackId || live.isEmpty() || area.getHeight() <= 2.0f)
         return;
 
-    // A red region that grows with the playhead while recording.
     auto& geo = owner.geometry;
-    auto x1 = geo.beatToX (recordStart), x2 = geo.beatToX (recordEnd);
-    auto r = juce::Rectangle<float> (x1, (float) regionTop, juce::jmax (4.0f, x2 - x1), (float) (getHeight() - regionGap));
+    const int left = juce::jmax (0, (int) std::floor (area.getX()));
+    const int right = juce::jmin (getWidth(), (int) std::ceil (area.getRight()));
 
-    g.setColour (theme().arrangement.record.withAlpha (0.25f));
-    g.fillRoundedRectangle (r, size::radius);
-    g.setColour (theme().arrangement.record);
-    g.drawRoundedRectangle (r, size::radius, 1.5f);
+    if (right <= left)
+        return;
 
-    g.setFont (fonts::uiBold (textSize::xs));
-    g.drawText ("Recording", r.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredLeft, true);
+    // The loudest slice under each pixel column. Slices left of the screen
+    // are skipped with a binary search (their beats rise).
+    std::vector<float> columns ((size_t) (right - left), 0.0f);
+    auto first = std::lower_bound (live.beats.begin(), live.beats.end(), geo.xToBeat ((float) left));
+    auto i = (size_t) std::distance (live.beats.begin(), first);
+    i = i > 0 ? i - 1 : 0;
+
+    for (; i < live.peaks.size(); ++i)
+    {
+        const int column = (int) std::floor (geo.beatToX (live.beats[i])) - left;
+
+        if (column >= (int) columns.size())
+            break;
+
+        if (column >= 0)
+            columns[(size_t) column] = juce::jmax (columns[(size_t) column], live.peaks[i]);
+    }
+
+    // Mirrored about the middle, like a finished region's waveform.
+    const auto mid = area.getCentreY(), halfHeight = area.getHeight() * 0.5f;
+    juce::Path wave;
+    wave.startNewSubPath ((float) left, mid);
+
+    for (int x = 0; x < (int) columns.size(); ++x)
+        wave.lineTo ((float) (left + x), mid - columns[(size_t) x] * halfHeight);
+
+    for (int x = (int) columns.size(); --x >= 0;)
+        wave.lineTo ((float) (left + x), mid + columns[(size_t) x] * halfHeight);
+
+    wave.closeSubPath();
+    g.setColour (theme().arrangement.record.withAlpha (0.85f));
+    g.fillPath (wave);
 }
 
 void ArrangementView::Lane::paint (juce::Graphics& g)

@@ -10,6 +10,20 @@ using namespace tokens;
 
 namespace
 {
+    // (EqSettings has no operator==, and adding one to EngineTypes.h would rebuild nearly everything.)
+    bool sameEq (const EqSettings& a, const EqSettings& b)
+    {
+        if (a.enabled != b.enabled)
+            return false;
+
+        for (size_t i = 0; i < a.bands.size(); ++i)
+            if (a.bands[i].name != b.bands[i].name || a.bands[i].frequencyHz != b.bands[i].frequencyHz
+                 || a.bands[i].gainDb != b.bands[i].gainDb || a.bands[i].q != b.bands[i].q)
+                return false;
+
+        return true;
+    }
+
     constexpr float displayRangeDb = 24.0f;   // the graph shows -24..+24 dB (bands go to ±20)
     constexpr float pointRadius = 7.0f;
     constexpr int readoutHeight = 40;
@@ -52,7 +66,17 @@ void EqView::setTarget (TrackId id, Family f)
 
 void EqView::refresh()
 {
-    settings = target != 0 ? engine.getTracks().eq().getEq (target) : EqController::getDefaults();
+    // Called on every knob change in the session (many a second while
+    // automation plays): only redraw when the EQ itself changed.
+    const auto newSettings = target != 0 ? engine.getTracks().eq().getEq (target) : EqController::getDefaults();
+
+    if (shownOnce && sameEq (newSettings, settings) && target == shownTarget && family == shownFamily)
+        return;
+
+    settings = newSettings;
+    shownTarget = target;
+    shownFamily = family;
+    shownOnce = true;
     powerButton.setToggleState (settings.enabled, juce::dontSendNotification);
     powerButton.setText (settings.enabled ? "On" : "Off");
     powerButton.setEnabled (target != 0);

@@ -35,6 +35,7 @@ public:
     /** The take being recorded on this lane, from startBeat to the playhead
         (nothing when endBeat <= startBeat). */
     void setRecordingRange (double startBeat, double endBeat);
+    void paintLiveWaveform (juce::Graphics&, juce::Rectangle<float> area);   // in the recording region
 
     void paintOverChildren (juce::Graphics&) override;
     void paint (juce::Graphics&) override;
@@ -47,6 +48,7 @@ private:
     const TrackId trackId;
     tokens::Family family = tokens::Family::loops;   // the track's, for its regions
     bool selected = false, isAudio = false, showFocusRing = false;
+    float fade = 1.0f;   // how much of the lane shows through: less when muted or under automation
     double recordStart = 0.0, recordEnd = 0.0;
     std::map<RegionId, std::unique_ptr<RegionComponent>> regions;
 

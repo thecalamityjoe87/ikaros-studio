@@ -94,6 +94,9 @@ struct ThemePalette
     // whose position it shows. The one exception to "the accent only means
     // on" below: it's the playhead's colour, not an "on" state.
     juce::Colour lcdValue;
+    // The tuner's note, needle and cents once the string is in tune (they're
+    // lcdValue's amber until then).
+    juce::Colour lcdInTune;
 
     // Text
     juce::Colour text, textSecondary;
@@ -119,6 +122,10 @@ struct ThemePalette
 
     // Smart Controls cards
     juce::Colour smartCardBg, smartCardBorder, smartCardShadow;
+
+    // The pedalboard: the "floor" the pedals stand on, and the cables
+    // between them. (The pedals keep their own colours in both themes.)
+    juce::Colour pedalboardFloor, pedalboardCable;
 
     // The on-screen keyboard
     juce::Colour keyboardTray, keyboardTrayBorder;

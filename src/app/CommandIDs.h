@@ -81,6 +81,9 @@ namespace CommandIDs
 
         showPlugins,        // Mix > Plug-ins...: the library's plug-in list
         zoomReset,          // View > Reset Zoom: back to the starting zoom
+        toggleTuner,        // View > Tuner: the transport readout becomes a tuner
+        closeTuner,         // Escape while tuning (in no menu)
+        showPedalboardTab,  // View > Pedalboard: an audio track's pedals
     };
 }
 

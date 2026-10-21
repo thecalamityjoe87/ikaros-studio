@@ -1,6 +1,8 @@
 #include "engine/InputRouter.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackHelpers.h"
+#include "engine/Tuner.h"
+#include "engine/LiveWaveform.h"
 #include <map>
 
 namespace te = tracktion;
@@ -228,6 +230,47 @@ void InputRouter::routeAudioInputs()
 
     const auto settings = track != nullptr ? getRecordingSettings (track->itemID.getRawID()) : RecordingSettings {};
 
+    // The tuner listens to the selected audio track's input, straight from
+    // the device's channels (see Tuner), and "Mute while tuning" turns that
+    // input's monitoring off while the tuner is on.
+    auto& tuner = owner.getTuner();
+    const auto tunedInputId = selected != nullptr && isAudioTrack (*selected)
+                                ? getRecordingSettings (selectedTrack).inputId : juce::String();
+    int tunerChannels[2] = { -1, -1 };
+
+    for (auto* in : dm.getWaveInputDevices())
+    {
+        if (tunedInputId.isNotEmpty() && in->getDeviceID() == tunedInputId && in->isEnabled())
+        {
+            int n = 0;
+
+            for (auto& ci : in->getChannels())
+                if (n < 2)
+                    tunerChannels[n++] = ci.indexInDevice;
+        }
+    }
+
+    tuner.setInputChannels (tunerChannels[0], tunerChannels[1]);
+
+    // The live waveform (see LiveWaveform) listens to the input the takes
+    // are recorded from: the armed (or else selected) audio track's.
+    int takeChannels[2] = { -1, -1 };
+
+    for (auto* in : dm.getWaveInputDevices())
+    {
+        if (settings.inputId.isNotEmpty() && in->getDeviceID() == settings.inputId && in->isEnabled())
+        {
+            int n = 0;
+
+            for (auto& ci : in->getChannels())
+                if (n < 2)
+                    takeChannels[n++] = ci.indexInDevice;
+        }
+    }
+
+    owner.getLiveWaveform().setInputChannels (takeChannels[0], takeChannels[1]);
+    const bool tunerMutes = tuner.isActive() && owner.getPreferences().get (ikaros::settings::muteWhileTuning);   // ikaros:: because the local `settings` hides the namespace
+
     for (auto* instance : edit->getAllInputDevices())
     {
         auto& device = instance->getInputDevice();
@@ -245,8 +288,9 @@ void InputRouter::routeAudioInputs()
         {
             (void) instance->setTarget (track->itemID, true, nullptr);
             instance->setRecordingEnabled (track->itemID, track->itemID.getRawID() == armedTrack);
-            device.setMonitorMode (settings.monitoring ? te::InputDevice::MonitorMode::on
-                                                       : te::InputDevice::MonitorMode::off);
+            const bool mutedForTuner = tunerMutes && device.getDeviceID() == tunedInputId;
+            device.setMonitorMode (settings.monitoring && ! mutedForTuner ? te::InputDevice::MonitorMode::on
+                                                                          : te::InputDevice::MonitorMode::off);
         }
     }
 }

@@ -12,6 +12,10 @@
 #include "engine/SessionRecovery.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
+#include "engine/Tuner.h"
+#include "engine/PedalStyles.h"
+#include "engine/PortedPedals.h"                     // the ported pedals' type names
+#include "engine/LiveWaveform.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -24,6 +28,7 @@
 #include <cstdlib>                                    // setenv
 #include <functional>                                  // std::function
 #include <map>
+#include <set>
 #include <tuple>
 #include <iostream>
 
@@ -467,6 +472,59 @@ static double residentMB()
 
 static void runRecordingSection (const juce::File& dir)
 {
+    // The waveform drawn while a take is recorded (see LiveWaveform), fed by
+    // hand as the audio thread would feed it: no device needed.
+    std::cout << "Live waveform\n";
+    {
+        juce::AudioDeviceManager noDevice;   // never opened
+        LiveWaveform live (noDevice);
+        live.prepare (48000.0);
+        live.setInputChannels (0, 1);        // a stereo input
+
+        // Plays `seconds` into it in 256-sample blocks: silent left, and the
+        // right side at `level` (the louder side counts).
+        auto play = [&live] (double seconds, float level)
+        {
+            std::vector<float> left (256, 0.0f), right (256, level);
+            const float* channels[] = { left.data(), right.data() };
+            const auto total = juce::roundToInt (seconds * 48000.0);
+
+            for (int done = 0; done < total; done += 256)
+                live.pushInput (channels, 2, juce::jmin (256, total - done));   // (the last block may be short)
+        };
+
+        auto toBeats = [] (double seconds) { return seconds * 2.0; };   // 120 BPM
+
+        // A take starting at 1 s, after half a second of count-in.
+        live.start (7, 1.0);
+        play (0.5, 0.0f);    // the count-in: before the take, left out
+        play (0.2, 0.0f);
+        play (0.3, 0.5f);
+        live.collect (1.5, toBeats);   // the take has run for half a second
+
+        const auto& got = live.get();
+        bool silenceThenSound = got.peaks.size() == 50;
+
+        for (size_t i = 0; silenceThenSound && i < got.peaks.size(); ++i)
+            silenceThenSound = std::abs (got.peaks[i] - (i >= 20 ? 0.5f : 0.0f)) < 0.001f;
+
+        check (got.track == 7 && silenceThenSound,
+               "it has one peak per 10 ms of the take (the count-in left out): 0.2 s quiet, then the louder side");
+        check (got.beats.size() == got.peaks.size() && std::abs (got.beats.front() - 2.0) < 1.0e-9
+                 && std::abs (got.beats.back() - 2.0 * 1.49) < 1.0e-9,
+               "each slice knows its beat on the timeline");
+
+        // A cycle recording jumps back: the next pass draws over the first.
+        play (0.1, 0.25f);
+        live.collect (1.1, toBeats);
+        check (got.peaks.size() == 50 && std::abs (got.peaks[0] - 0.25f) < 0.001f && std::abs (got.peaks[9] - 0.25f) < 0.001f
+                 && got.peaks[10] == 0.0f,
+               "a second pass replaces the first where it plays");
+
+        live.stop();
+        check (live.get().isEmpty() && ! live.isRunning(), "stopping forgets it");
+    }
+
     AudioEngine engine { testSettings, false };
 
     // 10 ms of input latency and 5 ms of output latency, as a USB interface
@@ -3388,6 +3446,998 @@ static void runQuantizeSection (const juce::File& dir)
     pumpMessages();
 }
 
+//==============================================================================
+// The tuner: the pitch detector on generated guitar notes, the steadying,
+// and the engine side (which input it listens to, Mute while tuning).
+static void runTunerSection()
+{
+    using juce::MathConstants;
+
+    // A note as a frequency, `cents` away from in tune.
+    auto noteHz = [] (int midiNote, double cents = 0.0) { return 440.0 * std::pow (2.0, (midiNote - 69 + cents / 100.0) / 12.0); };
+
+    // A sine, or a sawtooth (every harmonic, like a bright pickup), starting
+    // at sample `start`. The sawtooth is band-limited (harmonics summed up
+    // to 10 kHz) so it doesn't alias, as a real one through a sound card wouldn't.
+    auto toneSample = [] (double hz, double rate, juce::int64 i, bool saw) -> float
+    {
+        const auto phase = 2.0 * MathConstants<double>::pi * hz * (double) i / rate;
+
+        if (! saw)
+            return 0.4f * (float) std::sin (phase);
+
+        double v = 0.0;
+
+        for (int h = 1; h * hz < 10000.0; ++h)
+            v += std::sin (h * phase) / h;
+
+        return (float) (0.25 * v);
+    };
+
+    // Plays `seconds` of a tone into a tuner (as the audio thread would, in
+    // 256-sample blocks), analysing every 50 ms (as its thread would), and
+    // returns every reading.
+    auto listen = [&] (Tuner& tuner, double rate, double seconds, const std::function<float (juce::int64)>& source)
+    {
+        std::vector<TunerReading> readings;
+        std::vector<float> block (256);
+        const auto total = (juce::int64) (seconds * rate);
+        const auto analyseEvery = (juce::int64) (rate * 0.05);
+        juce::int64 sinceAnalysis = 0;
+
+        for (juce::int64 done = 0; done < total; done += (juce::int64) block.size())
+        {
+            for (size_t i = 0; i < block.size(); ++i)
+                block[i] = source (done + (juce::int64) i);
+
+            const float* channels[] = { block.data() };
+            tuner.pushInput (channels, 1, (int) block.size());
+            sinceAnalysis += (juce::int64) block.size();
+
+            if (sinceAnalysis >= analyseEvery)
+            {
+                sinceAnalysis -= analyseEvery;
+                tuner.analyse();
+                readings.push_back (tuner.getReading());
+            }
+        }
+
+        return readings;
+    };
+
+    juce::AudioDeviceManager noDevice;     // never opened: the test feeds the tuner itself
+
+    std::cout << "Tuner: the pitch detector\n";
+    {
+        // Open strings in standard tuning, drop D and drop C, a 7-string's
+        // low B, and some fretted notes up to the high E string's 24th fret.
+        const int notes[] = { 40, 45, 50, 55, 59, 64,    // E2 A2 D3 G3 B3 E4
+                              38, 36, 35,                // D2 (drop D), C2 (drop C), B1
+                              52, 69, 76, 88 };          // E3, A4, E5, E6 (1319 Hz)
+        const double detunings[] = { 0.0, -18.0, 9.0, -45.0, 33.0 };
+
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            PitchDetector detector;
+            detector.prepare (rate);
+            std::vector<float> samples ((size_t) detector.getWindowSize());
+            double worstCents = 0.0;
+            bool allFound = true;
+
+            for (bool saw : { false, true })
+                for (int note : notes)
+                    for (double detune : detunings)
+                    {
+                        const auto hz = noteHz (note, detune);
+
+                        for (size_t i = 0; i < samples.size(); ++i)
+                            samples[i] = toneSample (hz, rate, (juce::int64) i + 1000, saw);
+
+                        auto found = detector.detect (samples.data(), (int) samples.size());
+                        allFound = allFound && found.has_value();
+
+                        if (found)
+                        {
+                            const auto p = NotePitch::fromFrequency (found->frequency);
+                            const auto centsOff = (p.midiNote - note) * 100.0 + p.cents - detune;
+                            worstCents = juce::jmax (worstCents, std::abs (centsOff));
+                        }
+                    }
+
+            std::cout << "    (" << rate << " Hz: worst error " << juce::String (worstCents, 2) << " cents)\n";
+            check (allFound, "every guitar note is found, sine and sawtooth, in tune and detuned");
+            check (worstCents < 1.0, "...to within a cent, with no octave errors");
+        }
+
+        PitchDetector detector;
+        detector.prepare (48000.0);
+        std::vector<float> samples ((size_t) detector.getWindowSize(), 0.0f);
+        check (! detector.detect (samples.data(), (int) samples.size()), "silence has no pitch");
+
+        juce::Random random (1);
+
+        for (auto& s : samples)
+            s = random.nextFloat() * 0.5f - 0.25f;
+
+        check (! detector.detect (samples.data(), (int) samples.size()), "nor does noise");
+
+        // An E minor chord (E2, B2, E3, G3, B3, E4) is several notes at once.
+        const int chord[] = { 40, 47, 52, 55, 59, 64 };
+
+        for (size_t i = 0; i < samples.size(); ++i)
+        {
+            float v = 0.0f;
+
+            for (int n : chord)
+                v += toneSample (noteHz (n, n == 55 ? 14.0 : -7.0), 48000.0, (juce::int64) i, true) / 4.0f;
+
+            samples[i] = v;
+        }
+
+        auto chordPitch = detector.detect (samples.data(), (int) samples.size());
+        check (! chordPitch || NotePitch::fromFrequency (chordPitch->frequency).getNoteName() == "E",
+               "a strummed chord shows nothing, or its root");
+
+        auto e2 = NotePitch::fromFrequency (82.4069);
+        check (e2.getNoteName() == "E" && e2.getOctave() == 2 && std::abs (e2.cents) < 0.1f, "82.4 Hz is E2");
+        auto sharpA = NotePitch::fromFrequency (noteHz (45, 30.0));
+        check (sharpA.getNoteName() == "A" && sharpA.getOctave() == 2 && std::abs (sharpA.cents - 30.0f) < 0.01f, "...and A2 30 cents sharp is A2 +30");
+        check (NotePitch::fromFrequency (noteHz (61)).getNoteName() == "C#", "sharps are named with #");
+    }
+
+    std::cout << "Tuner: steady readings\n";
+    {
+        const double rate = 48000.0;
+
+        // A plucked string: a sawtooth that fades away over two seconds,
+        // then silence.
+        auto pluck = [&] (int note, double cents)
+        {
+            const auto hz = noteHz (note, cents);
+            return [=] (juce::int64 i) -> float
+            {
+                const auto t = (double) i / rate;
+                return t < 2.0 ? (float) std::exp (-1.5 * t) * toneSample (hz, rate, i, true) : 0.0f;
+            };
+        };
+
+        struct Case { int note; double cents; const char* what; };
+
+        for (auto c : { Case { 40, 0.0, "low E" }, Case { 40, -18.0, "low E, 18 cents flat" },
+                        Case { 38, -5.0, "drop D, 5 cents flat" }, Case { 36, 2.0, "drop C" },
+                        Case { 55, 9.0, "G string, 9 cents sharp" } })
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            auto readings = listen (tuner, rate, 2.6, pluck (c.note, c.cents));
+
+            // While the note sounds (after the first 150 ms): the right note,
+            // the right cents, and a needle that holds still.
+            bool rightNote = true;
+            float lowest = 100.0f, highest = -100.0f;
+
+            for (size_t i = 3; i < 40; ++i)
+            {
+                auto& r = readings[i];
+                rightNote = rightNote && r.hasPitch && r.note.midiNote == c.note;
+                lowest = juce::jmin (lowest, r.note.cents);
+                highest = juce::jmax (highest, r.note.cents);
+            }
+
+            const auto label = juce::String (c.what);
+            check (rightNote, (label + ": the right note the whole time").toRawUTF8());
+            check (std::abs (lowest - c.cents) < 1.5 && std::abs (highest - c.cents) < 1.5,
+                   (label + ": cents right to within 1.5, needle steady").toRawUTF8());
+            check (readings[38].isInTune() == (std::abs (c.cents) <= TunerReading::inTuneCents),
+                   (label + ": shows in tune only when within 3 cents").toRawUTF8());
+            check (! readings.back().hasPitch, (label + ": blank once the string stops").toRawUTF8());
+        }
+
+        // A single wrong reading (a pick scratch) doesn't move the display.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            const auto a = noteHz (45), e = noteHz (64);
+
+            // A2, with 45 ms of high E in the middle (less than one reading apart).
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64 i)
+            {
+                const bool glitch = i >= (juce::int64) (0.5 * rate) && i < (juce::int64) (0.545 * rate);
+                return toneSample (glitch ? e : a, rate, i, true);
+            });
+
+            bool held = true;
+
+            for (size_t i = 3; i < readings.size(); ++i)
+                held = held && readings[i].hasPitch && readings[i].note.midiNote == 45;
+
+            check (held, "a moment of another pitch doesn't flicker the note");
+        }
+
+        // A string that's a quarter-tone out doesn't flicker between names.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            const auto hz = noteHz (50, 50.0);    // halfway between D3 and D#3
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64 i)
+            {
+                // ...and wavering 3 cents either side, 3 times a second.
+                // (The phase is the frequency added up over time.)
+                const auto t = (double) i / rate, depth = 0.0017, wobbleHz = 3.0;
+                const auto phase = 2.0 * MathConstants<double>::pi * hz * t
+                                     - hz * depth / wobbleHz * std::cos (2.0 * MathConstants<double>::pi * wobbleHz * t);
+                return 0.4f * (float) std::sin (phase);
+            });
+
+            std::set<int> namesShown;
+
+            for (size_t i = 3; i < readings.size(); ++i)
+                if (readings[i].hasPitch)
+                    namesShown.insert (readings[i].note.midiNote);
+
+            check (namesShown.size() == 1, "a note between two others keeps one name");
+        }
+
+        // Noise shows nothing at all.
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, -1);
+            juce::Random random (7);
+            auto readings = listen (tuner, rate, 1.0, [&] (juce::int64) { return random.nextFloat() * 0.4f - 0.2f; });
+            check (std::none_of (readings.begin(), readings.end(), [] (auto& r) { return r.hasPitch; }), "noise shows nothing");
+        }
+
+        // A stereo input: both sides are heard (here the note is only on the right).
+        {
+            Tuner tuner (noDevice);
+            tuner.prepare (rate);
+            tuner.setInputChannels (0, 1);
+            std::vector<float> left (256, 0.0f), right (256);
+
+            for (juce::int64 done = 0; done < (juce::int64) rate / 2; done += 256)
+            {
+                for (size_t i = 0; i < right.size(); ++i)
+                    right[i] = toneSample (noteHz (45), rate, done + (juce::int64) i, false);
+
+                const float* channels[] = { left.data(), right.data() };
+                tuner.pushInput (channels, 2, 256);
+
+                if (done % 2304 == 0)
+                    tuner.analyse();
+            }
+
+            check (tuner.getReading().hasPitch && tuner.getReading().note.midiNote == 45, "a stereo input is heard on either side");
+
+            tuner.setInputChannels (-1, -1);
+            check (! tuner.hasInput(), "no input channels: nothing to listen to");
+        }
+    }
+
+    std::cout << "Tuner: in the engine\n";
+    {
+        AudioEngine engine { testSettings, false };
+        TestAudioDevice::Settings settings;
+        auto device = std::make_unique<TestAudioDevice> (engine, settings);
+        auto& tracks = engine.getTracks();
+        auto& tuner = engine.getTuner();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        runAudio (*device, 0.2);
+
+        const auto midi = tracks.getTracks().front().id;
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (inputs.size() == 3, "(the device's inputs: 1, 2, 1+2)");
+
+        if (inputs.size() < 3)
+            return;
+
+        auto guitar = tracks.addAudioTrack();
+        tracks.inputs().setTrackInput (guitar, inputs[0].id);
+        tracks.inputs().setMonitoring (guitar, true);
+        tracks.setSelectedTrack (guitar);
+        runAudio (*device, 0.2);
+        check (tuner.hasInput(), "it listens to the selected audio track's input");
+
+        tracks.setSelectedTrack (midi);
+        check (! tuner.hasInput(), "an instrument track has no input for it");
+        tracks.setSelectedTrack (guitar);
+
+        auto heard = [&] { runAudio (*device, 0.2); return peakOf (device->process (tone (*device, 0.5f) (0, (int) settings.sampleRate / 2))); };
+        check (heard() > 0.1f, "(the monitored input is heard)");
+
+        // Turning the tuner on is a listening change, not an edit: nothing to undo or save.
+        const auto before = engine.getStateSnapshot();
+        const auto undoBefore = engine.getUndoDescription();
+        tuner.setActive (true);
+        check (tuner.isActive() && heard() < 0.001f, "while tuning, the input is muted (the default)");
+        check (engine.getStateSnapshot() == before && engine.getUndoDescription() == undoBefore,
+               "turning the tuner on doesn't change the session or add an undo step");
+
+        engine.getPreferences().set (settings::muteWhileTuning, false);
+        check (heard() > 0.1f, "with Mute while tuning off, it's heard while tuning");
+        engine.getPreferences().set (settings::muteWhileTuning, true);
+        check (heard() < 0.001f, "(muted again)");
+
+        // Its own thread reads the notes (fed here straight into the tuner:
+        // the test device shares its input and output buffers, so a callback
+        // after Tracktion's sees the output, see AudioEngine::reattachAudioCallbacks).
+        std::vector<float> block (256);
+        juce::int64 done = 0;
+        const auto until = juce::Time::getMillisecondCounter() + 2000;
+
+        while (! tuner.getReading().hasPitch && juce::Time::getMillisecondCounter() < until)
+        {
+            for (size_t i = 0; i < block.size(); ++i)
+                block[i] = toneSample (noteHz (50), settings.sampleRate, done + (juce::int64) i, true);
+
+            done += (juce::int64) block.size();
+            const float* channels[] = { block.data() };
+            tuner.pushInput (channels, 1, (int) block.size());
+            juce::Thread::sleep (5);   // about real time
+        }
+
+        check (tuner.getReading().hasPitch && tuner.getReading().note.midiNote == 50, "its thread finds the note (D3)");
+
+        tuner.setActive (false);
+        check (! tuner.getReading().hasPitch, "off, it shows nothing");
+        check (heard() > 0.1f, "and the input is heard again");
+        check (engine.getStateSnapshot() == before, "the session is as it was");
+    }
+}
+
+//==============================================================================
+// The pedalboard: the pedal style table, pedals kept at the start of an
+// audio track's chain, room for 12 effects, the Echo's Time knob, undo and
+// saving, and older sessions keeping their order.
+static void runPedalsSection (const juce::File& dir)
+{
+    AudioEngine engine { testSettings, false };
+    auto device = std::make_unique<TestAudioDevice> (engine, TestAudioDevice::Settings {});
+    const auto rate = device->getSettings().sampleRate;
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    runAudio (*device, 0.2);
+
+    auto t = tracks.addAudioTrack();
+    pumpMessages();
+
+    // The chain's plugin types, e.g. "chorus,delay,reverb".
+    auto typesOn = [&] (TrackId track)
+    {
+        juce::StringArray types;
+
+        for (auto& slot : effects.getEffectChain (track))
+            types.add (slot.type);
+
+        return types.joinIntoString (",");
+    };
+
+    auto removeAll = [&] (TrackId track)
+    {
+        for (auto& slot : effects.getEffectChain (track))
+            effects.removeEffect (track, slot.id);
+    };
+
+    auto indexOfParameter = [&] (TrackId track, PluginId plugin, const juce::String& id)
+    {
+        auto params = effects.getEffectParameters (track, plugin);
+
+        for (int i = 0; i < (int) params.size(); ++i)
+            if (params[(size_t) i].id == id)
+                return i;
+
+        return -1;
+    };
+
+    std::cout << "Pedal styles\n";
+    {
+        auto available = effects.getAvailableEffects();
+        bool offered = true, knobCounts = true, knobsFound = true;
+        juce::StringArray names;
+
+        for (auto& style : getPedalStyles())
+        {
+            offered = offered && std::any_of (available.begin(), available.end(), [&] (const EffectType& e)
+                                              { return e.type == style.pluginType && ! e.isThirdParty; });
+            knobCounts = knobCounts && style.knobs.size() >= 2 && style.knobs.size() <= 3;
+            names.addIfNotAlreadyThere (style.name);
+
+            const auto plugin = effects.addEffect (t, style.pluginType);
+
+            for (auto& knob : style.knobs)
+            {
+                if (indexOfParameter (t, plugin, knob.parameterId) < 0)
+                {
+                    knobsFound = false;
+                    std::cout << "         " << style.name << " has no \"" << knob.parameterId << "\" setting\n";
+                }
+            }
+
+            effects.removeEffect (t, plugin);
+        }
+
+        check (getPedalStyles().size() == 20 && names.size() == 20, "there are twenty pedals, each with its own name");
+        check (offered, "every pedal skins an effect from the effects menu");
+        check (knobCounts, "each has 2 or 3 knobs");
+        check (knobsFound, "and every knob turns a setting its effect has");
+        check (findPedalStyle ("reverb") == nullptr && findPedalStyle ("ikarosLimiter") == nullptr,
+               "Reverb and Limiter aren't pedals");
+    }
+
+    std::cout << "Which tracks have a pedalboard\n";
+    {
+        TrackId guitar = 0;
+        checkUndoRoundTrip (engine, "Add Guitar Track", [&] { guitar = tracks.addGuitarTrack(); });
+        const auto info = tracks.getTrack (guitar);
+        check (info.has_value() && info->kind == TrackKind::audio && info->name == "Guitar 1" && info->icon == "guitar",
+               "Guitar or Bass makes an audio track called Guitar 1, with the guitar icon");
+        check (effects.hasPedalboard (guitar), "which has a pedalboard");
+
+        check (! effects.hasPedalboard (t), "a plain audio track (a microphone) doesn't");
+        tracks.setTrackIcon (t, "bass");
+        check (effects.hasPedalboard (t), "one with the bass icon does");
+        tracks.setTrackIcon (t, "mic");
+        check (! effects.hasPedalboard (t), "and with the microphone icon it doesn't again");
+
+        const auto chorus = effects.addEffect (t, "chorus");
+        check (effects.hasPedalboard (t), "an audio track with a pedal keeps its pedalboard, whatever its icon");
+        effects.removeEffect (t, chorus);
+        effects.addEffect (t, "reverb");
+        check (! effects.hasPedalboard (t), "(other effects don't count)");
+        removeAll (t);
+        tracks.setTrackIcon (t, {});
+
+        const auto instrument = tracks.addInstrumentTrack();
+        tracks.setTrackIcon (instrument, "guitar");
+        effects.addEffect (instrument, "chorus");
+        check (! effects.hasPedalboard (instrument) && ! effects.hasPedalboard (masterTrackId),
+               "instrument tracks and the master never do");
+        tracks.deleteTrack (instrument);
+        tracks.deleteTrack (guitar);
+        pumpMessages();
+    }
+
+    std::cout << "Showing and hiding the pedalboard\n";
+    {
+        check (! effects.hasPedalboard (t), "(a vocal track has none to start with)");
+        checkUndoRoundTrip (engine, "Show Pedalboard", [&] { effects.setPedalboardShown (t, true); });
+        check (effects.hasPedalboard (t), "any audio track can show one");
+
+        const auto guitar = tracks.addGuitarTrack();
+        const auto chorus = effects.addEffect (guitar, "chorus");
+        checkUndoRoundTrip (engine, "Hide Pedalboard", [&] { effects.setPedalboardShown (guitar, false); });
+        check (! effects.hasPedalboard (guitar) && effects.getEffectChain (guitar).size() == 1,
+               "a guitar track can hide its pedalboard (and keeps its pedals)");
+
+        const auto instrument = tracks.addInstrumentTrack();
+        effects.setPedalboardShown (instrument, true);
+        check (! effects.hasPedalboard (instrument), "an instrument track can't have one");
+
+        const auto session = dir.getChildFile ("Pedalboards");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        auto list = tracks.getTracks();
+        TrackId vocal = 0, guitarAgain = 0;
+
+        for (auto& info : list)
+        {
+            if (info.kind == TrackKind::audio && info.icon == "guitar")     guitarAgain = info.id;
+            else if (info.kind == TrackKind::audio)                         vocal = info.id;
+        }
+
+        check (vocal != 0 && guitarAgain != 0 && effects.hasPedalboard (vocal) && ! effects.hasPedalboard (guitarAgain),
+               "shown and hidden pedalboards survive save and reopen");
+
+        // Back to just the vocal track for the checks below (they find it as
+        // the last track).
+        juce::ignoreUnused (chorus);
+        // Every ID in the session as it opened (the highest is the guitar's
+        // or the instrument track's, about to be deleted).
+        std::uint64_t highestId = 0;
+
+        for (auto& itemId : tracktion::EditItemID::findAllIDs (TestAudioDevice::getEditOf (engine)->state))
+            highestId = std::max<std::uint64_t> (highestId, itemId.getRawID());
+
+        tracks.deleteTrack (guitarAgain);
+        tracks.deleteTrack (list.back().id);   // the instrument track added above
+
+        // A new effect never reuses a deleted track's IDs: its plug-ins live
+        // on (in the undo history, and for a while in Tracktion's cache).
+        const auto added = effects.addEffect (vocal, "reverb");
+        check (added > highestId, "an effect added after deleting tracks gets a new ID, not a deleted plug-in's");
+        effects.removeEffect (vocal, added);
+        t = vocal;
+        effects.setPedalboardShown (t, false);
+        removeAll (t);
+        pumpMessages();
+    }
+
+    std::cout << "Pedals come first\n";
+    {
+        const auto reverb = effects.addEffect (t, "reverb");
+        const auto chorus = effects.addEffect (t, "chorus");
+        const auto echo = effects.addEffect (t, "delay");
+        check (typesOn (t) == "chorus,delay,reverb", "a pedal added at the end goes after the last pedal, before other effects");
+
+        effects.moveEffect (t, chorus, 2);
+        check (typesOn (t) == "delay,chorus,reverb", "a pedal moved past the other effects stops after the last pedal");
+        effects.moveEffect (t, reverb, 0);
+        check (typesOn (t) == "delay,chorus,reverb", "another effect can't go in front of the pedals");
+        effects.addEffect (t, "pitchShifter", 0);
+        check (typesOn (t) == "delay,chorus,pitchShifter,reverb", "nor be added there");
+
+        effects.replaceEffect (t, reverb, "phaser");
+        check (typesOn (t) == "delay,chorus,phaser,pitchShifter", "an effect replaced by a pedal joins the pedals");
+        effects.replaceEffect (t, echo, "reverb");
+        check (typesOn (t) == "chorus,phaser,reverb,pitchShifter", "a pedal replaced by another effect leaves them");
+
+        // Instrument tracks have no pedalboard: their effects go where they're put.
+        auto instrument = tracks.addInstrumentTrack();
+        effects.addEffect (instrument, "reverb");
+        effects.addEffect (instrument, "chorus");
+        check (typesOn (instrument) == "reverb,chorus", "an instrument track's effects stay in any order");
+        tracks.deleteTrack (instrument);
+        removeAll (t);
+    }
+
+    std::cout << "Up to 12 effects\n";
+    {
+        check (EffectsController::maxEffectsPerTrack == 12, "a track has room for 12 effects");
+        int added = 0;
+
+        for (int i = 0; i < 12; ++i)
+            added += effects.addEffect (t, i % 2 == 0 ? "chorus" : "reverb") != 0 ? 1 : 0;
+
+        check (added == 12, "12 can be added");
+        check (effects.addEffect (t, "phaser") == 0 && effects.getEffectChain (t).size() == 12, "a 13th can't");
+        removeAll (t);
+    }
+
+    std::cout << "Tape Echo's time\n";
+    {
+        auto inputs = tracks.inputs().getAudioInputs();
+        check (! inputs.empty(), "(the pretend device has inputs)");
+
+        if (inputs.empty())
+            return;
+
+        tracks.inputs().setTrackInput (t, inputs[0].id);
+        tracks.setSelectedTrack (t);
+        tracks.inputs().setArmed (t, true);
+        tracks.inputs().setMonitoring (t, true);
+
+        const auto echo = effects.addEffect (t, "delay");
+        const auto time = indexOfParameter (t, echo, "length");
+        check (time >= 0 && effects.getEffectParameters (t, echo)[(size_t) time].valueText == "150 ms",
+               "the Echo has a Time setting, 150 ms to start with");
+
+        if (time < 0)
+            return;
+
+        effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "feedback"), 0.0f);   // one repeat
+        effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "mix proportion"), 0.5f);
+        runAudio (*device, 0.5);
+
+        engine.beginUndoStep ("Tape Echo Time");
+        effects.setEffectParameter (t, echo, time, (500.0f - 20.0f) / (2000.0f - 20.0f));
+        check (effects.getEffectParameters (t, echo)[(size_t) time].valueText == "500 ms", "it can be set to 500 ms");
+
+        // A click goes in; the first sound out is the click, the next its echo.
+        juce::AudioBuffer<float> click (device->getSettings().numInputs, (int) (rate * 0.8));
+        click.clear();
+
+        for (int ch = 0; ch < click.getNumChannels(); ++ch)
+            for (int i = 0; i < 32; ++i)
+                click.setSample (ch, i, 0.5f);
+
+        runAudio (*device, 0.6);   // (let the old echoes die away)
+        const auto heard = device->process (click);
+        int first = -1, second = -1;
+
+        for (int i = 0; i < heard.getNumSamples(); ++i)
+        {
+            if (std::abs (heard.getSample (0, i)) < 0.05f)
+                continue;
+
+            if (first < 0)
+                first = i;
+            else if (i > first + (int) (rate * 0.1))
+            {
+                second = i;
+                break;
+            }
+        }
+
+        const auto gapMs = first >= 0 && second >= 0 ? (second - first) * 1000.0 / rate : 0.0;
+        std::cout << "    (the echo comes " << gapMs << " ms after the click)\n";
+        check (std::abs (gapMs - 500.0) < 2.0, "and the echo comes back 500 ms later");
+
+        engine.undo();
+        check (effects.getEffectParameters (t, echo)[(size_t) time].valueText == "150 ms", "undo puts it back");
+        removeAll (t);
+        tracks.inputs().setMonitoring (t, false);
+    }
+
+    std::cout << "Undo and saving\n";
+    {
+        PluginId chorus = 0, echo = 0, phaser = 0;
+        checkUndoRoundTrip (engine, "Add Effect", [&] { chorus = effects.addEffect (t, "chorus"); });
+        echo = effects.addEffect (t, "delay");
+        effects.addEffect (t, "reverb");
+        pumpMessages();
+
+        checkUndoRoundTrip (engine, "Turn Effect Off", [&] { effects.setEffectEnabled (t, echo, false); });
+        checkUndoRoundTrip (engine, "Move Effect", [&] { effects.moveEffect (t, echo, 0); });
+        checkUndoRoundTrip (engine, "Replace Effect", [&] { phaser = effects.replaceEffect (t, chorus, "phaser"); });
+        checkUndoRoundTrip (engine, "Orbit Phaser Rate", [&]
+        {
+            engine.beginUndoStep ("Orbit Phaser Rate");
+            effects.setEffectParameter (t, phaser, indexOfParameter (t, phaser, "rate"), 0.8f);
+        });
+        checkUndoRoundTrip (engine, "Tape Echo Time", [&]
+        {
+            engine.beginUndoStep ("Tape Echo Time");
+            effects.setEffectParameter (t, echo, indexOfParameter (t, echo, "length"), 0.25f);
+        });
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Pedals"));
+        t = tracks.getTracks().back().id;
+        auto chain = effects.getEffectChain (t);
+        check (typesOn (t) == "delay,phaser,reverb" && chain.size() == 3 && ! chain[0].enabled && chain[1].enabled,
+               "the pedals, their order and their on/off state survive save and reopen");
+
+        if (chain.size() == 3)
+            check (effects.getEffectParameters (t, chain[0].id)[(size_t) indexOfParameter (t, chain[0].id, "length")].valueText == "515 ms",
+                   "and so do their knobs");
+    }
+
+    std::cout << "Older sessions keep their order\n";
+    {
+        // A session from before pedals came first: a chorus after a reverb
+        // (put there behind the controller's back).
+        removeAll (t);
+        effects.addEffect (t, "reverb");
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes, below.)
+            auto* edit = TestAudioDevice::getEditOf (engine);
+            auto* track = detail::findTrack (edit, t);
+            auto chorus = edit->getPluginCache().createNewPlugin (tracktion::ChorusPlugin::xmlTypeName, {});
+            auto* reverb = track->pluginList.findFirstPluginOfType<tracktion::ReverbPlugin>();
+            track->pluginList.insertPlugin (chorus, track->pluginList.indexOf (reverb) + 1, nullptr);
+        }
+
+        check (typesOn (t) == "reverb,chorus", "(made one)");
+
+        const auto session = dir.getChildFile ("Old Order");
+        check (engine.saveSessionAs (session), "(save)");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+        t = tracks.getTracks().back().id;
+        check (typesOn (t) == "reverb,chorus", "it opens with its effects in the order they were saved in");
+
+        // Moving its chorus on the pedalboard brings it to the front.
+        effects.moveEffect (t, effects.getEffectChain (t)[1].id, 0);
+        check (typesOn (t) == "chorus,reverb", "moving its pedal puts it with the pedals");
+        removeAll (t);
+    }
+
+    std::cout << "Ported pedals sound like the originals\n";
+    {
+        // Each port plays tests/fixtures/pedals/di_guitar.wav at the settings
+        // tools/pedals/render_references.sh rendered the original LV2 plugin
+        // at, and the difference from that render must be near silence: at
+        // least `belowDb` quieter than the render itself.
+        //
+        // How near depends on the port:
+        //   - It runs the original DSP unchanged: it matches to rounding (it
+        //     differs only in compiler flags), so 80 dB leaves plenty of room.
+        //   - We oversample a stage with juce::dsp::Oversampling where the
+        //     original used zita-resampler (Mellow Drive, Vintage Fuzz, Super
+        //     Fuzz): the two resamplers' filters differ in delay (by a
+        //     fraction of a sample, too) and near the top of the hearing
+        //     range, and the clipping after them exaggerates that. The best
+        //     whole-sample lag (within 256) is used. Measured: the two fuzzes
+        //     about 38 dB (only their clipping is oversampled), so 30 dB.
+        //     Mellow Drive about 22 dB, whatever filters we use: the
+        //     original's 2x resampler primes its down-sampler with one
+        //     sample fewer than its up-sampler, which seems to leave it half
+        //     a sample late, and no whole-sample lag lines that up. So 18
+        //     dB. These ports sound alike, not identical.
+        //   - The Golden Boost: its original is a JUCE plugin, built with an
+        //     older JUCE, so the same code rounds a little differently
+        //     (measured about 76 dB): 60 dB.
+        // The first setting listed is also turned a little, to check the
+        // test would notice a difference: then it must null at least 6 dB
+        // worse. So that setting must not be a switch.
+        struct Reference
+        {
+            juce::String type, file;
+            std::vector<std::pair<juce::String, float>> settings;   // parameter ID, value
+            double belowDb;
+            bool align = false;      // look for the best lag
+            bool stereo = false;     // a stereo DSP: its right channel isn't silent
+        };
+
+        const std::vector<Reference> references {
+            { YellowDrivePlugin::xmlTypeName, "yellow_drive.wav", { { "drive", 0.7f }, { "level", -6.0f }, { "tone", 650.0f } }, 80.0 },
+            { StackDrivePlugin::xmlTypeName, "stack_drive.wav",
+              { { "gain", 0.7f }, { "bass", 0.5f }, { "level", 0.5f }, { "mid", 0.6f }, { "treble", 0.5f } }, 80.0 },
+            { HotPlatePlugin::xmlTypeName, "hot_plate.wav", { { "gain", 0.6f }, { "bass", 0.5f }, { "treble", 0.6f }, { "volume", 0.3f } }, 80.0 },
+            { TubeDrivePlugin::xmlTypeName, "tube_drive.wav", { { "gain", 0.6f }, { "bass", 0.5f }, { "treble", 0.6f }, { "volume", 0.5f } }, 80.0 },
+            { MellowDrivePlugin::xmlTypeName, "mellow_drive.wav", { { "drive", 0.6f }, { "glass", 0.5f }, { "level", 0.5f } }, 18.0, true },
+            { SunFuzzPlugin::xmlTypeName, "sun_fuzz.wav", { { "drive", 0.7f }, { "input", 0.5f }, { "volume", 0.5f } }, 80.0 },
+            { VintageFuzzPlugin::xmlTypeName, "vintage_fuzz.wav", { { "fuzz", 0.7f }, { "tone", 0.5f }, { "volume", 0.5f } }, 30.0, true },
+            { SuperFuzzPlugin::xmlTypeName, "super_fuzz.wav",
+              { { "expander", 0.6f }, { "balance", 0.5f }, { "tone", 0.0f }, { "trim", 0.25f } }, 30.0, true },
+            { EnvelopeWahPlugin::xmlTypeName, "envelope_wah.wav",
+              { { "depth", 0.8f }, { "drive", 0.0f }, { "gain", 0.0f }, { "mode", 2.0f }, { "peak", 8.0f }, { "range", 1.0f }, { "tone", 0.0f } }, 80.0 },
+            { SlowSwellPlugin::xmlTypeName, "slow_swell.wav", { { "uptime", 200.0f }, { "downtime", 5.0f }, { "threshold", 1.0f } }, 80.0 },
+            { JetFlangerPlugin::xmlTypeName, "jet_flanger.wav",
+              { { "depth", 1.0f }, { "width", 5.0f }, { "freq", 0.5f }, { "feedback", -0.707f }, { "wet", 100.0f }, { "mix", 0.0f } }, 80.0 },
+            { SpringTankPlugin::xmlTypeName, "spring_tank.wav",
+              { { "dry_wet", 50.0f }, { "lfo", 0.2f }, { "roomsize", 0.6f }, { "damp", 0.4f }, { "mode", 0.0f } }, 80.0, false, true },
+            { GoldenBoostPlugin::xmlTypeName, "golden_boost.wav", { { "gain", 0.6f }, { "treble", 0.6f }, { "level", 0.5f } }, 60.0, true },
+        };
+
+        // render_references.sh plays this much silence first and leaves it
+        // out (the originals fade in, and their knobs glide to the settings).
+        constexpr int preroll = 48000, blockSize = 512;
+        const auto folder = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals");
+
+        auto readWav = [] (const juce::File& file)
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (file.createInputStream().release(), true));
+            juce::AudioBuffer<float> samples (1, reader != nullptr ? (int) reader->lengthInSamples : 0);
+
+            if (reader != nullptr)
+                reader->read (&samples, 0, samples.getNumSamples(), 0, true, false);
+
+            return samples;
+        };
+
+        auto rms = [] (const juce::AudioBuffer<float>& b, int ch)
+        {
+            return b.getNumSamples() > 0 ? (double) b.getRMSLevel (ch, 0, b.getNumSamples()) : 0.0;
+        };
+
+        // Plays `guitar` through the plugin's left channel, and silence
+        // through its right, in blocks the way Tracktion does.
+        auto render = [&] (tracktion::Plugin& plugin, double sampleRate, const juce::AudioBuffer<float>& guitar)
+        {
+            plugin.initialise ({ tracktion::TimePosition(), sampleRate, blockSize });
+            plugin.reset();
+
+            juce::AudioBuffer<float> buffer (2, preroll + guitar.getNumSamples());
+            buffer.clear();
+            buffer.copyFrom (0, preroll, guitar, 0, 0, guitar.getNumSamples());
+
+            for (int start = 0; start < buffer.getNumSamples(); start += blockSize)
+            {
+                tracktion::PluginRenderContext context (&buffer, start, std::min (blockSize, buffer.getNumSamples() - start),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            juce::AudioBuffer<float> played (2, guitar.getNumSamples());
+
+            for (int ch = 0; ch < 2; ++ch)
+                played.copyFrom (ch, 0, buffer, ch, preroll, guitar.getNumSamples());
+
+            return played;
+        };
+
+        // How far (dB) the difference between the left channel of `played`
+        // and `original` is below `original`. With `align`, `played` may be
+        // a little late or early (the oversampling filters' delay), so the
+        // best lag within 256 samples is used.
+        auto nullDepth = [] (const juce::AudioBuffer<float>& played, const juce::AudioBuffer<float>& original, bool align)
+        {
+            const int n = original.getNumSamples(), margin = align ? 256 : 0;
+            const float* a = played.getReadPointer (0);
+            const float* b = original.getReadPointer (0);
+            double reference = 0.0, best = std::numeric_limits<double>::max();
+
+            for (int i = margin; i < n - margin; ++i)
+                reference += (double) b[i] * b[i];
+
+            for (int lag = -margin; lag <= margin; ++lag)
+            {
+                double error = 0.0;
+
+                for (int i = margin; i < n - margin; ++i)
+                {
+                    const double d = (double) a[i + lag] - b[i];
+                    error += d * d;
+                }
+
+                best = std::min (best, error);
+            }
+
+            return 10.0 * std::log10 (reference / std::max (best, 1.0e-30));
+        };
+
+        const auto guitar = readWav (folder.getChildFile ("di_guitar.wav"));
+        check (guitar.getNumSamples() == 96000, "(the DI guitar is two seconds long)");
+
+        for (auto& reference : references)
+        {
+            const auto original = readWav (folder.getChildFile (reference.file));
+            auto* edit = TestAudioDevice::getEditOf (engine);
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = edit->getPluginCache().createNewPlugin (reference.type, {});
+            const auto name = plugin != nullptr ? plugin->getName() : reference.type;
+
+            if (plugin == nullptr || original.getNumSamples() != guitar.getNumSamples())
+            {
+                check (false, (name + " can be made, and has a reference render").toRawUTF8());
+                continue;
+            }
+
+            for (auto& [id, value] : reference.settings)
+                if (auto param = plugin->getAutomatableParameterByID (id))
+                    param->setParameter (value, juce::sendNotificationSync);
+
+            const auto played = render (*plugin, 48000.0, guitar);
+            const auto belowDb = nullDepth (played, original, reference.align);
+            const auto latencyMs = plugin->getLatencySeconds() * 1000.0;
+            std::cout << "    (" << name << ": the difference is " << juce::String (belowDb, 1) << " dB below the original"
+                      << (latencyMs > 0.0 ? ", latency " + juce::String (latencyMs, 2) + " ms" : juce::String()) << ")\n";
+            check (belowDb >= reference.belowDb, (name + " sounds like the original (the difference is near silence)").toRawUTF8());
+
+            if (! reference.stereo)
+                check (rms (played, 1) < 1.0e-9, (name + ": each channel has its own copy (the silent right stays silent)").toRawUTF8());
+
+            check ((latencyMs == 0.0) != reference.align, (name + (reference.align ? ": its oversampling's latency is reported"
+                                                                                   : ": no latency")).toRawUTF8());
+
+            // A null test that can't fail proves nothing: with its first
+            // knob turned a little, the difference must be clearly audible.
+            if (auto param = plugin->getAutomatableParameterByID (reference.settings.front().first))
+            {
+                const auto range = param->getValueRange();
+                param->setParameter (reference.settings.front().second + 0.1f * (range.getEnd() - range.getStart()), juce::sendNotificationSync);
+                const auto nudgedDepth = nullDepth (render (*plugin, 48000.0, guitar), original, reference.align);
+                std::cout << "    (with " << reference.settings.front().first << " turned a little: " << juce::String (nudgedDepth, 1) << " dB)\n";
+                check (nudgedDepth < juce::jmin (40.0, belowDb - 6.0),
+                       (name + ": (and with a knob turned a little, it doesn't null)").toRawUTF8());
+                param->setParameter (reference.settings.front().second, juce::sendNotificationSync);
+            }
+
+            // At 44.1 kHz there's no reference, but it should sound much the same.
+            const auto at44 = render (*plugin, 44100.0, guitar);
+            const auto levelDifference = juce::Decibels::gainToDecibels (rms (at44, 0)) - juce::Decibels::gainToDecibels (rms (played, 0));
+            check (std::isfinite (rms (at44, 0)) && std::abs (levelDifference) < 2.0f, (name + " works at 44.1 kHz too").toRawUTF8());
+        }
+    }
+
+    std::cout << "All twenty pedals at once\n";
+    {
+        // How much of the computer's time the pedals need: two seconds of
+        // stereo guitar through all twenty, one after another, played
+        // directly (a track holds at most 12 effects). A Debug build is far
+        // slower than the app, so the check only applies to Release builds.
+        auto* edit = TestAudioDevice::getEditOf (engine);
+        juce::AudioBuffer<float> audio (2, 96000);
+        audio.clear();
+        juce::WavAudioFormat wav;
+        const auto fixture = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals/di_guitar.wav");
+
+        if (std::unique_ptr<juce::AudioFormatReader> reader { wav.createReaderFor (fixture.createInputStream().release(), true) })
+            reader->read (&audio, 0, 96000, 0, true, true);   // the mono file into both channels
+        double totalSeconds = 0.0;
+        juce::StringArray slowest;
+
+        for (auto& style : getPedalStyles())
+        {
+            auto plugin = edit->getPluginCache().createNewPlugin (style.pluginType, {});
+
+            if (plugin == nullptr)
+                continue;
+
+            plugin->initialise ({ tracktion::TimePosition(), 48000.0, 512 });
+            const auto start = juce::Time::getHighResolutionTicks();
+
+            for (int at = 0; at < audio.getNumSamples(); at += 512)
+            {
+                tracktion::PluginRenderContext context (&audio, at, std::min (512, audio.getNumSamples() - at),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin->applyToBuffer (context);
+            }
+
+            const auto seconds = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+            totalSeconds += seconds;
+            slowest.add (juce::String (seconds / 2.0 * 100.0, 1).paddedLeft ('0', 5) + "% " + style.name);
+        }
+
+        slowest.sort (false);
+        std::reverse (slowest.begin(), slowest.end());   // the most first
+        std::cout << "    (all twenty need " << juce::String (totalSeconds / 2.0 * 100.0, 1)
+                  << "% of one core at 48 kHz; the most: " << slowest.joinIntoString (", ").substring (0, 140) << "...)\n";
+        check (std::isfinite (audio.getRMSLevel (0, 0, 96000)), "(the chain's output is finite)");
+       #if defined (NDEBUG)
+        check (totalSeconds < 2.0 * 0.5, "all twenty together need less than half of one core");
+       #endif
+    }
+
+    std::cout << "Yellow Drive\n";
+    {
+        const auto drive = effects.addEffect (t, YellowDrivePlugin::xmlTypeName);
+        auto valueOf = [&] (const juce::String& id)
+        {
+            const auto i = indexOfParameter (t, drive, id);
+            return i >= 0 ? effects.getEffectParameters (t, drive)[(size_t) i].valueText : juce::String();
+        };
+
+        check (drive != 0 && effects.getEffectChain (t).front().name == "Yellow Drive", "it can be added, and is called Yellow Drive");
+        check (valueOf ("drive") == "50%" && valueOf ("tone") == "400 Hz"
+                 && valueOf ("level") == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "16.0 dB",
+               "its knobs start where the original's do (Drive 50%, Tone 400 Hz, Level -16 dB)");
+
+        checkUndoRoundTrip (engine, "Yellow Drive Drive", [&]
+        {
+            engine.beginUndoStep ("Yellow Drive Drive");
+            effects.setEffectParameter (t, drive, indexOfParameter (t, drive, "drive"), 0.8f);
+        });
+        engine.beginUndoStep ("Yellow Drive Tone");
+        effects.setEffectParameter (t, drive, indexOfParameter (t, drive, "tone"), 0.5f);   // 550 Hz (linear, as the original)
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Yellow Drive"));
+        t = tracks.getTracks().back().id;
+        const auto chain = effects.getEffectChain (t);
+        check (chain.size() == 1 && chain[0].type == YellowDrivePlugin::xmlTypeName, "it survives save and reopen");
+
+        if (chain.size() == 1)
+        {
+            const auto i = indexOfParameter (t, chain[0].id, "tone");
+            check (i >= 0 && effects.getEffectParameters (t, chain[0].id)[(size_t) i].valueText == "550 Hz", "and so do its knobs");
+        }
+    }
+
+    std::cout << "Every ported pedal survives saving\n";
+    {
+        // All the ported pedals, as many as fit on a track, each with its
+        // first knob turned to 0.8.
+        removeAll (t);
+        juce::StringArray types;
+
+        for (auto& style : getPedalStyles())
+            if (style.pluginType.startsWith ("ikaros") && types.size() < EffectsController::maxEffectsPerTrack)
+                types.add (style.pluginType);
+
+        for (auto& type : types)
+        {
+            const auto id = effects.addEffect (t, type);
+            engine.beginUndoStep ("Pedal Knob");
+            effects.setEffectParameter (t, id, 0, 0.8f);
+        }
+
+        const auto before = typesOn (t);
+        auto knobs = [&]
+        {
+            juce::StringArray texts;
+
+            for (auto& slot : effects.getEffectChain (t))
+                texts.add (effects.getEffectParameters (t, slot.id)[0].valueText);
+
+            return texts.joinIntoString ("|");
+        };
+
+        const auto knobsBefore = knobs();
+        checkSaveAndReopen (engine, dir.getChildFile ("Ported Pedals"));
+        t = tracks.getTracks().back().id;
+        check (types.size() == 12 && typesOn (t) == before, "twelve of them on a track come back, in order");
+        check (knobs() == knobsBefore, "with their knobs");
+    }
+
+    device.reset();
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -6252,6 +7302,12 @@ int main (int argc, char* argv[])
 
     if (runs ("quantize"))
         runQuantizeSection (dir);
+
+    if (runs ("tuner"))
+        runTunerSection();
+
+    if (runs ("pedals"))
+        runPedalsSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

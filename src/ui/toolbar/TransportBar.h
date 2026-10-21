@@ -11,7 +11,7 @@ class AudioEngine;
 //==============================================================================
 /**
     The rounded "pill" in the middle of the toolbar:
-    Go to start · Play · Record · Loop · LCD · Metronome · Count-in.
+    Go to start · Play · Record · Loop · LCD · Tuner · Metronome · Count-in.
 */
 class TransportBar  : public juce::Component
 {
@@ -37,6 +37,7 @@ private:
     IconButton recordButton    { "Record", Icon::record };
     IconButton loopButton      { "Loop", Icon::loop };
     LcdDisplay lcd;
+    IconButton tunerButton     { "Tuner", Icon::tuningFork };
     IconButton metronomeButton { "Metronome", Icon::metronome };
     IconButton countInButton   { "Count-in", Icon::timer, "Count-in" };
 

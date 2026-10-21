@@ -83,6 +83,7 @@ namespace
         p.lcdBorder           = none;
         p.lcdLabel            = hex (0xff8f98a6);
         p.lcdValue            = hex (0xffffaa2b);   // the playhead's amber
+        p.lcdInTune           = hex (0xff4fd18b);
 
         // Text
         p.text                = hex (0xffeef1f5);
@@ -150,6 +151,9 @@ namespace
 
         p.tintLight           = hex (0xffffffff);
         p.tintDark            = hex (0xff000000);
+
+        p.pedalboardFloor     = hex (0xff0e1013);
+        p.pedalboardCable     = hex (0xff4a505b);   // lighter than the floor, so it shows
 
         p.scrim               = juce::Colours::black.withAlpha (0.55f);
         p.scrimStrong         = juce::Colours::black.withAlpha (0.6f);    // session chooser
@@ -253,6 +257,8 @@ namespace
         p.popupBg             = hex (0xffffffff);
 
         p.wellBg              = hex (0xffd3d7de);
+        p.pedalboardFloor     = hex (0xffd3d8e0);
+        p.pedalboardCable     = hex (0xff959ca7);
         p.cardBg              = hex (0xffffffff);
         p.raised              = hex (0xffffffff);
         p.controlFill         = hex (0xffe2e5ea);
@@ -297,6 +303,7 @@ namespace
         p.lcdBorder           = hex (0xffd5d9df);
         p.lcdLabel            = hex (0xff5f6672);
         p.lcdValue            = hex (0xffb86e00);   // the playhead's amber, deeper: #ffaa2b is too pale on white
+        p.lcdInTune           = hex (0xff1f8f4e);
 
         // Text
         p.text                = hex (0xff1a1d22);
