@@ -86,7 +86,7 @@ public:
     bool isCollapsed() const noexcept           { return collapsed; }
 
     /** True while the selected track has a pedalboard (see
-        EffectsController::hasPedalboard). The Pedals tab also stays while
+        EffectsController::hasPedalboard). The Rig tab also stays while
         it's showing, so removing a vocal track's last pedal doesn't whisk
         the board away; it goes once another track or tab is picked. */
     bool isPedalboardAvailable() const noexcept    { return pedalboardAvailable; }
@@ -154,11 +154,11 @@ private:
     IconButton soundTab  { "Sound", std::nullopt, "Sound" };
     IconButton editorTab { "Editor", std::nullopt, "Editor" };
     IconButton eqTab     { "EQ", std::nullopt, "EQ" };
-    IconButton pedalsTab { "Pedals", std::nullopt, "Pedals" };   // audio tracks only
+    IconButton pedalsTab { "Rig", std::nullopt, "Rig" };   // the pedalboard and amp; audio tracks only
     IconButton mixerButton { "Mixer", std::nullopt, "Mixer" };
     IconButton inspectorButton { "Inspector", std::nullopt, "Inspector" };
-    IconButton tunerButton { "Tuner", Icon::tuningFork, "Tuner" };           // Pedals tab only
-    IconButton addPedalButton { "Add pedal", Icon::plus, "Add Pedal" };     // Pedals tab only
+    IconButton tunerButton { "Tuner", Icon::tuningFork, "Tuner" };           // Rig tab only
+    IconButton addPedalButton { "Add pedal", Icon::plus, "Add Pedal" };     // Rig tab only
     IconButton collapseButton { "Hide panel", Icon::chevronDown };
 
     // The inspector column's switch: Track | Master, or Track | Region on the Editor tab.
@@ -196,7 +196,7 @@ private:
     TrackId getTarget() const;
 
     /** Master mode, and a tab it applies to (the Editor is always about a
-        track's regions, and the Pedals tab about an audio track). */
+        track's regions, and the Rig tab about an audio track). */
     bool showsMaster() const noexcept           { return masterMode && tab != Tab::editor && tab != Tab::pedals; }
 
     /** The inspector column is showing (the full mixer takes the whole width). */

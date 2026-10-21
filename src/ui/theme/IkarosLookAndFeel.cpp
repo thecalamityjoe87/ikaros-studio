@@ -1,6 +1,7 @@
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
+#include <tuple>
 
 namespace ikaros
 {
@@ -243,7 +244,10 @@ void IkarosLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w
 // A pedal's knob (see PedalView): a dark knob with a white pointer and the
 // value arc in the pedal's lettering colour (the slider's knobArcColourId).
 // Pedals look the same in both themes, so this uses fixed colours, not the
-// theme's.
+// theme's. The Amp's knobs (see AmpView) are drawn here too, with two more
+// slider properties: "knobCap" ("chrome" or "cream" for a light cap with a
+// dark pointer; anything else is the dark cap) and "capSize" (the cap's
+// diameter in pixels).
 static void drawPedalKnob (juce::Graphics& g, juce::Rectangle<float> area, float pos,
                            float startAngle, float endAngle, juce::Slider& s)
 {
@@ -268,20 +272,31 @@ static void drawPedalKnob (juce::Graphics& g, juce::Rectangle<float> area, float
         g.strokePath (value, stroke);
     }
 
-    // The knob: a small shadow under it, then a dark body lit from the top left.
-    const auto bodyRadius = radius - arcWidth * 0.5f - 2.0f;
+    // The knob: a small shadow under it, then a body lit from the top left.
+    const auto& properties = s.getProperties();
+    const auto bodyRadius = properties.contains ("capSize") ? (float) properties["capSize"] * 0.5f
+                                                            : radius - arcWidth * 0.5f - 2.0f;
     const auto body = juce::Rectangle<float> (bodyRadius * 2.0f, bodyRadius * 2.0f).withCentre (centre);
     juce::Path bodyPath;
     bodyPath.addEllipse (body);
     juce::DropShadow (juce::Colours::black.withAlpha (0.4f), 4, { 0, 2 }).drawForPath (g, bodyPath);
 
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff42454c), body.getX() + body.getWidth() * 0.3f, body.getY(),
-                                             juce::Colour (0xff121316), body.getCentreX(), body.getBottom(), true));
+    // The cap's colours: lit spot, middle, edge.
+    const auto cap = properties["knobCap"].toString();
+    const bool lightCap = cap == "chrome" || cap == "cream";
+    const auto [lit, middle, edge] = cap == "chrome" ? std::make_tuple (juce::Colour (0xfffbfcfd), juce::Colour (0xffc7ccd3), juce::Colour (0xff7c838d))
+                                   : cap == "cream"  ? std::make_tuple (juce::Colour (0xfffbf4e3), juce::Colour (0xffeadcbc), juce::Colour (0xffb7a17a))
+                                                     : std::make_tuple (juce::Colour (0xff42454c), juce::Colour (0xff2a2c31), juce::Colour (0xff121316));
+
+    juce::ColourGradient shading (lit, body.getX() + body.getWidth() * 0.3f, body.getY() + (lightCap ? body.getHeight() * 0.25f : 0.0f),
+                                  edge, body.getCentreX(), body.getBottom(), true);
+    shading.addColour (0.5, middle);
+    g.setGradientFill (shading);
     g.fillEllipse (body);
-    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.setColour (juce::Colours::black.withAlpha (lightCap ? 0.35f : 0.6f));
     g.drawEllipse (body, 1.0f);
 
-    g.setColour (juce::Colours::white);
+    g.setColour (lightCap ? juce::Colour (0xff1b1c1f) : juce::Colours::white);
     g.drawLine ({ centre.getPointOnCircumference (bodyRadius * 0.3f, valueAngle),
                   centre.getPointOnCircumference (bodyRadius * 0.85f, valueAngle) }, juce::jmax (1.8f, size * 0.07f));
 

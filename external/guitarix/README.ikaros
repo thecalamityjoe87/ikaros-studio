@@ -1,0 +1,36 @@
+The DSP of Guitarix's amp, used by Ikaros Studio's Amp effect: six of its
+tube amp models, six tone stacks and its built-in cabinet impulse
+responses. Guitarix is GPL 2 or later (COPYING).
+
+  Repository  https://github.com/brummer10/guitarix
+  Commit      666b564bb8a7194f200029fdbfbec2abe035f777
+
+Only Faust-generated DSP and the data it needs is kept, unchanged, in
+Guitarix's own folder layout:
+
+  src/LV2/faust-generated/gxamp.cc, gxamp5.cc, gxamp7.cc, gxamp8.cc,
+      gxamp9.cc, gxamp16.cc                   the tube models
+  src/LV2/faust-generated/tonestack_fender_default.cc, tonestack_bassman.cc,
+      tonestack_ac30.cc, tonestack_jcm800.cc, tonestack_engl.cc,
+      tonestack_ampeg.cc                      the tone stacks
+  src/LV2/DSP/valve.h, src/LV2/DSP/tube_tables/*.cc
+                                              the tube tables the models use
+                                              (the 14 files valve.h includes)
+  src/LV2/DSP/cab_data.cc                     the cabinet IRs
+  src/LV2/DSP/gx_pluginlv2.h                  the DSP interface
+
+Not used: the LV2 plugin and its GUI (gx_amp.lv2), Guitarix's convolver
+(zita-convolver, FFTW) and resampler, and its presence stage (a convolution
+in the LV2 plugin, not part of the models). Ikaros convolves the cabinets
+with juce::dsp::Convolution and makes presence with a filter; see
+src/engine/AmpPlugin.cpp.
+
+ikaros/ is ours: GuitarixAmp.cpp compiles everything above in one file,
+inside a namespace of its own, with the few definitions the generated code
+expects (see GxFaustSupport.h, shared with external/gxplugins, and the
+mydsp_faustpowerN_f helpers from Guitarix's gx_common.h); GuitarixAmp.h is
+all the app sees; CMakeLists.txt builds the static library ikaros_guitarix.
+
+To use another model or tone stack: copy its .cc here unchanged, add it to
+the enum in ikaros/GuitarixAmp.h and the includes and switch in
+ikaros/GuitarixAmp.cpp.

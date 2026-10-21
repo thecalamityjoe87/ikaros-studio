@@ -112,6 +112,19 @@ GxPlugins and Guitarix, the sound of most of the pedalboard's pedals
     Spring Tank     Guitarix's stereo reverb (gx_reverb)
 
 
+Guitarix, the sound of the Amp
+  https://github.com/brummer10/guitarix
+  GNU General Public License, version 2 or later
+  Copyright (C) 2011-2012 Hermann Meyer, James Warden, Andreas Degert,
+  Pete Shorthose, Steve Poskitt (the Guitarix project)
+  The full license text is in external/guitarix/COPYING. The Amp's voices
+  play Guitarix's tube amp models and tone stacks, and its cabinets are
+  Guitarix's built-in cabinet impulse responses. Only the code Faust
+  generated (and the tube and cabinet data) is used, unchanged; the LV2
+  plugin, its GUI and its convolver are not. See
+  external/guitarix/README.ikaros for the files and the commit used.
+
+
 KlonCentaur, the sound of the Golden Boost pedal
   https://github.com/jatinchowdhury18/KlonCentaur
   BSD 3-Clause License

@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 8)
+set(IKAROS_MILESTONE 9)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -162,6 +162,11 @@ add_subdirectory(external/lame/ikaros "${CMAKE_BINARY_DIR}/lame" EXCLUDE_FROM_AL
 # external/gxplugins/README.ikaros.
 add_subdirectory(external/gxplugins/ikaros "${CMAKE_BINARY_DIR}/gxplugins" EXCLUDE_FROM_ALL)
 
+# Guitarix's amp models, tone stacks and cabinet IRs (GPL 2+), the sound of
+# the Amp after the pedals, kept in the repo (only the Faust-generated DSP is
+# used); see external/guitarix/README.ikaros.
+add_subdirectory(external/guitarix/ikaros "${CMAKE_BINARY_DIR}/guitarix" EXCLUDE_FROM_ALL)
+
 # Rubber Band stretches audio regions in time and pitch (loops following the
 # song's tempo and key, Flex Time). Tracktion builds it into its own
 # time-stretch code from Rubber Band's single-file version
@@ -272,6 +277,8 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/PortedPedals.h           src/engine/PortedPedals.cpp
     src/engine/KlonCentaurDsp.h         src/engine/KlonCentaurDsp.cpp
     src/engine/PedalStyles.h        src/engine/PedalStyles.cpp
+    src/engine/AmpPlugin.h          src/engine/AmpPlugin.cpp
+    src/engine/AmpStyles.h          src/engine/AmpStyles.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
@@ -392,6 +399,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/EqView.h             src/ui/bottompanel/EqView.cpp
     src/ui/bottompanel/PedalView.h          src/ui/bottompanel/PedalView.cpp
     src/ui/bottompanel/PedalboardView.h     src/ui/bottompanel/PedalboardView.cpp
+    src/ui/bottompanel/AmpView.h            src/ui/bottompanel/AmpView.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
@@ -437,6 +445,7 @@ target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
         ikaros_gxplugins
+        ikaros_guitarix
         ikaros_timestretch
         miniz
         mp3lame
@@ -562,6 +571,7 @@ if(IKAROS_BUILD_TESTS)
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
         ikaros_gxplugins
+        ikaros_guitarix
         ikaros_timestretch
         miniz
         mp3lame
@@ -588,7 +598,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner,pedals)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,tuner,pedals,amp)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -628,6 +638,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Tuner PROPERTIES LABELS "tuner")
     add_test(NAME EngineSmokeTest.Pedals COMMAND IkarosEngineSmokeTest --only=pedals)
     set_tests_properties(EngineSmokeTest.Pedals PROPERTIES LABELS "pedals")
+    add_test(NAME EngineSmokeTest.Amp COMMAND IkarosEngineSmokeTest --only=amp)
+    set_tests_properties(EngineSmokeTest.Amp PROPERTIES LABELS "amp")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

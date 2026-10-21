@@ -3,6 +3,7 @@
 #include "engine/AudioPreview.h"
 #include "engine/BuiltInEffects.h"
 #include "engine/PortedPedals.h"
+#include "engine/AmpPlugin.h"
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
@@ -277,6 +278,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<SlowSwellPlugin>();
         engine.getPluginManager().createBuiltInType<JetFlangerPlugin>();
         engine.getPluginManager().createBuiltInType<SpringTankPlugin>();
+
+        // The Amp that follows the pedals (see AmpPlugin.h).
+        engine.getPluginManager().createBuiltInType<AmpPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
         dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]

@@ -76,9 +76,11 @@ public:
     TrackId addAudioTrack();
 
     /** Adds an audio track for a guitar or bass (New Track's "Guitar or
-        Bass"): named "Guitar N", with the guitar icon, so it gets a
-        pedalboard (see EffectsController::hasPedalboard). One undo step. */
-    TrackId addGuitarTrack();
+        Bass"): named "Guitar N" with the guitar icon, or with `bass`, "Bass
+        N" with the bass icon, so it gets a pedalboard (see
+        EffectsController::hasPedalboard). It starts with an Amp on the
+        Clean voice (a bass track: the Bass voice). One undo step. */
+    TrackId addGuitarTrack (bool bass = false);
     void deleteTrack (TrackId);
 
     /** Adds a copy of a track just below it: same kind, sound, effects, mixer

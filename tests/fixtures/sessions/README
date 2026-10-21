@@ -1,0 +1,8 @@
+Before Amp.iksession and Before Amp.wav were made by the app as it was just
+before milestone 9 (the Amp), so the smoke test can check that older sessions
+open unchanged (no Amp added) and render exactly as they did.
+
+The session has a guitar track (Yellow Drive, Stack Drive and Tape Echo) and a
+bass track (Golden Boost), each playing ../pedals/di_guitar.wav. Before
+Amp.wav is its File > Export Song (WAV, 24-bit). Never remake them with a newer
+build: that would defeat the point.

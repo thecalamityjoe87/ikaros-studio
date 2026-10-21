@@ -630,8 +630,16 @@ void LcdDisplay::setTunerState (const TunerReading& r, bool hasInput, bool mutin
 void LcdDisplay::setState (const TransportState& s, const juce::String& key)
 {
     // During a count-in, count down the beats left before recording starts: -4, -3...
-    auto pos = s.countingIn ? "-" + juce::String ((int) std::ceil (s.recordStartBeats - s.positionBeats - 0.001))
-                            : juce::String (s.bar).paddedLeft ('0', 2) + "." + juce::String (s.beat);
+    countInText = s.countingIn ? "-" + juce::String ((int) std::ceil (s.recordStartBeats - s.positionBeats - 0.001))
+                               : juce::String();
+    barText = juce::String (s.bar).paddedLeft ('0', 2) + "." + juce::String (s.beat);
+
+    // The song's time: minutes, seconds and tenths (1:23.4).
+    const auto tenths = (int) std::floor (juce::jmax (0.0, s.positionSeconds) * 10.0);
+    timeText = juce::String (tenths / 600) + ":" + juce::String ((tenths / 10) % 60).paddedLeft ('0', 2)
+                 + "." + juce::String (tenths % 10);
+
+    const auto pos = countInText.isNotEmpty() ? countInText : showsTime ? timeText : barText;
 
     if (pos != positionText)
     {
@@ -671,12 +679,40 @@ void LcdDisplay::paint (juce::Graphics& g)
     // The position isn't editable, so it has no field: same rows as the fields.
     g.setColour (theme().lcdValue);
     g.setFont (fonts::monoBold (textSize::lcd));
-    g.drawText (positionText, positionArea.withHeight (valueRowHeight), juce::Justification::bottomLeft, false);
+    // (Squeezed a little if a long song's time doesn't fit.)
+    g.drawFittedText (positionText, positionArea.withHeight (valueRowHeight), juce::Justification::bottomLeft, 1, 0.8f);
 
     g.setColour (theme().lcdLabel);
     g.setFont (fonts::mono (textSize::caption).withExtraKerningFactor (0.1f));
-    g.drawText (juce::String::fromUTF8 ("BAR \xc2\xb7 BEAT"),
+    g.drawText (juce::String::fromUTF8 (showsTime ? "MIN \xc2\xb7 SEC" : "BAR \xc2\xb7 BEAT"),
                 positionArea.withTrimmedTop (valueRowHeight).withTrimmedBottom (1), juce::Justification::centredLeft);
+}
+
+void LcdDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    // The position is clickable (it isn't a Field, so it has no hover box).
+    const bool overPosition = ! tunerShown && positionArea.contains (e.getPosition());
+    setMouseCursor (overPosition ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void LcdDisplay::mouseUp (const juce::MouseEvent& e)
+{
+    // A click on the position switches between bars and beats and the time.
+    if (tunerShown || ! e.mouseWasClicked() || ! positionArea.contains (e.getPosition()))
+        return;
+
+    showsTime = ! showsTime;
+    positionText = countInText.isNotEmpty() ? countInText : showsTime ? timeText : barText;
+    repaint (positionArea);
+}
+
+juce::String LcdDisplay::getTooltip()
+{
+    // Called for the component under the mouse: only the position has one.
+    if (tunerShown || ! positionArea.contains (getMouseXYRelative()))
+        return {};
+
+    return showsTime ? "Song time (click to show bars and beats)" : "Bar and beat (click to show the song's time)";
 }
 
 void LcdDisplay::resized()

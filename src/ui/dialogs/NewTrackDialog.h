@@ -40,13 +40,14 @@ private:
 
     std::unique_ptr<Card> instrumentCard, audioCard, guitarCard;
     juce::ComboBox inputBox;
+    juce::ComboBox playsBox;   // Guitar or Bass: which amp voice the track starts with
     juce::ToggleButton monitorToggle { "Hear the input while recording" };
     IconButton cancelButton { "Cancel", std::nullopt, "Cancel" };
     IconButton createButton { "Create", std::nullopt, "Create" };
 
     Kind chosen = Kind::instrument;
     std::vector<AudioInput> inputs;
-    juce::Rectangle<int> panel, audioOptionsArea;
+    juce::Rectangle<int> panel, audioOptionsArea, playsLabelArea;
 
     void choose (Kind);
     Card& cardFor (Kind) const;
