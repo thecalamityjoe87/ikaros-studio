@@ -535,6 +535,19 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
     addPedalButton.onClick = [this] { pedalboard.showAddPedal (addPedalButton); };
 
+    // The Sound tab's Play to End, on a track playing its own sound (Region >
+    // Make Instrument from Region). Lit while it's on.
+    playToEndButton.setColours (IconButton::raisedColours);
+    playToEndButton.setFont (fonts::ui (textSize::md));
+    addChildComponent (playToEndButton);
+    playToEndButton.setTooltip ("On: every note plays the whole sound. Off: a note stops when you let go of its key.");
+    playToEndButton.onClick = [this]
+    {
+        auto& effects = engine.getTracks().effects();
+        const auto id = selection.getTrack();
+        effects.setOwnSoundPlaysToEnd (id, ! effects.getOwnSoundPlaysToEnd (id));
+    };
+
     // An ordinary button, like the rest of the header's.
     collapseButton.setColours (IconButton::raisedColours);
     collapseButton.setTooltip ("Hide panel");
@@ -661,6 +674,7 @@ void BottomPanel::showTabPage()
     pedalsTab.setVisible (open && pedalsShown);
     tunerButton.setVisible (tabPage && tab == Tab::pedals);
     addPedalButton.setVisible (tabPage && tab == Tab::pedals);
+    updateSoundButtons();
 
     trackModeButton.setVisible (column);
     masterModeButton.setVisible (column && tab != Tab::editor);
@@ -787,6 +801,22 @@ void BottomPanel::refresh (const ModelChanges& changes)
         refreshEditor();
 }
 
+void BottomPanel::updateSoundButtons()
+{
+    // Only shown while the Sound tab's page is (not the master's).
+    const bool page = soundPage->isVisible() && ! collapsed && ! mixerShown && ! isShowingEffect();
+    const bool own = page && track.has_value() && track->soundId == EffectsController::ownSoundId;
+    const bool changed = playToEndButton.isVisible() != own;
+
+    playToEndButton.setVisible (own);
+
+    if (own)
+        playToEndButton.setToggleState (engine.getTracks().effects().getOwnSoundPlaysToEnd (track->id), juce::dontSendNotification);
+
+    if (changed)
+        resized();
+}
+
 void BottomPanel::refreshTrack()
 {
     track = engine.getTracks().getTrack (selection.getTrack());
@@ -814,6 +844,7 @@ void BottomPanel::refreshTrack()
 
     inspector.refresh();
     soundPage->refresh (track);
+    updateSoundButtons();
     pedalboard.refresh();
     addPedalButton.setEnabled (pedalboard.canAddPedal());
     addPedalButton.setTooltip (pedalboard.canAddPedal() ? juce::String ("Add a pedal at the end of the board")
@@ -1071,6 +1102,13 @@ void BottomPanel::resized()
         addPedalButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 30));
         header.removeFromRight (8);
         tunerButton.setBounds (header.removeFromRight (88).withSizeKeepingCentre (88, 30));
+        header.removeFromRight (14);
+    }
+
+    // On the Sound tab, a track playing its own sound: Play to End, left of Inspector.
+    if (playToEndButton.isVisible())
+    {
+        playToEndButton.setBounds (header.removeFromRight (104).withSizeKeepingCentre (104, 30));
         header.removeFromRight (14);
     }
 

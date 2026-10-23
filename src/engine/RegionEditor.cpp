@@ -880,6 +880,70 @@ std::vector<RegionId> RegionEditor::pasteRegions (TrackId targetId, double beat)
 
 //==============================================================================
 // Audio files
+std::optional<RegionEditor::SourceExcerpt> RegionEditor::getSourceExcerpt (RegionId id) const
+{
+    auto* clip = dynamic_cast<te::WaveAudioClip*> (findClip (owner.getEdit(), id));
+
+    if (clip == nullptr)
+        return std::nullopt;
+
+    const auto file = clip->getOriginalFile();
+    const te::AudioFile audioFile (owner.getTeEngine(), file);
+
+    if (! audioFile.isValid())
+        return std::nullopt;
+
+    // Where the region starts in its content, and how much it plays, in
+    // seconds of the content, as getWaveform's contentAt works them out.
+    double start = 0.0, length = 0.0;
+    const bool looping = clip->isLooping();
+    auto wrap = [] (double x, double loop) { return loop > 0.0 ? x - std::floor (x / loop) * loop : x; };
+
+    if (clip->getAutoTempo())
+    {
+        const double fileBeatsPerSecond = clip->getLoopInfo().getBeatsPerSecond (audioFile.getInfo());
+
+        if (fileBeatsPerSecond <= 0.0)
+            return std::nullopt;
+
+        const double beats = clip->getLengthInBeats().inBeats();
+        const double loopLength = clip->getLoopLengthBeats().inBeats();
+        const double startBeat = looping ? clip->getLoopStartBeats().inBeats() + loopOffsetBeats (*clip)
+                                         : (clip->getStartBeat() - clip->getContentStartBeat()).inBeats();
+        start = startBeat / fileBeatsPerSecond;
+        length = (looping && loopLength > 0.0 ? juce::jmin (beats, loopLength - loopOffsetBeats (*clip)) : beats) / fileBeatsPerSecond;
+    }
+    else
+    {
+        const double speed = clip->getSpeedRatio();
+        const double seconds = clip->getPosition().getLength().inSeconds();
+        const double offset = clip->getPosition().getOffset().inSeconds();
+        const double loopLength = clip->getLoopLength().inSeconds();
+        const bool canLoop = looping && loopLength > 0.0;
+
+        start = (canLoop ? clip->getLoopStart().inSeconds() + wrap (offset, loopLength) : offset) * speed;
+        length = (canLoop ? juce::jmin (seconds, loopLength - wrap (offset, loopLength)) : seconds) * speed;
+    }
+
+    // ...and where that is in the file: through the Flex markers, and the
+    // reversed copy's first second is the original's last.
+    const auto warp = usesFlex (*clip) ? getWarpPoints (*clip) : std::vector<WarpPoint>();
+    const double fileLength = audioFile.getLength();
+
+    auto fileAt = [&] (double contentSeconds)
+    {
+        const double seconds = warp.empty() ? contentSeconds : flexmap::toSource (warp, contentSeconds);
+        return juce::jlimit (0.0, fileLength, clip->getIsReversed() ? fileLength - seconds : seconds);
+    };
+
+    const double from = fileAt (start), to = fileAt (start + length);
+
+    if (std::abs (to - from) <= 0.0)
+        return std::nullopt;
+
+    return SourceExcerpt { file, juce::jmin (from, to), std::abs (to - from) };
+}
+
 bool RegionEditor::isSupportedAudioFile (const juce::File& file) const
 {
     auto& formats = owner.getTeEngine().getAudioFileFormatManager().readFormatManager;

@@ -51,7 +51,6 @@ namespace size
     // (see ArrangementLayout.h).
     inline constexpr int trackRowCompact   = 84;
     inline constexpr int trackRowTall      = 100;
-    inline constexpr int addTrackHeight    = 40;    // the dashed "Add track" button under the track headers
     inline constexpr int bottomPanelHeight = 290;
     inline constexpr int minHitTarget      = 44;
     inline constexpr int panelPadding      = 14;    // standard inset from a panel's edges
@@ -67,7 +66,7 @@ namespace size
     inline constexpr float radiusTiny      = 3.0f;
     inline constexpr float radiusXs        = 4.0f;
     inline constexpr float radiusSmall     = 5.0f;
-    inline constexpr float radiusMedium    = 6.0f;   // track icon tiles, the "Add track" button
+    inline constexpr float radiusMedium    = 6.0f;   // track icon tiles
     inline constexpr float radius          = 8.0f;
     inline constexpr float radiusLarge     = 10.0f;
     inline constexpr float radiusCard      = 12.0f;

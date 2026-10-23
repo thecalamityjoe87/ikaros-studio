@@ -2,6 +2,7 @@
 #include "engine/AudioDeviceWatcher.h"
 #include "engine/AudioPreview.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/EffectsController.h"
 #include "engine/PortedPedals.h"
 #include "engine/AmpPlugin.h"
 #include "engine/Autosaver.h"
@@ -1519,6 +1520,15 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
             for (auto take : detail::getTakesTree (*clip))
                 sources.push_back ({ take, te::SourceFileReference (edit, take, te::IDs::source).getFile(), take[te::IDs::source] });
         }
+
+        // An instrument playing the user's own sound (EffectsController::setOwnSound)
+        // goes in the session too. (Library instruments' samples belong to their packs.)
+        if (track->state.getProperty (detail::soundIdProp).toString() == EffectsController::ownSoundId)
+            for (auto* sampler : track->pluginList.getPluginsOfType<te::SamplerPlugin>())
+                for (auto sound : sampler->state)
+                    if (sound.hasType (te::IDs::SOUND))
+                        sources.push_back ({ sound, te::SourceFileReference::findFileFromString (edit, sound[te::IDs::source]),
+                                             sound[te::IDs::source] });
     }
 
     // Every file the session plays goes in its Audio folder, under a name

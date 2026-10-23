@@ -161,6 +161,7 @@ private:
     IconButton inspectorButton { "Inspector", std::nullopt, "Inspector" };
     IconButton tunerButton { "Tuner", Icon::tuningFork, "Tuner" };           // Rig tab only
     IconButton addPedalButton { "Add pedal", Icon::plus, "Add Pedal" };     // Rig tab only
+    IconButton playToEndButton { "Play to end", std::nullopt, "Play to End" };   // Sound tab, tracks playing their own sound
     IconButton collapseButton { "Hide panel", Icon::chevronDown };
 
     // The inspector column's switch: Track | Master, or Track | Region on the Editor tab.
@@ -212,6 +213,7 @@ private:
 
     void refreshTrack();     // the inspector, Sound tab and Mixer
     void updatePedalboardAvailable();
+    void updateSoundButtons();   // the Sound tab's header button (Play to End)
     void refreshEditor();    // the piano roll or audio editor
     void updateTabButtons();
     void showTabPage();

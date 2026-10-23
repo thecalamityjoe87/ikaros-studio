@@ -85,6 +85,7 @@ namespace CommandIDs
         closeTuner,         // Escape while tuning (in no menu)
         showPedalboardTab,  // View > Pedalboard: an audio track's pedals
         convertToMidiRegion,    // Region > Convert to MIDI Region: a Drummer region's notes, to edit
+        makeInstrumentFromRegion,   // Region > Make Instrument from Region: an audio region played on the keys
     };
 }
 

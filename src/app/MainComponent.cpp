@@ -549,6 +549,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::newRegion, CommandIDs::splitRegion, CommandIDs::duplicateRegion,
                                    CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
                                    CommandIDs::renameRegion, CommandIDs::deleteRegion, CommandIDs::convertToMidiRegion,
+                                   CommandIDs::makeInstrumentFromRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
                                    CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
@@ -727,6 +728,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                           "Region", 0);
             info.setActive (engine.getTracks().drummer().isDrummerRegion (selection.getRegion()));
             break;
+        case CommandIDs::makeInstrumentFromRegion:
+        {
+            info.setInfo ("Make Instrument from Region", "Play the selected audio region's sound on the keyboard, on a new instrument track",
+                          "Region", 0);
+            const auto region = engine.getTracks().regions().getRegion (selection.getRegion());
+            info.setActive (selection.getRegions().size() == 1 && region.has_value() && ! region->isMidi);
+            break;
+        }
         case CommandIDs::deleteRegion:
             info.setInfo (selection.getRegions().size() > 1 ? "Delete Regions" : "Delete Region",
                           "Delete the selected regions", "Region", 0);
@@ -1038,6 +1047,17 @@ bool MainComponent::perform (const InvocationInfo& info)
             tracks.drummer().convertToMidiRegion (selection.getRegion());
             setBottomPanelVisible (true);
             bottomPanel.setTab (BottomPanel::Tab::editor);
+            break;
+
+        case CommandIDs::makeInstrumentFromRegion:
+            // The new track is selected, with its Sound tab showing: its
+            // keyboard plays the sound straight away.
+            if (const auto id = tracks.makeInstrumentFromRegion (selection.getRegion()); id != 0)
+            {
+                selection.selectTrack (id);
+                setBottomPanelVisible (true);
+                bottomPanel.setTab (BottomPanel::Tab::sound);
+            }
             break;
         case CommandIDs::deleteRegion:    tracks.regions().deleteRegions (selection.getRegions()); break;
 

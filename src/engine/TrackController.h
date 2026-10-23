@@ -86,11 +86,30 @@ public:
         Clean voice (a bass track: the Bass voice). One undo step. */
     TrackId addGuitarTrack (bool bass = false);
 
+    /** Adds an audio track for singing (New Track's "Vocals"): named "Vocals
+        N" with the vocals icon. For now it's a plain audio track; the icon
+        marks it so it can get vocal effects later. One undo step. */
+    TrackId addVocalTrack();
+
     /** Adds a Drummer track (New Track's "Drummer"), named "Drummer" with
         the drummer icon, playing the Rock drummer and kit, with one Drummer
         region over the song's sections (or eight bars). One undo step. See
         DrummerEditor. */
     TrackId addDrummerTrack();
+
+    /** Region > Make Instrument from Region: a new instrument track, after
+        the last one, that plays an audio region's sound across the keys (see
+        EffectsController::setOwnSound), named after the region. One undo
+        step. Returns the new track, or 0 for a MIDI region or one whose
+        recording can't be read. */
+    TrackId makeInstrumentFromRegion (RegionId);
+
+    /** New Track's "Sampler": a new instrument track, after the last one,
+        that plays an audio file across the keys (see
+        EffectsController::setOwnSound), named after the file. One undo step.
+        Returns the new track, or 0 (and nothing changes) if the file can't
+        be read. */
+    TrackId addSamplerTrack (const juce::File&);
 
     void deleteTrack (TrackId);
 
@@ -164,6 +183,8 @@ private:
     std::unique_ptr<DrummerEditor> drummerEditor;   // after effectsController and sectionEditor: it uses them
 
     TrackId createAudioTrack (const juce::String& name);
+    TrackId createInstrumentTrack();   // addInstrumentTrack without its undo step
+    TrackId createSamplerTrack (const juce::File&, double startSeconds, double lengthSeconds, const juce::String& name);   // likewise
 };
 
 } // namespace ikaros

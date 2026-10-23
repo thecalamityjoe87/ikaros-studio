@@ -195,7 +195,7 @@ void ArrangementView::Content::setRecording (TrackId track, double startBeat, do
 
 int ArrangementView::Content::getIdealHeight() const
 {
-    return owner.getTracksHeight() + juce::jmax (dropZoneHeight + dropZoneMargin * 2, size::addTrackHeight + addTrackGap * 2);
+    return owner.getTracksHeight() + dropZoneHeight + dropZoneMargin * 2;
 }
 
 void ArrangementView::Content::paint (juce::Graphics& g)
@@ -223,7 +223,8 @@ void ArrangementView::Content::resized()
         y += height;
     }
 
-    addTrackButton.setBounds (columnPadding, y + addTrackGap, columnRight - columnPadding, size::addTrackHeight);
+    // "Add track" lines up with the drop zone beside it: same top, same height.
+    addTrackButton.setBounds (columnPadding, y + dropZoneMargin, columnRight - columnPadding, dropZoneHeight);
     dropZone.setBounds (headerWidth + dropZoneMargin, y + dropZoneMargin,
                         getWidth() - headerWidth - dropZoneMargin * 2, dropZoneHeight);
 }

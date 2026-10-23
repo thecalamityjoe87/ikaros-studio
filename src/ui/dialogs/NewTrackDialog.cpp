@@ -1,4 +1,5 @@
 #include "ui/dialogs/NewTrackDialog.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/dialogs/MonitoringWarning.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -96,14 +97,20 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     audioCard = std::make_unique<Card> (Icon::mic, "Audio",
                                         "Record a microphone, or anything else plugged into your audio interface.",
                                         Family::audio);   // audio tracks are always the audio blue
+    vocalsCard = std::make_unique<Card> (Icon::vocals, "Vocals",
+                                         "Sing or rap into a microphone, or record a voice-over.",
+                                         Family::audio);
     guitarCard = std::make_unique<Card> (Icon::guitar, "Guitar or Bass",
                                          "Plug in a guitar or bass and play it through a pedalboard of effects.",
                                          Family::guitar);
     drummerCard = std::make_unique<Card> (Icon::drummer, "Drummer",
                                           "A drummer who plays along in the style you pick, as busy and loud as you like.",
                                           Family::drums);
+    samplerCard = std::make_unique<Card> (Icon::waveform, "Sampler",
+                                          "Play any sound on the keyboard: a sung note, a clap, a word.",
+                                          Family::synths);   // the colour sampler tracks get (see TrackColours.h)
 
-    for (auto kind : { Kind::instrument, Kind::audio, Kind::guitar, Kind::drummer })
+    for (auto kind : { Kind::instrument, Kind::audio, Kind::vocals, Kind::guitar, Kind::drummer, Kind::sampler })
     {
         auto& card = cardFor (kind);
         card.onClick = [this, kind] { choose (kind); };
@@ -111,7 +118,7 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
         addAndMakeVisible (card);
     }
 
-    // Audio and Guitar or Bass options
+    // Audio, Vocals and Guitar or Bass options
     inputs = engine.getTracks().inputs().getAudioInputs();
 
     for (int i = 0; i < (int) inputs.size(); ++i)
@@ -165,21 +172,27 @@ NewTrackDialog::Card& NewTrackDialog::cardFor (Kind kind) const
 {
     return kind == Kind::instrument ? *instrumentCard
          : kind == Kind::audio      ? *audioCard
+         : kind == Kind::vocals     ? *vocalsCard
          : kind == Kind::guitar     ? *guitarCard
-                                    : *drummerCard;
+         : kind == Kind::drummer    ? *drummerCard
+                                    : *samplerCard;
 }
 
 void NewTrackDialog::choose (Kind kind)
 {
     chosen = kind;
 
-    for (auto k : { Kind::instrument, Kind::audio, Kind::guitar, Kind::drummer })
+    for (auto k : { Kind::instrument, Kind::audio, Kind::vocals, Kind::guitar, Kind::drummer, Kind::sampler })
         cardFor (k).setToggleState (k == chosen, juce::dontSendNotification);
 
-    // Audio and guitar tracks record an input.
+    // Audio, vocals and guitar tracks record an input.
     inputBox.setVisible (recordsInput());
     monitorToggle.setVisible (recordsInput());
     playsBox.setVisible (chosen == Kind::guitar);
+
+    // A sampler needs its sound first: Create asks for it.
+    createButton.setText (chosen == Kind::sampler ? "Choose Sound..." : "Create");
+    resized();
     repaint();
 }
 
@@ -190,7 +203,9 @@ void NewTrackDialog::create()
 
     if (recordsInput())
     {
-        id = chosen == Kind::guitar ? tracks.addGuitarTrack (playsBox.getSelectedId() == 2) : tracks.addAudioTrack();
+        id = chosen == Kind::guitar ? tracks.addGuitarTrack (playsBox.getSelectedId() == 2)
+           : chosen == Kind::vocals ? tracks.addVocalTrack()
+                                    : tracks.addAudioTrack();
 
         if (id != 0)
         {
@@ -207,11 +222,50 @@ void NewTrackDialog::create()
     {
         id = tracks.addDrummerTrack();
     }
+    else if (chosen == Kind::sampler)
+    {
+        chooseSamplerSound();   // creates the track once there's a sound (the dialog stays open till then)
+        return;
+    }
     else
     {
         id = tracks.addInstrumentTrack();
     }
 
+    finish (id);
+}
+
+void NewTrackDialog::chooseSamplerSound()
+{
+    soundChooser = std::make_unique<juce::FileChooser> ("Choose a Sound to Play",
+                                                        juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                        "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+    soundChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                               [safeThis = SafePointer<NewTrackDialog> (this)] (const juce::FileChooser& fc)
+    {
+        // Cancelled: back to the dialog, nothing made.
+        if (safeThis == nullptr || ! fc.getResult().existsAsFile())
+            return;
+
+        const auto file = fc.getResult();
+
+        if (const auto id = safeThis->engine.getTracks().addSamplerTrack (file); id != 0)
+        {
+            safeThis->finish (id);
+            return;
+        }
+
+        AlertDialog::show (juce::MessageBoxOptions()
+                           .withTitle ("Couldn't use that sound")
+                           .withMessage ("\"" + file.getFileName() + "\" couldn't be read as audio. "
+                                         "Try a WAV, AIFF, FLAC, Ogg or MP3 file.")
+                           .withButton ("OK")
+                           .withAssociatedComponent (safeThis.getComponent()));
+    });
+}
+
+void NewTrackDialog::finish (TrackId id)
+{
     auto callback = onCreated;
     close();
 
@@ -239,11 +293,16 @@ bool NewTrackDialog::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress::escapeKey)            { close(); return true; }
     if (key == juce::KeyPress::returnKey)            { create(); return true; }
 
-    // Left and Right step through the cards.
-    if (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)
+    // Left and Right step through the cards, Up and Down move between the rows.
+    const int step = key == juce::KeyPress::leftKey  ? -1
+                   : key == juce::KeyPress::rightKey ?  1
+                   : key == juce::KeyPress::upKey    ? -columns
+                   : key == juce::KeyPress::downKey  ?  columns
+                                                     :  0;
+
+    if (step != 0)
     {
-        const auto index = juce::jlimit (0, 3, (int) chosen + (key == juce::KeyPress::leftKey ? -1 : 1));
-        choose (static_cast<Kind> (index));
+        choose (static_cast<Kind> (juce::jlimit (0, numKinds - 1, (int) chosen + step)));
         cardFor (chosen).grabKeyboardFocus();
         return true;
     }
@@ -295,16 +354,25 @@ void NewTrackDialog::resized()
     auto r = panel.reduced (28, 24);
     r.removeFromTop (26 + 18);
 
-    auto cards = r.removeFromTop (210);
-    const int gap = 16;
-    const int cardWidth = (cards.getWidth() - gap * 3) / 4;
-    instrumentCard->setBounds (cards.removeFromLeft (cardWidth));
-    cards.removeFromLeft (gap);
-    audioCard->setBounds (cards.removeFromLeft (cardWidth));
-    cards.removeFromLeft (gap);
-    guitarCard->setBounds (cards.removeFromLeft (cardWidth));
-    cards.removeFromLeft (gap);
-    drummerCard->setBounds (cards);   // (takes any spare pixel)
+    // Rows of three cards; a shorter last row is centered.
+    const int gap = 16, cardHeight = 200;
+    const int cardWidth = (r.getWidth() - gap * (columns - 1)) / columns;
+
+    for (int row = 0; row * columns < numKinds; ++row)
+    {
+        if (row > 0)
+            r.removeFromTop (gap);
+
+        auto cards = r.removeFromTop (cardHeight);
+        const int first = row * columns, count = juce::jmin (columns, numKinds - first);
+        cards = cards.withSizeKeepingCentre (cardWidth * count + gap * (count - 1), cardHeight);
+
+        for (int i = first; i < first + count; ++i)
+        {
+            cardFor (static_cast<Kind> (i)).setBounds (cards.removeFromLeft (cardWidth));
+            cards.removeFromLeft (gap);
+        }
+    }
 
     r.removeFromTop (16);
     audioOptionsArea = r.removeFromTop (30);
@@ -317,7 +385,7 @@ void NewTrackDialog::resized()
     monitorToggle.setBounds (options);
 
     auto buttons = panel.reduced (28, 24).removeFromBottom (36);
-    createButton.setBounds (buttons.removeFromRight (110));
+    createButton.setBounds (buttons.removeFromRight (chosen == Kind::sampler ? 140 : 110));
     buttons.removeFromRight (10);
     cancelButton.setBounds (buttons.removeFromRight (100));
 }

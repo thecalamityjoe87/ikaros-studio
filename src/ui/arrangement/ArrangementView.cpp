@@ -816,6 +816,13 @@ void ArrangementView::showRegionMenu()
         menu.addCommandItem (&commands, CommandIDs::convertToMidiRegion);
     }
 
+    // An audio region's sound can become an instrument.
+    if (auto region = engine.getTracks().regions().getRegion (selection.getRegion()); region.has_value() && ! region->isMidi)
+    {
+        menu.addSeparator();
+        menu.addCommandItem (&commands, CommandIDs::makeInstrumentFromRegion);
+    }
+
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::renameRegion);
     menu.addCommandItem (&commands, CommandIDs::deleteRegion);

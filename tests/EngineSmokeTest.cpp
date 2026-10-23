@@ -1653,6 +1653,138 @@ static void runEffectsSection (const juce::File& dir)
         check (! engine.canUndo(), "(and it's not an undo step there either)");
     }
 
+    std::cout << "Your own sound\n";
+    {
+        namespace te = tracktion;
+
+        // A held note (A3, 220 Hz), and a noise burst with no clear note.
+        auto writeWav = [rate] (const juce::File& f, double seconds, double hz)
+        {
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate)
+                                                                                        .withNumChannels (1)
+                                                                                        .withBitsPerSample (24));
+            juce::AudioBuffer<float> buffer (1, (int) (seconds * rate));
+            juce::Random random (7);
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                buffer.setSample (0, i, hz > 0.0 ? 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * hz * i / rate)
+                                                 : 0.5f * (random.nextFloat() * 2.0f - 1.0f));
+
+            return writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+        };
+
+        const auto sung = dir.getChildFile ("Sung Note.wav"), noise = dir.getChildFile ("Noise.wav"), longFile = dir.getChildFile ("Long.wav");
+        check (writeWav (sung, 2.0, 220.0) && writeWav (noise, 0.5, 0.0) && writeWav (longFile, 40.0, 220.0), "(wrote the test WAVs)");
+
+        // The sampler's one sound, as the session stores it.
+        auto soundOf = [&] (TrackId id)
+        {
+            if (auto* t = detail::findTrack (TestAudioDevice::getEditOf (engine), id))
+                if (auto* sampler = t->pluginList.findFirstPluginOfType<te::SamplerPlugin>(); sampler != nullptr && sampler->getNumSounds() == 1)
+                    return sampler->state.getChildWithName (te::IDs::SOUND);
+
+            return juce::ValueTree();
+        };
+
+        const auto inst = tracks.addInstrumentTrack();
+        checkUndoRoundTrip (engine, "Use Own Sound", [&] { check (effects.setOwnSound (inst, sung), "(own sound)"); });
+        auto info = tracks.getTrack (inst);
+        check (info.has_value() && effects.usesOwnSound (inst) && info->soundId == EffectsController::ownSoundId
+                 && info->name == "Sung Note" && info->category == "Sampler",
+               "an instrument track can play an audio file, named after it");
+        check ((int) soundOf (inst)[te::IDs::keyNote] == 57, "a 220 Hz note is on A3, so that key plays it as recorded");
+        check ((int) soundOf (inst)[te::IDs::minNote] == 0 && (int) soundOf (inst)[te::IDs::maxNote] == 127, "and every key plays it");
+        check (effects.getSoundControls (inst).size() == 5, "it has the Sound tab's five knobs");
+
+        check (effects.setOwnSound (inst, noise) && (int) soundOf (inst)[te::IDs::keyNote] == 60
+                 && tracks.getTrack (inst)->name == "Noise",
+               "a sound without a clear note is on middle C");
+
+        check (! effects.getOwnSoundPlaysToEnd (inst), "notes stop when their key is let go, at first");
+        checkUndoRoundTrip (engine, "Play to the End On", [&] { effects.setOwnSoundPlaysToEnd (inst, true); });
+        check (effects.getOwnSoundPlaysToEnd (inst) && (bool) soundOf (inst)[te::IDs::openEnded], "and can play to the end");
+
+        check (effects.setOwnSound (inst, longFile) && std::abs ((double) soundOf (inst)[te::IDs::length] - EffectsController::maxOwnSoundSeconds) < 0.001,
+               "a long file is cut to 30 seconds");
+
+        const auto audio = tracks.addAudioTrack();
+        const auto drummer = tracks.addDrummerTrack();
+        const auto soundBefore = tracks.getTrack (inst)->soundName;
+        check (! effects.setOwnSound (inst, dir.getChildFile ("Not There.wav")) && ! effects.setOwnSound (audio, sung)
+                 && ! effects.setOwnSound (drummer, sung) && tracks.getTrack (inst)->soundName == soundBefore,
+               "a file that can't be read, an audio track and a Drummer track are refused");
+
+        check (effects.setSound (inst, SoundLibrary::defaultSoundId) && ! effects.usesOwnSound (inst)
+                 && soundOf (inst) == juce::ValueTree(),
+               "picking a library sound replaces it");
+
+        // Make Instrument from Region: the part of the recording the region plays.
+        const auto imported = tracks.regions().importAudioFiles (audio, { sung.getFullPathName() }, 0.0);
+        check (imported.size() == 1, "(imported a region)");
+        const auto region = imported.empty() ? RegionId (0) : imported.front();
+        const auto bps = engine.getTransportState().bpm / 60.0;
+        tracks.regions().trimRegion (region, 0.5 * bps, 1.5 * bps);   // 0.5 s to 1.5 s
+        const auto regionName = tracks.regions().getRegion (region)->name;
+
+        TrackId made = 0;
+        checkUndoRoundTrip (engine, "Make Instrument from Region", [&] { made = tracks.makeInstrumentFromRegion (region); });
+        made = tracks.getTracks().back().id;
+        check (effects.usesOwnSound (made) && tracks.getTrack (made)->name == regionName
+                 && tracks.getTrack (made)->kind == TrackKind::instrument,
+               "an audio region can become a new instrument track, named after it");
+        check (std::abs ((double) soundOf (made)[te::IDs::startTime] - 0.5) < 0.01
+                 && std::abs ((double) soundOf (made)[te::IDs::length] - 1.0) < 0.01,
+               "playing just the part of the recording the region plays");
+
+        const auto midiTrack = tracks.addInstrumentTrack();
+        const auto midiRegion = tracks.regions().createChordRegion (midiTrack, 0.0);
+        check (tracks.makeInstrumentFromRegion (midiRegion) == 0, "a MIDI region can't");
+
+        // New Track's Sampler.
+        TrackId sampler = 0;
+        checkUndoRoundTrip (engine, "Add Sampler Track", [&] { sampler = tracks.addSamplerTrack (sung); });
+        sampler = tracks.getTracks().back().id;
+        check (effects.usesOwnSound (sampler) && tracks.getTrack (sampler)->name.startsWith ("Sung Note")
+                 && (int) soundOf (sampler)[te::IDs::keyNote] == 57,
+               "New Track's Sampler makes a track that plays the chosen file");
+
+        const auto trackCount = tracks.getTracks().size();
+        check (tracks.addSamplerTrack (dir.getChildFile ("Not There.wav")) == 0 && tracks.getTracks().size() == trackCount,
+               "and makes nothing from a file it can't read");
+
+        // The sound goes into the session: a copy of the file, found by a relative path.
+        effects.setOwnSound (inst, noise);
+        auto session = dir.getChildFile ("Own Sound");
+        check (engine.saveSessionAs (session), "(save)");
+        check (soundOf (inst)[te::IDs::source].toString().startsWith (juce::String (SessionBundle::audioFolder) + "/"),
+               "saving copies an own sound into the session");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+
+        bool allLoaded = true;
+
+        for (auto& t : tracks.getTracks())
+        {
+            if (t.soundId != EffectsController::ownSoundId)
+                continue;
+
+            auto* track = detail::findTrack (TestAudioDevice::getEditOf (engine), t.id);
+            auto* sampler = track != nullptr ? track->pluginList.findFirstPluginOfType<te::SamplerPlugin>() : nullptr;
+            const auto file = te::SourceFileReference::findFileFromString (*TestAudioDevice::getEditOf (engine),
+                                                                           soundOf (t.id)[te::IDs::source].toString());
+            allLoaded = allLoaded && sampler != nullptr && file.existsAsFile()
+                          && file.isAChildOf (engine.getWorkingCopyFolder()) && sampler->getSoundLength (0) > 0.0;
+        }
+
+        const auto reopened = tracks.getTracks();
+        check (allLoaded && std::count_if (reopened.begin(), reopened.end(),
+                                           [] (const TrackInfo& t) { return t.soundId == EffectsController::ownSoundId; }) == 3,
+               "and after reopening, every own sound plays from the session's own copy");
+    }
+
     device.reset();
 }
 
@@ -4896,6 +5028,15 @@ static void runAmpSection (const juce::File& dir)
         check (effects.addAmp (vocal) != 0 && effects.hasPedalboard (vocal) && effects.getAmp (vocal).voice == 0,
                "but one can be added (Clean), and then it has a pedalboard");
         tracks.deleteTrack (vocal);
+        pumpMessages();
+
+        TrackId vocals = 0;
+        checkUndoRoundTrip (engine, "Add Vocals Track", [&] { vocals = tracks.addVocalTrack(); });
+        const auto vocalsInfo = tracks.getTrack (vocals);
+        check (vocalsInfo.has_value() && vocalsInfo->name == "Vocals 1" && vocalsInfo->icon == "vocals"
+                 && vocalsInfo->kind == TrackKind::audio && ! effects.getAmp (vocals).exists && ! effects.hasPedalboard (vocals),
+               "a vocals track is an audio track called Vocals 1, with the vocals icon and no Amp");
+        tracks.deleteTrack (vocals);
         pumpMessages();
     }
 

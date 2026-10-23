@@ -6,6 +6,7 @@
 #include "engine/PortedPedals.h"
 #include "engine/AmpPlugin.h"
 #include "engine/PedalStyles.h"
+#include "engine/PitchDetector.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
@@ -741,6 +742,192 @@ void EffectsController::setSoundControl (TrackId id, int index, float value)
 
 //==============================================================================
 // The instrument
+namespace
+{
+    // A new instrument and the hidden plugins its knobs need, made before
+    // anything changes: if it can't be made, nothing does.
+    struct NewInstrument
+    {
+        te::Plugin::Ptr instrument, shaper, transpose;
+        juce::String name, category, icon, packName;
+    };
+
+    // The Sound tab's knobs, starting at their defaults.
+    void addKnobPlugins (te::Edit& edit, NewInstrument& made, const std::vector<Knob>& knobs)
+    {
+        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return isShaperControl (k.control); }))
+            made.shaper = createShaper (edit, knobs);
+
+        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return k.control == "tune"; }))
+            made.transpose = createTranspose (edit, knobs);
+    }
+
+    // Swaps the track's instrument (and its hidden knob plugins) for a new
+    // one, inside the current undo step, or with recordUndo false, not
+    // undoably at all.
+    void installInstrument (te::AudioTrack& t, const SoundLibrary& sounds, const juce::String& soundId,
+                            const NewInstrument& made, bool recordUndo)
+    {
+        auto& edit = t.edit;
+        made.instrument->state.setProperty (instrumentProp, true, nullptr);
+
+        // Without undo (a Drummer track switching to its downloaded kit, see
+        // DrummerEditor::updateKits), the plugins go in and out through the
+        // track's plugin list tree directly: Tracktion's own insertPlugin and
+        // removeFromParent always record undo actions.
+        auto* um = recordUndo ? &edit.getUndoManager() : nullptr;
+
+        auto removePlugin = [recordUndo] (te::Plugin* plugin)
+        {
+            if (recordUndo)
+                plugin->removeFromParent();
+            else
+                plugin->state.getParent().removeChild (plugin->state, nullptr);
+        };
+
+        auto insertPlugin = [recordUndo, &t] (const te::Plugin::Ptr& plugin, int index)
+        {
+            if (recordUndo)
+            {
+                t.pluginList.insertPlugin (plugin, index, nullptr);
+                return;
+            }
+
+            // In front of the plugin now at `index` (or at the end). The list
+            // notices the new child and takes the plugin it belongs to.
+            auto* before = juce::isPositiveAndBelow (index, t.pluginList.size()) ? t.pluginList[index] : nullptr;
+            t.pluginList.state.addChild (plugin->state, before != nullptr ? t.pluginList.state.indexOf (before->state) : -1, nullptr);
+        };
+
+        // Keep a name the user typed. The name is the app's if it's the one we
+        // last gave the track, or (older sessions, which didn't store that) the
+        // old sound's name or "Instrument N".
+        // (Renaming a track clears the stored name.)
+        const auto currentName = t.getName();
+        const bool nameIsAutomatic = t.state.hasProperty (autoNameProp)
+                                        ? currentName == t.state.getProperty (autoNameProp).toString()
+                                        : currentName == t.state.getProperty (soundNameProp).toString()
+                                            || currentName.startsWith ("Instrument ");
+
+        // Out with the old instrument and its hidden knob plugins...
+        for (auto* old : instrumentsOn (t))
+            removePlugin (old);
+
+        for (auto* old : soundShapingPluginsOn (t))
+            removePlugin (old);
+
+        // ...and in with the new: [transpose] instrument [shaper], then the effects.
+        insertPlugin (made.instrument, 0);
+
+        if (made.transpose != nullptr)
+            insertPlugin (made.transpose, 0);
+
+        if (made.shaper != nullptr)
+            insertPlugin (made.shaper, t.pluginList.indexOf (made.instrument.get()) + 1);
+        t.state.setProperty (soundIdProp, soundId, um);
+        t.state.setProperty (soundNameProp, made.name, um);
+        t.state.setProperty (categoryProp, made.category, um);
+        t.state.setProperty (soundIconProp, made.icon, um);
+        t.state.setProperty (packNameProp, made.packName, um);
+
+        // A Drummer track keeps its name ("Drummer"), whatever kit it plays. Its
+        // notes move to the new kit's keys; and a sound the user picks becomes
+        // the one it plays from now on (see DrummerEditor::updateKits).
+        if (isDrummerTrack (t))
+        {
+            moveDrumNotesToKit (t, sounds, um);
+
+            if (recordUndo)
+                t.state.setProperty (drummerKitProp, soundId, um);
+        }
+        else if (nameIsAutomatic)
+        {
+            // A second track with the same sound gets "Solo Violin 2", and so on.
+            const auto trackName = uniqueTrackName (edit, made.name, &t);
+            t.setName (trackName);
+            t.state.setProperty (autoNameProp, trackName, um);
+        }
+    }
+
+    // An own sound: Tracktion's sampler with one SOUND over every key, its
+    // recorded pitch on rootNote. (See EffectsController::setOwnSound.)
+    te::Plugin::Ptr createOwnSampler (te::Edit& edit, const juce::File& file, double startSeconds,
+                                      double lengthSeconds, const juce::String& name, int rootNote)
+    {
+        auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, te::SamplerPlugin::xmlTypeName);
+        state.setProperty (te::IDs::enabled, true, nullptr);   // see createShaper's comment
+        state.appendChild (te::createValueTree (te::IDs::SOUND,
+                                                te::IDs::source, file.getFullPathName(),
+                                                te::IDs::name, name,
+                                                te::IDs::startTime, startSeconds,
+                                                te::IDs::length, lengthSeconds,
+                                                te::IDs::keyNote, rootNote,
+                                                te::IDs::minNote, 0,
+                                                te::IDs::maxNote, 127,
+                                                te::IDs::gainDb, 0.0f,
+                                                te::IDs::pan, 0.0f,
+                                                te::IDs::openEnded, false),
+                           nullptr);
+
+        auto plugin = edit.getPluginCache().createNewPlugin (state);
+
+        // The sampler loads its sound on the next message-loop turn; load it now.
+        if (auto* sampler = dynamic_cast<te::SamplerPlugin*> (plugin.get()))
+            sampler->flushPendingUpdates();
+
+        return plugin;
+    }
+
+    // The note an own sound sounds like: the middle of the pitches the
+    // tuner's detector hears in its first few seconds, if it hears one in
+    // enough of them. Otherwise (a clap, a word, noise) middle C.
+    int detectRootNote (juce::AudioFormatReader& reader, double startSeconds, double lengthSeconds)
+    {
+        constexpr int middleC = 60;
+        constexpr double secondsLooked = 4.0;
+        const auto sampleRate = reader.sampleRate;
+
+        PitchDetector detector;
+        detector.prepare (sampleRate);
+        const int window = detector.getWindowSize();
+        const auto first = (juce::int64) (startSeconds * sampleRate);
+        const int numSamples = (int) (juce::jmin (lengthSeconds, secondsLooked) * sampleRate);
+
+        if (window <= 0 || numSamples < window)
+            return middleC;
+
+        // Mono: both channels added together.
+        juce::AudioBuffer<float> buffer ((int) juce::jlimit (1u, 2u, reader.numChannels), numSamples);
+        reader.read (&buffer, 0, numSamples, first, true, true);
+
+        if (buffer.getNumChannels() > 1)
+            buffer.addFrom (0, 0, buffer, 1, 0, numSamples);
+
+        std::vector<double> notes;
+        int windows = 0;
+
+        for (int pos = 0; pos + window <= numSamples; pos += window / 2, ++windows)
+            if (auto result = detector.detect (buffer.getReadPointer (0, pos), window))
+                notes.push_back (69.0 + 12.0 * std::log2 (result->frequency / 440.0));
+
+        // A sung or played note is heard in most of the sound; a hit or a
+        // word only here and there.
+        if (notes.empty() || (int) notes.size() * 3 < windows)
+            return middleC;
+
+        std::nth_element (notes.begin(), notes.begin() + (long) notes.size() / 2, notes.end());
+        return juce::jlimit (0, 127, juce::roundToInt (notes[notes.size() / 2]));
+    }
+
+    te::SamplerPlugin* ownSamplerOn (te::AudioTrack& t)
+    {
+        if (t.state.getProperty (soundIdProp).toString() != EffectsController::ownSoundId)
+            return nullptr;
+
+        return dynamic_cast<te::SamplerPlugin*> (sampledInstrumentOn (t));
+    }
+}
+
 bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool newUndoStep, bool recordUndo)
 {
     auto* edit = owner.getEdit();
@@ -750,131 +937,113 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
         return false;
 
     // Make the new instrument first: if it can't be made, nothing changes.
-    te::Plugin::Ptr instrument, shaper, transpose;
-    juce::String name, category, icon, packName;
+    NewInstrument made;
 
     if (auto* patch = SoundLibrary::findSynthPatch (soundId))
     {
-        instrument = createSynth (*edit, *patch);
-        name = patch->name;
-        category = patch->category;
+        made.instrument = createSynth (*edit, *patch);
+        made.name = patch->name;
+        made.category = patch->category;
     }
     else if (auto* sampled = owner.getSounds().findSampledInstrument (soundId))
     {
         const auto knobs = SoundLibrary::getKnobsFor (*sampled);
-        instrument = sampled->sfzFile.existsAsFile() ? createSfzInstrument (*edit, sampled->sfzFile, knobs)
-                                                     : createSampler (*edit, *sampled);
-
-        // The Sound tab's knobs, starting at their defaults.
-        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return isShaperControl (k.control); }))
-            shaper = createShaper (*edit, knobs);
-
-        if (std::any_of (knobs.begin(), knobs.end(), [] (const Knob& k) { return k.control == "tune"; }))
-            transpose = createTranspose (*edit, knobs);
-
-        name = sampled->info.name;
-        category = sampled->info.category;
-        icon = sampled->info.icon;
+        made.instrument = sampled->sfzFile.existsAsFile() ? createSfzInstrument (*edit, sampled->sfzFile, knobs)
+                                                          : createSampler (*edit, *sampled);
+        addKnobPlugins (*edit, made, knobs);
+        made.name = sampled->info.name;
+        made.category = sampled->info.category;
+        made.icon = sampled->info.icon;
 
         if (auto pack = owner.getSounds().findPack (sampled->info.packId))
-            packName = pack->name;
+            made.packName = pack->name;
     }
     else if (auto info = owner.getPlugins().findPlugin (soundId.fromFirstOccurrenceOf (thirdPartyPrefix, false, false)))
     {
         if (soundId.startsWith (thirdPartyPrefix) && info->isInstrument)
         {
-            instrument = createPlugin (*edit, soundId);
-            name = info->name;
-            category = "Plug-ins";
+            made.instrument = createPlugin (*edit, soundId);
+            made.name = info->name;
+            made.category = "Plug-ins";
         }
     }
 
-    if (instrument == nullptr)
+    if (made.instrument == nullptr)
         return false;
-
-    instrument->state.setProperty (instrumentProp, true, nullptr);
 
     if (newUndoStep && recordUndo)
         owner.beginUndoStep ("Change Sound");
 
-    // Without undo (a Drummer track switching to its downloaded kit, see
-    // DrummerEditor::updateKits), the plugins go in and out through the
-    // track's plugin list tree directly: Tracktion's own insertPlugin and
-    // removeFromParent always record undo actions.
-    auto* um = recordUndo ? &edit->getUndoManager() : nullptr;
-
-    auto removePlugin = [recordUndo] (te::Plugin* plugin)
-    {
-        if (recordUndo)
-            plugin->removeFromParent();
-        else
-            plugin->state.getParent().removeChild (plugin->state, nullptr);
-    };
-
-    auto insertPlugin = [recordUndo, t] (const te::Plugin::Ptr& plugin, int index)
-    {
-        if (recordUndo)
-        {
-            t->pluginList.insertPlugin (plugin, index, nullptr);
-            return;
-        }
-
-        // In front of the plugin now at `index` (or at the end). The list
-        // notices the new child and takes the plugin it belongs to.
-        auto* before = juce::isPositiveAndBelow (index, t->pluginList.size()) ? t->pluginList[index] : nullptr;
-        t->pluginList.state.addChild (plugin->state, before != nullptr ? t->pluginList.state.indexOf (before->state) : -1, nullptr);
-    };
-
-    // Keep a name the user typed. The name is the app's if it's the one we
-    // last gave the track, or (older sessions, which didn't store that) the
-    // old sound's name or "Instrument N".
-    // (Renaming a track clears the stored name.)
-    const auto currentName = t->getName();
-    const bool nameIsAutomatic = t->state.hasProperty (autoNameProp)
-                                    ? currentName == t->state.getProperty (autoNameProp).toString()
-                                    : currentName == t->state.getProperty (soundNameProp).toString()
-                                        || currentName.startsWith ("Instrument ");
-
-    // Out with the old instrument and its hidden knob plugins...
-    for (auto* old : instrumentsOn (*t))
-        removePlugin (old);
-
-    for (auto* old : soundShapingPluginsOn (*t))
-        removePlugin (old);
-
-    // ...and in with the new: [transpose] instrument [shaper], then the effects.
-    insertPlugin (instrument, 0);
-
-    if (transpose != nullptr)
-        insertPlugin (transpose, 0);
-
-    if (shaper != nullptr)
-        insertPlugin (shaper, t->pluginList.indexOf (instrument.get()) + 1);
-    t->state.setProperty (soundIdProp, soundId, um);
-    t->state.setProperty (soundNameProp, name, um);
-    t->state.setProperty (categoryProp, category, um);
-    t->state.setProperty (soundIconProp, icon, um);
-    t->state.setProperty (packNameProp, packName, um);
-
-    // A Drummer track keeps its name ("Drummer"), whatever kit it plays. Its
-    // notes move to the new kit's keys; and a sound the user picks becomes
-    // the one it plays from now on (see DrummerEditor::updateKits).
-    if (isDrummerTrack (*t))
-    {
-        moveDrumNotesToKit (*t, owner.getSounds(), um);
-
-        if (recordUndo)
-            t->state.setProperty (drummerKitProp, soundId, um);
-    }
-    else if (nameIsAutomatic)
-    {
-        // A second track with the same sound gets "Solo Violin 2", and so on.
-        const auto trackName = uniqueTrackName (*edit, name, t);
-        t->setName (trackName);
-        t->state.setProperty (autoNameProp, trackName, um);
-    }
-
+    installInstrument (*t, owner.getSounds(), soundId, made, recordUndo);
     return true;
+}
+
+bool EffectsController::setOwnSound (TrackId id, const juce::File& file, double startSeconds, double lengthSeconds,
+                                     const juce::String& name, bool newUndoStep)
+{
+    auto* edit = owner.getEdit();
+    auto* t = findTrack (edit, id);
+
+    if (t == nullptr || isAudioTrack (*t) || isDrummerTrack (*t))
+        return false;
+
+    auto& formats = owner.getTeEngine().getAudioFileFormatManager().readFormatManager;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+        return false;
+
+    const double fileSeconds = (double) reader->lengthInSamples / reader->sampleRate;
+    startSeconds = juce::jlimit (0.0, fileSeconds, startSeconds);
+    const double available = fileSeconds - startSeconds;
+    lengthSeconds = juce::jmin (lengthSeconds > 0.0 ? juce::jmin (lengthSeconds, available) : available, maxOwnSoundSeconds);
+
+    if (lengthSeconds <= 0.0)
+        return false;
+
+    NewInstrument made;
+    made.name = name.isNotEmpty() ? name : file.getFileNameWithoutExtension();
+    made.category = "Sampler";
+    made.instrument = createOwnSampler (*edit, file, startSeconds, lengthSeconds, made.name,
+                                        detectRootNote (*reader, startSeconds, lengthSeconds));
+    addKnobPlugins (*edit, made, SoundLibrary::getDefaultKnobs (made.category));
+
+    if (made.instrument == nullptr)
+        return false;
+
+    if (newUndoStep)
+        owner.beginUndoStep ("Use Own Sound");
+
+    installInstrument (*t, owner.getSounds(), ownSoundId, made, true);
+    return true;
+}
+
+bool EffectsController::usesOwnSound (TrackId id) const
+{
+    auto* t = findTrack (owner.getEdit(), id);
+    return t != nullptr && ownSamplerOn (*t) != nullptr;
+}
+
+void EffectsController::setOwnSoundPlaysToEnd (TrackId id, bool toEnd)
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+    {
+        if (auto* sampler = ownSamplerOn (*t); sampler != nullptr && sampler->getNumSounds() > 0
+                                                && sampler->isSoundOpenEnded (0) != toEnd)
+        {
+            owner.beginUndoStep (toEnd ? "Play to the End On" : "Play to the End Off");
+            sampler->setSoundOpenEnded (0, toEnd);
+        }
+    }
+}
+
+bool EffectsController::getOwnSoundPlaysToEnd (TrackId id) const
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+        if (auto* sampler = ownSamplerOn (*t); sampler != nullptr && sampler->getNumSounds() > 0)
+            return sampler->isSoundOpenEnded (0);
+
+    return false;
 }
 
 juce::String EffectsController::getSoundId (TrackId id) const

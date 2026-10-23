@@ -128,6 +128,19 @@ public:
     /** True for files Tracktion can read (WAV, AIFF, FLAC, Ogg...). */
     bool isSupportedAudioFile (const juce::File&) const;
 
+    /** The part of its recording an audio region plays: the file, and from
+        where in it for how long, in seconds (through Flex markers; a looped
+        region's first time round). A reversed region gives the part it
+        plays, the right way round. Nothing for MIDI regions, or if the file
+        can't be read. (For TrackController::makeInstrumentFromRegion.) */
+    struct SourceExcerpt
+    {
+        juce::File file;
+        double startSeconds = 0.0, lengthSeconds = 0.0;
+    };
+
+    std::optional<SourceExcerpt> getSourceExcerpt (RegionId) const;
+
     /** Adds audio files as regions, one after another from `beat`, in one
         undo step. Pass 0 (or an instrument track) to put them on a new audio
         track named after the first file. Returns the new regions. */

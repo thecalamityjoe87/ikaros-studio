@@ -151,9 +151,46 @@ std::optional<TrackInfo> TrackController::getTrack (TrackId id) const
 
 TrackId TrackController::addInstrumentTrack()
 {
-    auto* edit = owner.getEdit();
     owner.beginUndoStep ("Add Track");
+    return createInstrumentTrack();
+}
 
+TrackId TrackController::makeInstrumentFromRegion (RegionId regionId)
+{
+    const auto region = regionEditor->getRegion (regionId);
+    const auto excerpt = regionEditor->getSourceExcerpt (regionId);
+
+    if (! region.has_value() || ! excerpt.has_value())
+        return 0;
+
+    owner.beginUndoStep ("Make Instrument from Region");
+    return createSamplerTrack (excerpt->file, excerpt->startSeconds, excerpt->lengthSeconds, region->name);
+}
+
+TrackId TrackController::addSamplerTrack (const juce::File& file)
+{
+    owner.beginUndoStep ("Add Sampler Track");
+    return createSamplerTrack (file, 0.0, 0.0, {});
+}
+
+TrackId TrackController::createSamplerTrack (const juce::File& file, double startSeconds, double lengthSeconds,
+                                             const juce::String& name)
+{
+    const auto id = createInstrumentTrack();
+
+    if (id == 0 || ! effectsController->setOwnSound (id, file, startSeconds, lengthSeconds, name, false))
+    {
+        // The file can't be read: take the new track back out.
+        owner.getEdit()->getUndoManager().undoCurrentTransactionOnly();
+        return 0;
+    }
+
+    return id;
+}
+
+TrackId TrackController::createInstrumentTrack()
+{
+    auto* edit = owner.getEdit();
     auto existing = getUserTracks (*edit);
     te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
 
@@ -201,6 +238,23 @@ TrackId TrackController::addGuitarTrack (bool bass)
 
     // The Amp, as part of this undo step, on the voice for the icon set above.
     effectsController->addAmp (id, -1, false);
+    return id;
+}
+
+TrackId TrackController::addVocalTrack()
+{
+    int count = 1;
+
+    for (auto* t : getUserTracks (*owner.getEdit()))
+        if (isAudioTrack (*t) && t->state.getProperty (iconProp).toString() == "vocals")
+            ++count;
+
+    owner.beginUndoStep ("Add Vocals Track");
+    const auto id = createAudioTrack ("Vocals " + juce::String (count));
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        t->state.setProperty (iconProp, "vocals", &owner.getEdit()->getUndoManager());
+
     return id;
 }
 
