@@ -237,6 +237,13 @@ void RegionComponent::paint (juce::Graphics& g)
         if (showLoopIcon)
             nameArea.setRight (juce::jmin (nameArea.getRight(), (float) (getWidth() - loopCornerWidth)));   // clear of the loop handle
 
+        // A Drummer region has a small drummer before its name.
+        if (info.isDrummer && nameArea.getWidth() >= 30.0f)
+        {
+            icons::draw (g, Icon::drummer, nameArea.removeFromLeft (13.0f), label, 13.0f, 1.9f);
+            nameArea.removeFromLeft (4.0f);
+        }
+
         g.setColour (label);
         g.setFont (fonts::uiBold (textSize::xs));
         g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);

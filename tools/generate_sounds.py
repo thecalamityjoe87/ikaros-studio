@@ -337,6 +337,15 @@ def electronic_kit():
     }
 
 
+# The Electronic Kit is the one a Drummer track plays until its own kit is
+# downloaded, so it says where each drum piece is. It has no ride bell, so
+# that plays the ride.
+ELECTRONIC_KIT_DRUM_MAP = {
+    "kick": 36, "snare": 38, "hihatClosed": 42, "hihatPedal": 44, "hihatOpen": 46,
+    "crash": 49, "ride": 51, "rideBell": 51, "tomHigh": 48, "tomMid": 45, "tomFloor": 41,
+}
+
+
 def lofi_kit():
     return {
         36: ("Kick", crush(kick(low=44, high=110, decay=0.5, click=0.1))),
@@ -353,8 +362,10 @@ def lofi_kit():
 # ------------------------------------------------------------------------------
 # Writing instruments and loops
 
-def write_instrument(name, category, zones, one_shot=False):
-    """zones: list of (root, low, high, samples, file stem)."""
+def write_instrument(name, category, zones, one_shot=False, drum_map=None):
+    """zones: list of (root, low, high, samples, file stem). drum_map: for a
+    drum kit the Drummer can play, the key each of its drum pieces is on
+    (see SoundLibrary.h)."""
     folder = PACK / "Instruments" / name
     if folder.exists():
         shutil.rmtree(folder)
@@ -363,6 +374,8 @@ def write_instrument(name, category, zones, one_shot=False):
         file_name = write_audio(folder / stem, samples)
         entries.append({"file": file_name, "root": root, "low": low, "high": high})
     description = {"name": name, "category": category, "oneShot": one_shot, "samples": entries}
+    if drum_map:
+        description["drumMap"] = drum_map
     (folder / "instrument.json").write_text(json.dumps(description, indent=2) + "\n")
     print(f"  {name}: {len(entries)} samples")
 
@@ -500,7 +513,8 @@ def main():
                      pitched_zones([36, 48, 60, 72, 84], lambda n: piano_note(n, 3.0 if n < 60 else 2.2)))
     write_instrument("Electric Piano", "Keyboards",
                      pitched_zones([36, 48, 60, 72, 84], lambda n: electric_piano_note(n, 2.4)))
-    write_instrument("Electronic Kit", "Drums", drum_zones(electronic_kit()), one_shot=True)
+    write_instrument("Electronic Kit", "Drums", drum_zones(electronic_kit()), one_shot=True,
+                     drum_map=ELECTRONIC_KIT_DRUM_MAP)
     write_instrument("Lo-fi Kit", "Drums", drum_zones(lofi_kit()), one_shot=True)
     write_instrument("Picked Bass", "Bass",
                      pitched_zones([28, 40, 52], lambda n: karplus_strong(n, 2.0, brightness=0.3, decay=1.4, pluck_position=0.12, body=0.3)))

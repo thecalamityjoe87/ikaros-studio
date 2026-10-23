@@ -392,13 +392,17 @@ void RegionInspector::setRegion (std::optional<RegionInfo> r, Family family)
     region = std::move (r);
     const bool audio = region.has_value() && ! region->isMidi;
 
+    // A Drummer region's notes aren't edited by hand, so it has no grid
+    // or Quantize (its settings are in the Drummer editor beside this).
+    const bool drummer = region.has_value() && region->isDrummer;
+
     audioSection->setVisible (audio);
-    editingSection->setVisible (region.has_value());
+    editingSection->setVisible (region.has_value() && ! drummer);
 
     if (audio)
         audioControls->refresh (*region, family);
 
-    if (region.has_value())
+    if (region.has_value() && ! drummer)
         editingControls->refresh (*region);
 
     layoutSections();
@@ -467,6 +471,14 @@ void RegionInspector::paint (juce::Graphics& g)
         g.setFont (fonts::ui (textSize::md));
         g.drawFittedText ("Select a region to see its settings here.", getLocalBounds().reduced (padding),
                           juce::Justification::centred, 3);
+    }
+    else if (region->isDrummer)
+    {
+        g.setColour (theme().textSecondary);
+        g.setFont (fonts::ui (textSize::md));
+        g.drawFittedText ("The Drummer plays this region. To change its notes yourself, right-click it and "
+                          "choose Convert to MIDI Region.", getLocalBounds().reduced (padding),
+                          juce::Justification::centred, 4);
     }
 }
 

@@ -36,8 +36,12 @@ public:
         step. If the track still has the name the app gave it, it takes the
         sound's name; a name the user typed is kept. Returns false if the
         sound couldn't be loaded (nothing changes then).
-        With newUndoStep false, it's added to the current undo step. */
-    bool setSound (TrackId, const juce::String& soundId, bool newUndoStep = true);
+        With newUndoStep false, it's added to the current undo step; with
+        recordUndo false, it isn't undoable at all (for a Drummer track
+        changing to its downloaded kit, which isn't an edit).
+        A Drummer track keeps its name, and its notes move to the new kit's
+        keys (see DrummerEditor). */
+    bool setSound (TrackId, const juce::String& soundId, bool newUndoStep = true, bool recordUndo = true);
 
     /** The library sound the track uses (SoundInfo::id), or empty if unknown. */
     juce::String getSoundId (TrackId) const;

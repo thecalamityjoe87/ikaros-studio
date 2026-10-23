@@ -9,8 +9,9 @@ namespace ikaros
 //==============================================================================
 /**
     The "New Track" chooser, like GarageBand's: pick a Software Instrument,
-    Audio (a microphone or anything else plugged in) or Guitar or Bass (an
-    audio track with a pedalboard), then Create.
+    Audio (a microphone or anything else plugged in), Guitar or Bass (an
+    audio track with a pedalboard) or Drummer (a virtual drummer, see
+    DrummerEditor), then Create.
 
     Shown inside the main window over a dimmed background (see show()), so it
     looks the same on every OS. Deletes itself when closed.
@@ -36,9 +37,9 @@ private:
     std::function<void (TrackId)> onCreated;
 
     // The track types, in the cards' order (left to right).
-    enum class Kind { instrument, audio, guitar };
+    enum class Kind { instrument, audio, guitar, drummer };
 
-    std::unique_ptr<Card> instrumentCard, audioCard, guitarCard;
+    std::unique_ptr<Card> instrumentCard, audioCard, guitarCard, drummerCard;
     juce::ComboBox inputBox;
     juce::ComboBox playsBox;   // Guitar or Bass: which amp voice the track starts with
     juce::ToggleButton monitorToggle { "Hear the input while recording" };
@@ -51,11 +52,11 @@ private:
 
     void choose (Kind);
     Card& cardFor (Kind) const;
-    bool recordsInput() const noexcept     { return chosen != Kind::instrument; }   // audio and guitar tracks
+    bool recordsInput() const noexcept     { return chosen == Kind::audio || chosen == Kind::guitar; }
     void create();
     void close();
 
-    static constexpr int panelWidth = 800, panelHeight = 400;
+    static constexpr int panelWidth = 980, panelHeight = 400;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewTrackDialog)
 };

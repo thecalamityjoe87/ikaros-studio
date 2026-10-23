@@ -2,6 +2,7 @@
 #include "engine/SoundControls.h"
 #include "engine/AudioEngine.h"
 #include "engine/BuiltInEffects.h"
+#include "engine/DrummerHelpers.h"
 #include "engine/PortedPedals.h"
 #include "engine/AmpPlugin.h"
 #include "engine/PedalStyles.h"
@@ -226,6 +227,7 @@ namespace
     te::Plugin::Ptr createSampler (te::Edit& edit, const SoundLibrary::SampledInstrument& instrument)
     {
         auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, te::SamplerPlugin::xmlTypeName);
+        state.setProperty (te::IDs::enabled, true, nullptr);   // see createShaper's comment
 
         for (auto& zone : instrument.zones)
             state.appendChild (te::createValueTree (te::IDs::SOUND,
@@ -257,6 +259,7 @@ namespace
                                          const std::vector<SoundLibrary::KnobMapping>& knobs)
     {
         auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, SfzPlugin::xmlTypeName);
+        state.setProperty (te::IDs::enabled, true, nullptr);   // see createShaper's comment
         state.setProperty (SfzPlugin::sfzFileProp, sfzFile.getFullPathName(), nullptr);
 
         for (auto& k : knobs)
@@ -489,6 +492,12 @@ namespace
     {
         auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, SoundShaperPlugin::xmlTypeName);
 
+        // A plugin without "enabled" writes it (as on) through the undo
+        // manager when it's made. Setting it here gives the same state, and
+        // keeps a sound change that isn't an undo step out of the history
+        // (a Drummer track moving to its downloaded kit, see setSound).
+        state.setProperty (te::IDs::enabled, true, nullptr);
+
         for (auto& k : knobs)
             if (isShaperControl (k.control))
                 state.setProperty (juce::Identifier (k.control), k.defaultValue, nullptr);
@@ -499,6 +508,7 @@ namespace
     te::Plugin::Ptr createTranspose (te::Edit& edit, const std::vector<Knob>& knobs)
     {
         auto state = te::createValueTree (te::IDs::PLUGIN, te::IDs::type, TransposePlugin::xmlTypeName);
+        state.setProperty (te::IDs::enabled, true, nullptr);   // see createShaper's comment
 
         for (auto& k : knobs)
             if (k.control == "tune")
@@ -731,7 +741,7 @@ void EffectsController::setSoundControl (TrackId id, int index, float value)
 
 //==============================================================================
 // The instrument
-bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool newUndoStep)
+bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool newUndoStep, bool recordUndo)
 {
     auto* edit = owner.getEdit();
     auto* t = findTrack (edit, id);
@@ -784,10 +794,36 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
 
     instrument->state.setProperty (instrumentProp, true, nullptr);
 
-    if (newUndoStep)
+    if (newUndoStep && recordUndo)
         owner.beginUndoStep ("Change Sound");
 
-    auto* um = &edit->getUndoManager();
+    // Without undo (a Drummer track switching to its downloaded kit, see
+    // DrummerEditor::updateKits), the plugins go in and out through the
+    // track's plugin list tree directly: Tracktion's own insertPlugin and
+    // removeFromParent always record undo actions.
+    auto* um = recordUndo ? &edit->getUndoManager() : nullptr;
+
+    auto removePlugin = [recordUndo] (te::Plugin* plugin)
+    {
+        if (recordUndo)
+            plugin->removeFromParent();
+        else
+            plugin->state.getParent().removeChild (plugin->state, nullptr);
+    };
+
+    auto insertPlugin = [recordUndo, t] (const te::Plugin::Ptr& plugin, int index)
+    {
+        if (recordUndo)
+        {
+            t->pluginList.insertPlugin (plugin, index, nullptr);
+            return;
+        }
+
+        // In front of the plugin now at `index` (or at the end). The list
+        // notices the new child and takes the plugin it belongs to.
+        auto* before = juce::isPositiveAndBelow (index, t->pluginList.size()) ? t->pluginList[index] : nullptr;
+        t->pluginList.state.addChild (plugin->state, before != nullptr ? t->pluginList.state.indexOf (before->state) : -1, nullptr);
+    };
 
     // Keep a name the user typed. The name is the app's if it's the one we
     // last gave the track, or (older sessions, which didn't store that) the
@@ -801,26 +837,36 @@ bool EffectsController::setSound (TrackId id, const juce::String& soundId, bool 
 
     // Out with the old instrument and its hidden knob plugins...
     for (auto* old : instrumentsOn (*t))
-        old->removeFromParent();
+        removePlugin (old);
 
     for (auto* old : soundShapingPluginsOn (*t))
-        old->removeFromParent();
+        removePlugin (old);
 
     // ...and in with the new: [transpose] instrument [shaper], then the effects.
-    t->pluginList.insertPlugin (instrument, 0, nullptr);
+    insertPlugin (instrument, 0);
 
     if (transpose != nullptr)
-        t->pluginList.insertPlugin (transpose, 0, nullptr);
+        insertPlugin (transpose, 0);
 
     if (shaper != nullptr)
-        t->pluginList.insertPlugin (shaper, t->pluginList.indexOf (instrument.get()) + 1, nullptr);
+        insertPlugin (shaper, t->pluginList.indexOf (instrument.get()) + 1);
     t->state.setProperty (soundIdProp, soundId, um);
     t->state.setProperty (soundNameProp, name, um);
     t->state.setProperty (categoryProp, category, um);
     t->state.setProperty (soundIconProp, icon, um);
     t->state.setProperty (packNameProp, packName, um);
 
-    if (nameIsAutomatic)
+    // A Drummer track keeps its name ("Drummer"), whatever kit it plays. Its
+    // notes move to the new kit's keys; and a sound the user picks becomes
+    // the one it plays from now on (see DrummerEditor::updateKits).
+    if (isDrummerTrack (*t))
+    {
+        moveDrumNotesToKit (*t, owner.getSounds(), um);
+
+        if (recordUndo)
+            t->state.setProperty (drummerKitProp, soundId, um);
+    }
+    else if (nameIsAutomatic)
     {
         // A second track with the same sound gets "Solo Violin 2", and so on.
         const auto trackName = uniqueTrackName (*edit, name, t);

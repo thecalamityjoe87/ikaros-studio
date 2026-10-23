@@ -51,6 +51,31 @@ SOURCES = {
     "shinyguitar": ("https://github.com/sfzinstruments/karoryfer.shinyguitar", "Karoryfer.Shinyguitar.v1.002.zip"),
     "vsco2-ce": ("https://github.com/sgossner/VSCO-2-CE", "the SFZ branch"),
     "gregsullivan-epianos": ("https://github.com/sfzinstruments/GregSullivan.E-Pianos", "the master branch"),
+    "avl-red-zeppelin": ("https://www.bandshed.net/avldrumkits/",
+                         "RED_ZEPPELIN_2023_repack.zip from https://www.bandshed.net/sounds/AVLDrumkits_SFZ/"),
+}
+
+# AVL Drumkits come without a license file; this is the notice for the kit
+# (the license is linked from https://www.bandshed.net/avldrumkits/).
+AVL_LICENSE = """AVL Drumkits by Glen MacArthur (AV Linux, https://www.bandshed.net/avldrumkits/)
+
+The samples and the SFZ mapping are licensed under the Creative Commons
+Attribution-ShareAlike 3.0 Unported License (CC BY-SA 3.0):
+https://creativecommons.org/licenses/by-sa/3.0/legalcode
+
+You may share and adapt them for any purpose, including commercially, as
+long as you give credit and share your changes to the samples under the
+same license. Music you make with the kit is yours: as AVL Drumkits' page
+says, attribution is only required if you modify or fork the samples and
+library formats themselves.
+"""
+
+# Where the Drummer finds each drum piece on the Red Zeppelin kit (see
+# src/engine/SoundLibrary.h). It has one rack tom and a floor tom, so the
+# high and mid toms are both the rack tom.
+AVL_RED_ZEPPELIN_DRUM_MAP = {
+    "kick": 36, "snare": 38, "hihatClosed": 42, "hihatPedal": 44, "hihatOpen": 46,
+    "crash": 49, "ride": 51, "rideBell": 53, "tomHigh": 45, "tomMid": 45, "tomFloor": 41,
 }
 
 
@@ -108,7 +133,10 @@ PACKS = [
         "instruments": [
             {"name": "Rusty Kit", "icon": "drums", "sfz": "Programs/02-basic.sfz",
              "knobs": [knob("Tone", "tone", 0.5), knob("Kick Punch", "cc", 0.0, 74), knob("Snare Snap", "cc", 0.0, 83),
-                       knob("Crunch", "drive", 0.0), knob("Room", "room", 0.1)]},
+                       knob("Crunch", "drive", 0.0), knob("Room", "room", 0.1)],
+             # Its toms are the 14", 15" and 18" (47, 45, 43); 50 is a crash choke.
+             "drumMap": {"kick": 36, "snare": 38, "hihatClosed": 42, "hihatPedal": 44, "hihatOpen": 46,
+                         "crash": 49, "ride": 51, "rideBell": 53, "tomHigh": 47, "tomMid": 45, "tomFloor": 43}},
         ],
     },
     {
@@ -180,6 +208,21 @@ PACKS = [
             {"name": "Grand Piano", "icon": "piano", "sfz": "SalamanderGrandPianoV3.sfz",
              "knobs": [knob("Tone", "tone", 0.5), knob("Release", "cc", 0.0, 72), knob("Width", "width", 0.5),
                        knob("Room", "room", 0.2), knob("Pitch", "tune", 0.5)]},
+        ],
+    },
+    {
+        # The Drummer's kit (see src/engine/DrummerEditor.h). The samples are
+        # CC BY-SA 3.0, so the pack says so in its license and credits.
+        "id": "ikaros-studio.avl-red-zeppelin", "name": "Red Zeppelin Kit", "category": "Drums", "starter": False,
+        "source": "avl-red-zeppelin", "library": "RED_ZEPPELIN_2023_repack",
+        "description": "A vintage Ludwig rock kit with Zildjian and Sabian cymbals, from AVL Drumkits. Drummer tracks play it.",
+        "license": "CC-BY-SA-3.0", "licenseText": AVL_LICENSE,
+        "credits": [{"what": "Red Zeppelin drum kit samples (AVL Drumkits), CC BY-SA 3.0",
+                     "who": "Glen MacArthur (AV Linux)", "license": "CC-BY-SA-3.0",
+                     "url": "https://www.bandshed.net/avldrumkits/", "attributionRequired": True}],
+        "instruments": [
+            {"name": "Red Zeppelin Kit", "icon": "drums", "sfz": "Red_Zeppelin_2023_repack.sfz",
+             "drumMap": AVL_RED_ZEPPELIN_DRUM_MAP},
         ],
     },
 ]
@@ -269,6 +312,20 @@ def referenced_samples(program: Path, patches=None):
 
 def to_flac(src: Path, dst: Path):
     dst.parent.mkdir(parents=True, exist_ok=True)
+
+    if shutil.which("ffmpeg") is None:
+        # Without ffmpeg, the soundfile module (pip install soundfile) can
+        # do it, for samples that are 16-bit already (no dither needed).
+        try:
+            import soundfile
+        except ImportError:
+            sys.exit("Converting samples to FLAC needs ffmpeg, or the soundfile Python module")
+        if soundfile.info(str(src)).subtype != "PCM_16":
+            sys.exit(f"{src} isn't 16-bit: converting it needs ffmpeg (for the dither)")
+        data, rate = soundfile.read(str(src), dtype="int16", always_2d=True)
+        soundfile.write(str(dst), data, rate, format="FLAC", subtype="PCM_16")
+        return
+
     # 16-bit with triangular dither: smaller, and nothing anyone could hear in playback.
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(src),
                     "-af", "aresample=osf=s16:dither_method=triangular", "-c:a", "flac", "-compression_level", "8",
@@ -346,7 +403,8 @@ def build_pack(pack, work: Path):
         "Changes made for Ikaros Studio: only the samples these instruments play are included, WAV samples were\n"
         "converted to 16-bit FLAC, sample paths in the SFZ files were adjusted, and MIDI controllers were added\n"
         "for the Sound tab's knobs where the original had none.\n\n"
-        "Original license text:\n\n" + (lib_src / pack["licenseFile"]).read_text(encoding="utf-8", errors="replace"),
+        "Original license text:\n\n" + (pack["licenseText"] if "licenseText" in pack else
+                                          (lib_src / pack["licenseFile"]).read_text(encoding="utf-8", errors="replace")),
         encoding="utf-8")
 
     for inst in pack["instruments"]:
@@ -356,6 +414,8 @@ def build_pack(pack, work: Path):
                 "sfz": "../../Library/" + inst["sfz"]}
         if "knobs" in inst:
             info["knobs"] = inst["knobs"]
+        if "drumMap" in inst:
+            info["drumMap"] = inst["drumMap"]
         (folder / "instrument.json").write_text(json.dumps(info, indent=4) + "\n", encoding="utf-8")
 
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())

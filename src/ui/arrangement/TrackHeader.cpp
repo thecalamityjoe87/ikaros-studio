@@ -114,6 +114,17 @@ TrackHeader::TrackHeader (AudioEngine& e, Selection& s, const TrackInfo& t)
     clipLight.onClear = [this] { engine.getTracks().inputs().clearClipIndicator (info.id); };
     addChildComponent (clipLight);
 
+    // A Drummer track whose kit isn't downloaded yet offers it here.
+    downloadButton.setColours (IconButton::borderedColours);
+    downloadButton.setCornerRadius (size::radiusXs);
+    downloadButton.setIconSize (14.0f);
+    downloadButton.onClick = [this]
+    {
+        if (missingKitPack.isNotEmpty() && onDownloadPack)
+            onDownloadPack (missingKitPack);
+    };
+    addChildComponent (downloadButton);
+
     // Automation: opens the lane under the track.
     automationButton.onClick = [this]
     {
@@ -244,6 +255,15 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
 
     const bool wasAudio = monitorButton.isVisible();
     const bool hadClipLight = clipLight.isVisible();
+    const bool hadDownload = downloadButton.isVisible();
+
+    // Not in TrackInfo either: whether a Drummer track is waiting for its kit.
+    juce::String kitName;
+    missingKitPack = t.drummer ? engine.getTracks().drummer().getMissingKitPack (t.id, &kitName) : juce::String();
+    downloadButton.setVisible (missingKitPack.isNotEmpty());
+
+    if (missingKitPack.isNotEmpty())
+        downloadButton.setTooltip ("Download the " + kitName + " for this drummer (it plays the Electronic Kit until then)");
     monitorButton.setVisible (t.kind == TrackKind::audio);
     flexButton.setVisible (t.kind == TrackKind::audio);
     flexOn = engine.getTracks().flex().isFlexOn (t.id);   // not in TrackInfo: asked for here
@@ -251,7 +271,8 @@ void TrackHeader::update (const TrackInfo& t, bool isSelected)
     monitorButton.setToggleState (t.monitoring, juce::dontSendNotification);
     clipLight.setVisible (t.kind == TrackKind::audio && t.armed);
 
-    if (wasAudio != monitorButton.isVisible() || hadClipLight != clipLight.isVisible())
+    if (wasAudio != monitorButton.isVisible() || hadClipLight != clipLight.isVisible()
+         || hadDownload != downloadButton.isVisible())
         resized();
     updateAccessibleNames();
 
@@ -565,6 +586,12 @@ void TrackHeader::resized()
     if (flexButton.isVisible())
     {
         flexButton.setBounds (top.removeFromRight (flexWidth).withSizeKeepingCentre (flexWidth, flexHeight));
+        top.removeFromRight (8);
+    }
+
+    if (downloadButton.isVisible())
+    {
+        downloadButton.setBounds (top.removeFromRight (smallButtonWidth).withSizeKeepingCentre (smallButtonWidth, flexHeight));
         top.removeFromRight (8);
     }
 

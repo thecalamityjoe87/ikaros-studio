@@ -99,5 +99,18 @@
       "low": 56,
       "high": 56
     }
-  ]
+  ],
+  "drumMap": {
+    "kick": 36,
+    "snare": 38,
+    "hihatClosed": 42,
+    "hihatPedal": 44,
+    "hihatOpen": 46,
+    "crash": 49,
+    "ride": 51,
+    "rideBell": 51,
+    "tomHigh": 48,
+    "tomMid": 45,
+    "tomFloor": 41
+  }
 }

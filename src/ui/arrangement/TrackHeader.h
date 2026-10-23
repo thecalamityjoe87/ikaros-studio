@@ -22,7 +22,9 @@ namespace ikaros
     audio tracks) and the volume in dB; and Mute, Solo, Automation, the
     volume slider (with the track's level meter in it) and the pan knob.
     The pan knob sits right under the arm button, in one column.
-    Flex is Flex Time, for dragging the hits in a track's recordings.
+    Flex is Flex Time, for dragging the hits in a track's recordings. A
+    Drummer track waiting for its kit's sound pack has a download button
+    there instead (it plays the Ikaros Basics kit until then).
 
     While the track's automation shows, a picker under the bottom row says
     which setting's automation is drawn over the track's lane.
@@ -55,6 +57,10 @@ public:
     /** Right-click: the arrangement shows the track menu. */
     std::function<void()> onShowMenu;
 
+    /** The download button of a Drummer track whose kit isn't installed:
+        the pack to download (the owner opens Manage Sounds on it). */
+    std::function<void (const juce::String& packId)> onDownloadPack;
+
     /** The "Track Icon" menu: Automatic, then every icon to choose from.
         Shared with the arrangement's track menu. */
     static juce::PopupMenu createIconMenu (AudioEngine&, TrackId);
@@ -79,6 +85,8 @@ private:
     IconButton automationButton { "Automation", Icon::automation };
     IconButton flexButton { "Flex Time", std::nullopt, "Flex" };   // audio tracks only
     bool flexOn = false;
+    IconButton downloadButton { "Download the drum kit", Icon::download };   // Drummer tracks waiting for their kit
+    juce::String missingKitPack;
     MeterSlider volume;   // the track's level and volume in one, like the master's
     ClipLight clipLight;  // armed audio tracks: the input has clipped
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };

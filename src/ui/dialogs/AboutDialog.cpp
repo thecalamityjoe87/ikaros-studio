@@ -188,6 +188,14 @@ void AboutDialog::fillAcknowledgements()
         addBody (text, line);
     }
 
+    addHeading (text, "Drummer");
+    addBody (text, "The Drummer's grooves come from the Groove MIDI Dataset: drumming by ten drummers, recorded "
+                   "by Google's Magenta team. Groove MIDI Dataset, Google LLC (CC BY 4.0)\n"
+                   "    https://magenta.tensorflow.org/datasets/groove\n\n"
+                   "Its drum kit, the Red Zeppelin Kit, is from AVL Drumkits by Glen MacArthur (CC BY-SA 3.0), "
+                   "a separate download\n"
+                   "    https://www.bandshed.net/avldrumkits/\n");
+
     addHeading (text, "Software");
     addBody (text, "Tracktion Engine and JUCE (GPLv3)\n    https://github.com/Tracktion/tracktion_engine\n\n"
                    "sfizz, the SFZ sample player (BSD 2-Clause), with the libraries it includes\n    https://sfz.tools/sfizz\n\n"

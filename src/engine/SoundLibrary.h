@@ -55,6 +55,16 @@ namespace ikaros
       getDefaultKnobs). What each control does: see SoundShaperPlugin
       ("tune" moves notes by up to 12 semitones either way).
 
+      Optional for drum kits: "drumMap", the key each of the Drummer's drum
+      pieces is on (see DrumPiece in DrummerTypes.h), e.g.
+        "drumMap": { "kick": 36, "snare": 38, "hihatClosed": 42, "hihatPedal": 44,
+                     "hihatOpen": 46, "crash": 49, "ride": 51, "rideBell": 53,
+                     "tomHigh": 50, "tomMid": 47, "tomFloor": 43 }
+      Pieces it leaves out are on their General MIDI keys. A kit without a
+      drumMap gets one worked out from its samples' names (see
+      DrumKitMap.h), so most kits need nothing; a drumMap is for when the
+      names say too little.
+
       An instrument is identified by its pack's id and its folder name, so
       folder names stay the same from one pack version to the next.
 
@@ -177,6 +187,7 @@ public:
         juce::File sfzFile;            // set for an SFZ instrument (then zones is empty)
         std::vector<SampleZone> zones;
         bool oneShot = false;          // samples play to the end (drums) instead of stopping at key-up
+        std::vector<std::pair<juce::String, int>> drumMap;   // a kit's "drumMap": piece name, key (may be empty)
     };
 
     const SampledInstrument* findSampledInstrument (const juce::String& id) const;

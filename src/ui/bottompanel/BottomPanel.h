@@ -2,6 +2,7 @@
 
 #include "ui/widgets/IconButton.h"
 #include "ui/bottompanel/AudioEditor.h"
+#include "ui/bottompanel/DrummerPanel.h"
 #include "ui/bottompanel/EqView.h"
 #include "ui/bottompanel/MixerView.h"
 #include "ui/bottompanel/PedalboardView.h"
@@ -28,7 +29,8 @@ namespace ikaros
       Sound:  the track's knobs and on-screen keyboard (or the master's
               volume and meter)
       Editor: the selected region, close up: the piano roll for a MIDI
-              region, the audio editor for an audio region (tracks only)
+              region, the audio editor for an audio region, the Drummer
+              editor for a Drummer region (tracks only)
       EQ:     a 4-band EQ
       Pedals: an audio track's pedalboard (the segment only shows when the
               track has one: guitar and bass tracks do by default, other
@@ -174,6 +176,8 @@ private:
     PedalboardView pedalboard { engine, selection };
     PianoRoll pianoRoll { engine };
     AudioEditor audioEditor { engine };
+    DrummerPanel drummerPanel { engine };
+    juce::Viewport drummerViewport;   // scrolls the Drummer editor sideways when the panel is narrow (after it: goes first)
     MixerView mixer;
 
     // Effect settings, shown in place of the tab pages while open.
@@ -183,7 +187,8 @@ private:
     std::optional<TrackInfo> track;
     juce::String shownTitle;   // what the title shows now (see refreshTrack)
     std::optional<RegionInfo> editorRegion;   // the region the Editor shows
-    bool editingAudio = false;   // the Editor tab shows the audio editor (else the piano roll)
+    bool editingAudio = false;   // the Editor tab shows the audio editor (else the piano roll)...
+    bool editingDrummer = false; // ...or the Drummer editor
     juce::Rectangle<int> titleArea;       // in the header: the selected track's dot and name
     juce::Rectangle<int> tabsArea;        // the header's switch
     juce::Rectangle<int> headerDivider;   // between the switch and the title

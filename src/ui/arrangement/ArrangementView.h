@@ -139,6 +139,7 @@ public:
     std::function<void()> onSnapChanged;                          // so the owner can update menu ticks
     std::function<void()> onTempoLaneToggled;                     // the same, for Show Tempo Lane
     std::function<void()> onAddTrack;                             // the "Add track" row under the tracks
+    std::function<void (const juce::String&)> onDownloadPackRequested;   // a Drummer track's kit download button: the pack
 
     //==============================================================================
     void paint (juce::Graphics&) override;

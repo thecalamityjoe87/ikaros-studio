@@ -14,7 +14,8 @@ enum class Icon
     windowMinimise, windowMaximise, windowRestore, windowClose,
     power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
     plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash,
-    speaker, timer, package, flag, reset, zoomIn, zoomOut, tuningFork
+    speaker, timer, package, flag, reset, zoomIn, zoomOut, tuningFork,
+    drummer, hihat, cymbal, tom   // the Drummer: its track icon and its piece buttons
 };
 
 namespace icons

@@ -99,8 +99,11 @@ NewTrackDialog::NewTrackDialog (AudioEngine& e, std::function<void (TrackId)> cr
     guitarCard = std::make_unique<Card> (Icon::guitar, "Guitar or Bass",
                                          "Plug in a guitar or bass and play it through a pedalboard of effects.",
                                          Family::guitar);
+    drummerCard = std::make_unique<Card> (Icon::drummer, "Drummer",
+                                          "A drummer who plays along in the style you pick, as busy and loud as you like.",
+                                          Family::drums);
 
-    for (auto kind : { Kind::instrument, Kind::audio, Kind::guitar })
+    for (auto kind : { Kind::instrument, Kind::audio, Kind::guitar, Kind::drummer })
     {
         auto& card = cardFor (kind);
         card.onClick = [this, kind] { choose (kind); };
@@ -162,14 +165,15 @@ NewTrackDialog::Card& NewTrackDialog::cardFor (Kind kind) const
 {
     return kind == Kind::instrument ? *instrumentCard
          : kind == Kind::audio      ? *audioCard
-                                    : *guitarCard;
+         : kind == Kind::guitar     ? *guitarCard
+                                    : *drummerCard;
 }
 
 void NewTrackDialog::choose (Kind kind)
 {
     chosen = kind;
 
-    for (auto k : { Kind::instrument, Kind::audio, Kind::guitar })
+    for (auto k : { Kind::instrument, Kind::audio, Kind::guitar, Kind::drummer })
         cardFor (k).setToggleState (k == chosen, juce::dontSendNotification);
 
     // Audio and guitar tracks record an input.
@@ -198,6 +202,10 @@ void NewTrackDialog::create()
             if (monitorToggle.getToggleState())
                 tracks.inputs().setMonitoring (id, true);
         }
+    }
+    else if (chosen == Kind::drummer)
+    {
+        id = tracks.addDrummerTrack();
     }
     else
     {
@@ -234,7 +242,7 @@ bool NewTrackDialog::keyPressed (const juce::KeyPress& key)
     // Left and Right step through the cards.
     if (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)
     {
-        const auto index = juce::jlimit (0, 2, (int) chosen + (key == juce::KeyPress::leftKey ? -1 : 1));
+        const auto index = juce::jlimit (0, 3, (int) chosen + (key == juce::KeyPress::leftKey ? -1 : 1));
         choose (static_cast<Kind> (index));
         cardFor (chosen).grabKeyboardFocus();
         return true;
@@ -289,12 +297,14 @@ void NewTrackDialog::resized()
 
     auto cards = r.removeFromTop (210);
     const int gap = 16;
-    const int cardWidth = (cards.getWidth() - gap * 2) / 3;
+    const int cardWidth = (cards.getWidth() - gap * 3) / 4;
     instrumentCard->setBounds (cards.removeFromLeft (cardWidth));
     cards.removeFromLeft (gap);
     audioCard->setBounds (cards.removeFromLeft (cardWidth));
     cards.removeFromLeft (gap);
-    guitarCard->setBounds (cards);   // (takes any spare pixel)
+    guitarCard->setBounds (cards.removeFromLeft (cardWidth));
+    cards.removeFromLeft (gap);
+    drummerCard->setBounds (cards);   // (takes any spare pixel)
 
     r.removeFromTop (16);
     audioOptionsArea = r.removeFromTop (30);

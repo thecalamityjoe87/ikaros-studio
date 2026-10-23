@@ -38,6 +38,11 @@ void ArrangementView::Content::sync (const std::vector<TrackInfo>& tracks,
         {
             header = std::make_unique<TrackHeader> (owner.engine, owner.selection, t);
             header->onShowMenu = [this] { owner.showTrackMenu(); };
+            header->onDownloadPack = [this] (const juce::String& packId)
+            {
+                if (owner.onDownloadPackRequested)
+                    owner.onDownloadPackRequested (packId);
+            };
             addAndMakeVisible (*header);
         }
 

@@ -852,7 +852,26 @@ private:
 
                 return;
             }
+        }
 
+        // Drummer regions whose bars or markers this changed get their new
+        // notes now, in the same undo step as the edit, so listeners hear
+        // about both at once (see DrummerEditor::refresh). It reads the
+        // changes without taking them, and adds its own to `pending`.
+        if (edit != nullptr && owner.trackController != nullptr)
+        {
+            ModelChanges toCheck;
+
+            {
+                const juce::ScopedLock sl (pendingLock);
+                toCheck = pending;
+            }
+
+            owner.trackController->drummer().refresh (toCheck);
+        }
+
+        {
+            const juce::ScopedLock sl (pendingLock);
             std::swap (changes, pending);
         }
 
@@ -1175,7 +1194,10 @@ void AudioEngine::soundPacksChanged (const juce::String& packId)
     sounds->rescan();
 
     if (impl->edit != nullptr)
+    {
         pointInstrumentsAtLocalFiles (impl->edit->state, *sounds, packId);
+        trackController->drummer().updateKits (true);   // Drummer tracks waiting for this kit (an undo step each)
+    }
 
     notifyModelChanged();   // everything: the library, and tracks' missing-pack state
 }
@@ -1305,6 +1327,10 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     plugins->applyDisabledPlugins();   // before the plug-ins load
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
     prepareRegions (*impl->edit, *sounds);
+
+    // Drummer tracks play their own kit where it's installed, and the
+    // fallback where it isn't (not an edit: nothing goes in the undo history).
+    trackController->drummer().updateKits (false);
     impl->keepUnsavedAfterSetup = false;
     impl->openedView = impl->findView();
 

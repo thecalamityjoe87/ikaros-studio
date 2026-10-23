@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 9)
+set(IKAROS_MILESTONE 10)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -236,6 +236,15 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/JetBrainsMono-Bold.ttf
         resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
 
+# The Drummer's grooves (made from the Groove MIDI Dataset by
+# tools/build_grooves.py), compiled in like the fonts. A target of its own,
+# so the engine smoke test can link it too.
+juce_add_binary_data(IkarosDrummerData
+    HEADER_NAME "DrummerData.h"
+    NAMESPACE DrummerData
+    SOURCES
+        resources/drummer/grooves.json)
+
 # ------------------------------------------------------------------------------
 # Sources, grouped like the folders under src/. Headers are listed too so they
 # show up in IDE project trees (Visual Studio, Xcode).
@@ -259,6 +268,11 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/NoteEditor.h         src/engine/NoteEditor.cpp
     src/engine/TakeEditor.h         src/engine/TakeEditor.cpp
     src/engine/FlexEditor.h         src/engine/FlexEditor.cpp
+    src/engine/DrummerTypes.h       src/engine/DrummerHelpers.h
+    src/engine/GrooveLibrary.h      src/engine/GrooveLibrary.cpp
+    src/engine/DrummerEngine.h      src/engine/DrummerEngine.cpp
+    src/engine/DrummerEditor.h      src/engine/DrummerEditor.cpp
+    src/engine/DrumKitMap.h         src/engine/DrumKitMap.cpp
     src/engine/FlexHelpers.h
     src/engine/FlexMap.h
     src/engine/Quantize.h
@@ -401,6 +415,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/PedalView.h          src/ui/bottompanel/PedalView.cpp
     src/ui/bottompanel/PedalboardView.h     src/ui/bottompanel/PedalboardView.cpp
     src/ui/bottompanel/AmpView.h            src/ui/bottompanel/AmpView.cpp
+    src/ui/bottompanel/DrummerPanel.h       src/ui/bottompanel/DrummerPanel.cpp
     src/ui/bottompanel/MixerView.h          src/ui/bottompanel/MixerView.cpp
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
@@ -445,6 +460,7 @@ target_compile_definitions(IkarosStudio PRIVATE IKAROS_PACK_INDEX_URL="${IKAROS_
 target_link_libraries(IkarosStudio
     PRIVATE
         IkarosStudioBinaryData
+        IkarosDrummerData
         ikaros_gxplugins
         ikaros_guitarix
         ikaros_timestretch
@@ -571,6 +587,7 @@ if(IKAROS_BUILD_TESTS)
         ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
     target_link_libraries(IkarosEngineSmokeTest PRIVATE
+        IkarosDrummerData
         ikaros_gxplugins
         ikaros_guitarix
         ikaros_timestretch
@@ -599,7 +616,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,followtempo,tuner,pedals,amp)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,followtempo,tuner,pedals,amp,drummer)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -645,6 +662,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Pedals PROPERTIES LABELS "pedals")
     add_test(NAME EngineSmokeTest.Amp COMMAND IkarosEngineSmokeTest --only=amp)
     set_tests_properties(EngineSmokeTest.Amp PROPERTIES LABELS "amp")
+    add_test(NAME EngineSmokeTest.Drummer COMMAND IkarosEngineSmokeTest --only=drummer)
+    set_tests_properties(EngineSmokeTest.Drummer PROPERTIES LABELS "drummer")
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing
