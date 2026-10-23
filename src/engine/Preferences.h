@@ -51,6 +51,7 @@ namespace settings
     inline constexpr TextSetting userSoundsFolder    { "userSoundsFolder", "" };      // empty: Documents/Ikaros Studio/Sounds
     inline constexpr TextSetting pluginFolders       { "pluginFolders", "" };         // one folder per line, searched as well as the standard ones
     inline constexpr TextSetting disabledPluginFormats { "disabledPluginFormats", "" };   // one format name per line
+    inline constexpr TextSetting disabledPlugins     { "disabledPlugins", "" };       // one plug-in ID (PluginInfo::id) per line
     inline constexpr TextSetting freesoundKey        { "freesoundKey", "" };          // the user's own Freesound API key
 
     // Export (also the last choices made in the Export window)

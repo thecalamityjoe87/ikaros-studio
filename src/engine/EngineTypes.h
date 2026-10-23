@@ -264,6 +264,7 @@ struct PluginSlot
     bool isThirdParty = false;     // a VST3/AU/LV2 plug-in: it has its own window
     bool missing = false;          // a third-party plug-in that isn't installed (or failed to load),
                                    // or a sampled instrument whose sound pack isn't installed
+    bool disabledByUser = false;   // also set missing: a plug-in turned off in the Preferences, so it wasn't loaded
     juce::String missingPackId;    // for the latter: the pack it needs (see PackStore)
     juce::String missingPackName;  // and its name, as last seen (may be empty for older sessions)
     juce::String manufacturer;     // third-party plug-ins only
@@ -373,6 +374,7 @@ struct PluginInfo
     juce::String manufacturer;
     juce::String format;           // "VST3", "LV2" or "AudioUnit"
     bool isInstrument = false;
+    bool disabled = false;         // turned off by the user: not offered, and not used for new sounds or effects
 };
 
 // Progress of the background plug-in scan.

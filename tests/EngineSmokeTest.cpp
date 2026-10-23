@@ -7260,6 +7260,21 @@ int main (int argc, char* argv[])
             check (synth.has_value() && gain.has_value(), "VST3 instruments and effects are found");
             check (findNamed (plugins.getInstruments(), "Ikaros Test Synth", "LV2").has_value()
                      && findNamed (plugins.getEffects(), gainName, "LV2").has_value(), "LV2 ones too");
+            if (synth)
+            {
+                plugins.setPluginEnabled (synth->id, false);
+                auto installed = plugins.getInstalledPlugins();
+                auto off = std::find_if (installed.begin(), installed.end(), [&] (const PluginInfo& p) { return p.id == synth->id; });
+                check (off != installed.end() && off->disabled, "a turned-off plug-in stays in the installed list");
+                check (! findNamed (plugins.getInstruments(), "Ikaros Test Synth", "VST3").has_value()
+                         && ! plugins.findPlugin (synth->id).has_value(),
+                       "but is left out of the lists and can't be picked");
+                plugins.setPluginEnabled (synth->id, true);
+                check (findNamed (plugins.getInstruments(), "Ikaros Test Synth", "VST3").has_value()
+                         && plugins.findPlugin (synth->id).has_value(),
+                       "and comes back when turned on");
+            }
+
             check (status.failed.contains ("Ikaros Crash Test") && status.failed.contains ("Ikaros Hang Test"),
                    "a plug-in that crashes or hangs fails without taking the app down");
             check (plugins.getSkippedPlugins().size() == 2, "and is skipped from then on");
@@ -7316,6 +7331,66 @@ int main (int argc, char* argv[])
             check (chain.size() == 1 && chain[0].isThirdParty && ! chain[0].missing, "the plug-in effect comes back");
             check (instrument && instrument->isThirdParty && ! instrument->missing, "and the plug-in instrument");
             check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)), "and the plug-in's automation");
+        }
+
+        {
+            // Turning plug-ins off: the open session keeps them until it's opened again.
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "reopen to turn plug-ins off");
+            pumpMessages();
+            auto& plugins = engine.getPlugins();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            auto trackName = engine.getTracks().getTrack (t1)->name;
+
+            juce::String synthId, gainId;
+
+            for (auto& p : plugins.getInstalledPlugins())
+            {
+                if (p.format != "VST3") continue;
+                if (p.name == "Ikaros Test Synth") synthId = p.id;
+                if (p.name == gainName) gainId = p.id;
+            }
+
+            check (synthId.isNotEmpty() && gainId.isNotEmpty(), "(found the test plug-ins)");
+            check (plugins.getTracksUsing (synthId) == juce::StringArray (trackName)
+                     && plugins.getTracksUsing (gainId) == juce::StringArray (trackName),
+                   "the tracks using a plug-in are listed");
+
+            plugins.setPluginEnabled (synthId, false);
+            plugins.setPluginEnabled (gainId, false);
+            pumpMessages();
+            auto chain = engine.getTracks().effects().getEffectChain (t1);
+            auto instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && ! chain[0].missing && instrument && ! instrument->missing,
+                   "turning plug-ins off leaves the open session as it was");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "reopen with plug-ins turned off");
+            pumpMessages();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            auto chain = engine.getTracks().effects().getEffectChain (t1);
+            auto instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && chain[0].isThirdParty && chain[0].missing && chain[0].disabledByUser
+                     && instrument && instrument->missing && instrument->disabledByUser,
+                   "the next time, they show as disabled");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "and the plug-in's automation is kept");
+            check (engine.saveSessionAs (pluginSession), "a session with disabled plug-ins can be saved");
+
+            for (auto& p : engine.getPlugins().getInstalledPlugins())
+                if (p.disabled)
+                    engine.getPlugins().setPluginEnabled (p.id, true);
+
+            pumpMessages();
+            chain = engine.getTracks().effects().getEffectChain (t1);
+            instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && ! chain[0].missing && ! chain[0].disabledByUser
+                     && instrument && ! instrument->missing,
+                   "turning them back on loads them again at once");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "with the automation intact");
         }
 
         // Pretend the gain plug-in was uninstalled: rename it in the saved

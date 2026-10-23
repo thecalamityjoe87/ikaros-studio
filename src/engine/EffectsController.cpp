@@ -183,14 +183,16 @@ namespace
         return position < 0 ? latest : juce::jlimit (earliest, latest, position);
     }
 
-    PluginSlot makeSlot (te::Plugin& p)
+    PluginSlot makeSlot (te::Plugin& p, const PluginLibrary& library)
     {
         PluginSlot slot { p.itemID.getRawID(), getPluginTypeString (p), displayNameFor (p), p.isEnabled() };
 
         if (auto* external = dynamic_cast<te::ExternalPlugin*> (&p))
         {
             slot.isThirdParty = true;
-            slot.missing = external->isMissing() || external->isDisabled();
+            // A plug-in the user turned off doesn't load, so it's "missing" too.
+            slot.disabledByUser = external->getAudioPluginInstance() == nullptr && library.isBlocked (external->desc);
+            slot.missing = external->isMissing() || slot.disabledByUser;
             slot.manufacturer = external->getVendor();
 
             // A plug-in that never loaded still has the name it was saved with.
@@ -878,7 +880,7 @@ std::optional<PluginSlot> EffectsController::getInstrument (TrackId id) const
         {
             if (isInstrumentPlugin (*p))
             {
-                auto slot = makeSlot (*p);
+                auto slot = makeSlot (*p, owner.getPlugins());
 
                 // A sampled instrument is "missing" like an uninstalled
                 // plug-in when its sound pack isn't on this computer.
@@ -903,7 +905,7 @@ std::vector<PluginSlot> EffectsController::getEffectChain (TrackId id) const
 
     if (auto* list = findPluginList (owner.getEdit(), id))
         for (auto* p : effectsOn (*list))
-            result.push_back (makeSlot (*p));
+            result.push_back (makeSlot (*p, owner.getPlugins()));
 
     return result;
 }

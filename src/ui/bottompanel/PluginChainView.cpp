@@ -50,7 +50,8 @@ public:
         power.setTooltip (s.enabled ? "On (click to bypass)" : "Off (click to turn on)");
         more.setTitle (s.name + " options");
         more.setTooltip ("Replace or remove");
-        setTitle (s.name + (s.missing ? " (not installed)" : (s.enabled ? "" : " (off)")) + ", effect " + juce::String (i + 1));
+        setTitle (s.name + (s.disabledByUser ? " (disabled)" : s.missing ? " (not installed)" : (s.enabled ? "" : " (off)"))
+                    + ", effect " + juce::String (i + 1));
         setTooltip (s.missing ? describeMissing (s)
                   : s.isThirdParty ? juce::String ("Click to open its window. Drag to reorder.")
                                    : juce::String ("Click to show its settings. Drag to reorder."));
@@ -229,6 +230,10 @@ PluginChainView::PluginChainView (AudioEngine& e, Selection& s) : engine (e), se
 
 juce::String PluginChainView::describeMissing (const PluginSlot& slot)
 {
+    if (slot.disabledByUser)
+        return slot.name + " is turned off in Preferences, so it isn't loaded. "
+               "Its settings are kept; turn it back on under Sounds & Plug-ins.";
+
     return slot.name + " isn't installed on this computer (or couldn't be loaded). "
            "Its settings are kept, so it will work again once it's installed.";
 }
@@ -371,7 +376,7 @@ void PluginChainView::paint (juce::Graphics& g)
 
         g.setColour (instrument->missing ? theme().textSecondary : theme().text);
         g.setFont (fonts::ui (textSize::md));
-        g.drawText (instrument->name + (instrument->missing ? " (not installed)" : ""), r, juce::Justification::centredLeft, true);
+        g.drawText (instrument->name + (instrument->disabledByUser ? " (disabled)" : instrument->missing ? " (not installed)" : ""), r, juce::Justification::centredLeft, true);
     }
 
     // Insertion line while dragging an effect.

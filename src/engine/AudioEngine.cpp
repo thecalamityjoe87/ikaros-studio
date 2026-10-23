@@ -78,6 +78,15 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // Audio folder), whether or not it has been saved yet.
     std::function<juce::File()> getRecordingFolder;   // set by AudioEngine::Impl
 
+    // Plug-ins the user turned off in the Preferences aren't loaded (see
+    // PluginLibrary::applyDisabledPlugins); the track shows them as disabled.
+    std::function<bool (const juce::PluginDescription&)> isPluginBlocked;   // set by AudioEngine::Impl
+
+    bool shouldLoadPlugin (te::ExternalPlugin& p) override
+    {
+        return te::EngineBehaviour::shouldLoadPlugin (p) && ! (isPluginBlocked && isPluginBlocked (p.desc));
+    }
+
     juce::String getDefaultAudioRecordingFilePattern() override
     {
         auto folder = getRecordingFolder();
@@ -283,9 +292,14 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<AmpPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
-        dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
+        auto& behaviour = dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour());
+        behaviour.getRecordingFolder = [this]
         {
             return getAudioFolder();
+        };
+        behaviour.isPluginBlocked = [this] (const juce::PluginDescription& description)
+        {
+            return owner.plugins != nullptr && owner.plugins->isBlocked (description);
         };
 
         deleteStaleWorkFolders();
@@ -1258,6 +1272,7 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->bundleFile = bundle;
     impl->legacySessionFile = legacySessionFile;
     impl->untitled = bundle == juce::File();
+    plugins->applyDisabledPlugins();   // before the plug-ins load
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
     prepareRegions (*impl->edit, *sounds);
     impl->keepUnsavedAfterSetup = false;
@@ -2117,6 +2132,9 @@ void AudioEngine::preferenceChanged (const juce::String& key)
 
     if (all || key == settings::pluginFolders.key || key == settings::disabledPluginFormats.key)
         plugins->preferencesChanged();
+
+    if (all || key == settings::disabledPlugins.key)
+        plugins->disabledPluginsChanged();
 
     if ((all || key == settings::muteWhileTuning.key) && tuner->isActive())
         trackController->inputs().routeAudioInputs();
