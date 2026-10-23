@@ -34,6 +34,7 @@ public:
 
     /** For hints about recording to point at. */
     juce::Component& getRecordButton() noexcept     { return transport.getRecordButton(); }
+    LcdDisplay& getLcd() noexcept                   { return transport.getLcd(); }
 
     void paint (juce::Graphics&) override;
     void resized() override;

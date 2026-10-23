@@ -81,7 +81,7 @@ private:
     juce::PopupMenu macAppMenu;   // macOS: Settings... in the app menu
 
     // Panel layout. The sizes are kept while a panel is hidden, so it comes
-    // back the way it was. TODO: remember them between sessions.
+    // back the way it was. Each session remembers its own (see createViewState).
     ResizeHandle libraryResizer { ResizeHandle::Orientation::vertical };
     ResizeHandle bottomResizer { ResizeHandle::Orientation::horizontal };
     bool libraryVisible = true;
@@ -101,6 +101,13 @@ private:
     };
 
     std::optional<SessionStatus> shownSessionStatus;
+
+    // How the window looks for this session: panels, tabs, the LCD, zoom and
+    // scroll, the playhead and the selected track. The engine saves it with
+    // the session and remembers it when the session closes.
+    juce::ValueTree createViewState();
+    void applyViewState (const juce::ValueTree&);
+    juce::ValueTree appliedViewState;   // the opened session's view, once applied (see sessionChanged)
     void updateSessionStatus();
     void setLibraryVisible (bool);
     void setBottomPanelVisible (bool);

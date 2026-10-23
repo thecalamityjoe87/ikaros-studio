@@ -281,6 +281,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/AmpStyles.h          src/engine/AmpStyles.cpp
     src/engine/SessionBundle.h      src/engine/SessionBundle.cpp
     src/engine/SessionRecovery.h    src/engine/SessionRecovery.cpp
+    src/engine/SessionViews.h       src/engine/SessionViews.cpp
     src/engine/Autosaver.h          src/engine/Autosaver.cpp
     src/engine/SoundLibrary.h       src/engine/SoundLibrary.cpp
     src/engine/PackStore.h          src/engine/PackStore.cpp
@@ -628,6 +629,8 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Tempo PROPERTIES LABELS "tempo")
     add_test(NAME EngineSmokeTest.Sections COMMAND IkarosEngineSmokeTest --only=sections)
     set_tests_properties(EngineSmokeTest.Sections PROPERTIES LABELS "sections")
+    add_test(NAME EngineSmokeTest.Views COMMAND IkarosEngineSmokeTest --only=views)
+    set_tests_properties(EngineSmokeTest.Views PROPERTIES LABELS "views")
     add_test(NAME EngineSmokeTest.Stretch COMMAND IkarosEngineSmokeTest --only=stretch)
     set_tests_properties(EngineSmokeTest.Stretch PROPERTIES LABELS "stretch")
     add_test(NAME EngineSmokeTest.Flex COMMAND IkarosEngineSmokeTest --only=flex)

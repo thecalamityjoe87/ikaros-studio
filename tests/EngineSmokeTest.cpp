@@ -10,6 +10,7 @@
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
+#include "engine/SessionViews.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
 #include "engine/Tuner.h"
@@ -1651,6 +1652,88 @@ static void runEffectsSection (const juce::File& dir)
     }
 
     device.reset();
+}
+
+//==============================================================================
+// The window's view of a session (see SessionViews): saved in the bundle,
+// and remembered on this computer when the session closes, saved or not.
+static void runViewsSection (const juce::File& dir)
+{
+    const auto songA = dir.getChildFile ("Views A.iksession"), songB = dir.getChildFile ("Views B.iksession");
+
+    // The UI's view, reduced to one number.
+    int shown = 1;
+    const auto describe = [&shown]
+    {
+        juce::ValueTree v (SessionViews::viewType);
+        v.setProperty ("x", shown, nullptr);
+        return v;
+    };
+    const auto viewOf = [] (AudioEngine& e) { return (int) e.getViewState().getProperty ("x", 0); };
+
+    {
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        engine.newSession();
+        pumpMessages();
+        engine.setViewStateSource (describe);
+        const auto firstView = engine.getViewState();
+        check (firstView.getNumProperties() == 0, "a new session has no view of its own");
+        engine.newSession();
+        pumpMessages();
+        check (engine.getViewState() != firstView, "each new session has a view tree of its own");
+
+        check (engine.saveSessionAs (songA), "(save)");
+        check (juce::ZipFile (songA).getEntry (SessionBundle::viewEntry) != nullptr, "the bundle holds the view");
+
+        check (engine.openSession (songA), "(reopen)");
+        pumpMessages();
+        check (viewOf (engine) == 1, "a saved session opens with its view");
+
+        // Change the view only, and close: no save needed, nothing unsaved.
+        shown = 2;
+        check (! engine.hasUnsavedChanges(), "a view change isn't an unsaved change");
+        engine.newSession();
+        pumpMessages();
+        check (engine.openSession (songA), "(reopen)");
+        pumpMessages();
+        check (viewOf (engine) == 2, "a view changed without saving is remembered when the session closes");
+
+        // Save As: the copy has the view, the original keeps its own.
+        shown = 3;
+        check (engine.saveSessionAs (songB), "(save as)");
+        check (engine.openSession (songA), "(open the original)");
+        pumpMessages();
+        check (viewOf (engine) == 2, "Save As leaves the original's view alone");
+        check (engine.openSession (songB), "(open the copy)");
+        pumpMessages();
+        check (viewOf (engine) == 3, "Save As keeps the view under the new name");
+
+        engine.setViewStateSource (nullptr);
+    }
+
+    // Another computer (settings of its own) only has the view in the file.
+    {
+        AudioEngine engine { testSettings + "Other" };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        check (engine.openSession (songA), "(open elsewhere)");
+        pumpMessages();
+        check (viewOf (engine) == 1, "another computer opens the view saved in the file");
+
+        shown = 7;
+        engine.setViewStateSource (describe);
+        check (engine.saveSession(), "(save elsewhere)");
+        engine.setViewStateSource (nullptr);
+    }
+
+    // Back here: the file's view is newer than the one remembered.
+    {
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        check (engine.openSession (songA), "(open back here)");
+        pumpMessages();
+        check (viewOf (engine) == 7, "a newer view in the file wins over the one remembered");
+    }
 }
 
 static void runPreferencesSection (const juce::File& dir)
@@ -8143,6 +8226,9 @@ int main (int argc, char* argv[])
 
     if (runs ("sections"))
         runSectionsSection (dir);
+
+    if (runs ("views"))
+        runViewsSection (dir);
 
     if (runs ("stretch"))
         runStretchSection (dir);

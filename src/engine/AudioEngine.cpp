@@ -11,6 +11,7 @@
 #include "engine/FreesoundStore.h"
 #include "engine/LoopKey.h"
 #include "engine/RecordingGuard.h"
+#include "engine/SessionViews.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
@@ -394,6 +395,32 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     // A session just recovered after a crash: it stays "unsaved" when the
     // clean-slate timer below resets the changed flag.
     bool keepUnsavedAfterSetup = false;
+
+    // How the window looked (see AudioEngine.h): the UI's describer, the
+    // view the session was opened with, and the copies kept on this
+    // computer (next to the settings, so tests keep theirs apart).
+    std::function<juce::ValueTree()> viewSource;
+    juce::ValueTree openedView;
+    SessionViews views { engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Session Views.xml") };
+
+    juce::ValueTree describeView() const
+    {
+        return viewSource != nullptr ? viewSource() : juce::ValueTree();
+    }
+
+    void rememberView()
+    {
+        if (edit != nullptr && ! untitled)
+            views.set (bundleFile, describeView());
+    }
+
+    // The newer of the view in the session's working copy (unpacked from
+    // its bundle) and the one remembered for its file.
+    juce::ValueTree findView() const
+    {
+        auto inFile = SessionViews::readFile (workFolder.getChildFile (SessionBundle::viewEntry));
+        return SessionViews::newerOf (inFile, untitled ? juce::ValueTree() : views.get (bundleFile));
+    }
 
     //==============================================================================
     // Working copies live in the local data folder, one folder each.
@@ -1245,6 +1272,9 @@ static void prepareRegions (te::Edit& edit, const SoundLibrary& sounds)
 void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
                             const juce::File& bundle, const juce::File& legacySessionFile)
 {
+    // While the window still shows the old session, remember how it looked.
+    impl->rememberView();
+
     exporter->cancelAndWait();   // it renders the old Edit
 
     if (impl->edit != nullptr)
@@ -1276,6 +1306,12 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
     prepareRegions (*impl->edit, *sounds);
     impl->keepUnsavedAfterSetup = false;
+    impl->openedView = impl->findView();
+
+    // A new tree every time (an empty one if there's no view), so the UI
+    // can tell this session from the last one even when neither has a view.
+    if (! impl->openedView.isValid())
+        impl->openedView = juce::ValueTree (SessionViews::viewType);
 
     impl->autosaver.attach (*impl->edit, workFolder, [this]
     {
@@ -1533,6 +1569,16 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
     if (auto preview = getPreviewFile(); preview.existsAsFile())
         job->entries.push_back ({ SessionBundle::previewEntry, preview, false });
 
+    // How the window looks, so the session opens the same way anywhere.
+    if (auto view = impl->describeView(); view.isValid())
+    {
+        SessionViews::stamp (view);
+        auto viewFile = workFolder.getChildFile (SessionBundle::viewEntry);
+
+        if (SessionViews::writeFile (view, viewFile))
+            job->entries.push_back ({ SessionBundle::viewEntry, viewFile, true });
+    }
+
     for (auto& f : audioFiles)
         job->entries.push_back ({ juce::String (SessionBundle::audioFolder) + "/" + f.getFileName(), f, false });
 
@@ -1578,8 +1624,26 @@ bool AudioEngine::finishSave (SaveJob& job)
     impl->addToRecentSessions (job.bundle);
     impl->edit->resetChangedStatus();
     impl->autosaver.sessionSaved();   // the saved session has it all now
+    impl->rememberView();             // under its new name, after Save As
     notifyModelChanged();
     return true;
+}
+
+//==============================================================================
+// The window's view of the session
+void AudioEngine::setViewStateSource (std::function<juce::ValueTree()> source)
+{
+    impl->viewSource = std::move (source);
+}
+
+juce::ValueTree AudioEngine::getViewState() const
+{
+    return impl->openedView;
+}
+
+void AudioEngine::rememberViewState()
+{
+    impl->rememberView();
 }
 
 float AudioEngine::renderPeak (double startBeat, double endBeat)

@@ -7,6 +7,7 @@
 #include "ui/widgets/IconButton.h"
 #include "ui/theme/Tokens.h"
 #include <map>
+#include <optional>
 
 namespace ikaros
 {
@@ -110,6 +111,20 @@ public:
         room), where tracks are their normal height. */
     void resetZoom();
 
+    /** The zoom and where the view is scrolled to, so a session can open
+        the way it was left (see MainComponent's view state). */
+    struct ViewPosition
+    {
+        double pixelsPerBeat = 0.0;   // 0 = the starting zoom
+        double scrollBeats = 0.0;     // the beat at the left edge of the lanes
+        int scrollY = 0;              // how far down the tracks are scrolled
+    };
+
+    ViewPosition getViewPosition() const;
+
+    /** Before the view first has a size, it's kept until it does. */
+    void setViewPosition (const ViewPosition&);
+
     /** Shows the rename field on a region (scrolling it into view first). */
     void startRenaming (RegionId);
 
@@ -209,6 +224,7 @@ private:
     std::vector<TrackInfo> tracks;
     double contentEndBeat = 0.0;
     bool zoomInitialised = false;
+    std::optional<ViewPosition> pendingViewPosition;   // set before zoomInitialised: applied once it is
     double startPixelsPerBeat = 20.0;   // the first zoom (16 bars across): tracks are their normal height here and below
     float lastPlayheadX = 0.0f;
 

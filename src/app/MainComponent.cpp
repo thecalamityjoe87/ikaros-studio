@@ -11,6 +11,7 @@
 #include "ui/dialogs/SavingOverlay.h"
 #include "ui/pluginwindow/PluginWindow.h"
 #include "engine/PluginLibrary.h"
+#include "engine/SessionViews.h"
 #include "engine/TrackController.h"
 #include "engine/Tuner.h"
 #include "ui/theme/Tokens.h"
@@ -59,6 +60,10 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     library.onManageSoundsRequested = [this] { ManageSoundsDialog::show (*this, engine); };
     library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
+
+    // The engine asks for the window's view of the session when it saves
+    // and before the session is replaced.
+    engine.setViewStateSource ([this] { return createViewState(); });
 
     // Commands: register everything this component can do, make it the
     // default target, and let the command manager turn key presses into commands.
@@ -132,6 +137,10 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
 MainComponent::~MainComponent()
 {
+    // The app is quitting: the session opens like this next time.
+    engine.rememberViewState();
+    engine.setViewStateSource (nullptr);
+
     stopTimer();
     engine.removeListener (this);
     engine.getPreferences().removeListener (this);
@@ -273,6 +282,130 @@ void MainComponent::setBottomPanelVisible (bool shouldShow)
 }
 
 //==============================================================================
+// The session's view state. Each value is a property of a VIEW tree:
+//
+//   <VIEW libraryVisible="1" libraryWidth="280" bottomPanelVisible="1"
+//         bottomPanelHeight="320" bottomTab="editor" mixerShown="0"
+//         masterMode="0" inspectorVisible="1" lcdShowsTime="0"
+//         playheadBeats="16.0" selectedTrack="1042" pixelsPerBeat="24.5"
+//         scrollBeats="8.0" scrollY="0"/>
+//
+// A property that's missing (a view saved by an earlier version) leaves
+// that part of the window as it is.
+namespace view
+{
+    const juce::Identifier libraryVisible { "libraryVisible" }, libraryWidth { "libraryWidth" },
+                           bottomPanelVisible { "bottomPanelVisible" }, bottomPanelHeight { "bottomPanelHeight" },
+                           bottomTab { "bottomTab" }, mixerShown { "mixerShown" }, masterMode { "masterMode" },
+                           inspectorVisible { "inspectorVisible" }, lcdShowsTime { "lcdShowsTime" },
+                           playheadBeats { "playheadBeats" }, selectedTrack { "selectedTrack" },
+                           pixelsPerBeat { "pixelsPerBeat" }, scrollBeats { "scrollBeats" }, scrollY { "scrollY" };
+
+    // Tabs are stored by name, so reordering the enum doesn't change old views.
+    constexpr std::pair<BottomPanel::Tab, const char*> tabNames[] =
+    {
+        { BottomPanel::Tab::sound, "sound" }, { BottomPanel::Tab::editor, "editor" },
+        { BottomPanel::Tab::eq, "eq" },       { BottomPanel::Tab::pedals, "pedals" },
+    };
+}
+
+juce::ValueTree MainComponent::createViewState()
+{
+    juce::ValueTree v (SessionViews::viewType);
+
+    // nullptr: no undo manager. The view is never an undoable edit.
+    v.setProperty (view::libraryVisible, libraryVisible, nullptr);
+    v.setProperty (view::libraryWidth, libraryWidth, nullptr);
+    v.setProperty (view::bottomPanelVisible, bottomPanelVisible, nullptr);
+    v.setProperty (view::bottomPanelHeight, bottomPanelHeight, nullptr);
+
+    for (auto [tab, name] : view::tabNames)   // C++17 structured binding: unpacks each pair
+        if (tab == bottomPanel.getTab())
+            v.setProperty (view::bottomTab, juce::String (name), nullptr);
+
+    v.setProperty (view::mixerShown, bottomPanel.isMixerShown(), nullptr);
+    v.setProperty (view::masterMode, bottomPanel.isMasterMode(), nullptr);
+    v.setProperty (view::inspectorVisible, bottomPanel.isInspectorVisible(), nullptr);
+    v.setProperty (view::lcdShowsTime, toolbar.getLcd().isShowingTime(), nullptr);
+    v.setProperty (view::playheadBeats, engine.getTransportState().positionBeats, nullptr);
+
+    // juce::var holds signed 64-bit numbers; the ID fits either way.
+    v.setProperty (view::selectedTrack, (juce::int64) selection.getTrack(), nullptr);
+
+    const auto position = arrangement.getViewPosition();
+    v.setProperty (view::pixelsPerBeat, position.pixelsPerBeat, nullptr);
+    v.setProperty (view::scrollBeats, position.scrollBeats, nullptr);
+    v.setProperty (view::scrollY, position.scrollY, nullptr);
+    return v;
+}
+
+// A session without a view of its own (a new one, or one saved before
+// views were) starts like a new GarageBand project. The bottom panel's
+// height is the last one dragged, which is more a preference than a
+// session's own. No selectedTrack: the engine has picked the first one.
+static juce::ValueTree createDefaultViewState (int bottomPanelHeight)
+{
+    juce::ValueTree v (SessionViews::viewType);
+    v.setProperty (view::libraryVisible, true, nullptr);
+    v.setProperty (view::libraryWidth, size::sidebarWidth, nullptr);
+    v.setProperty (view::bottomPanelVisible, true, nullptr);
+    v.setProperty (view::bottomPanelHeight, bottomPanelHeight, nullptr);
+    v.setProperty (view::bottomTab, "sound", nullptr);
+    v.setProperty (view::mixerShown, false, nullptr);
+    v.setProperty (view::masterMode, false, nullptr);
+    v.setProperty (view::inspectorVisible, true, nullptr);
+    v.setProperty (view::lcdShowsTime, false, nullptr);
+    v.setProperty (view::playheadBeats, 0.0, nullptr);
+    v.setProperty (view::pixelsPerBeat, 0.0, nullptr);   // 0 = the starting zoom
+    v.setProperty (view::scrollBeats, 0.0, nullptr);
+    v.setProperty (view::scrollY, 0, nullptr);
+    return v;
+}
+
+void MainComponent::applyViewState (const juce::ValueTree& opened)
+{
+    const auto v = opened.getNumProperties() > 0
+                     ? opened
+                     : createDefaultViewState (engine.getPreferences().get (bottomPanelHeightSetting));
+
+    libraryVisible = v.getProperty (view::libraryVisible, libraryVisible);
+    libraryWidth = v.getProperty (view::libraryWidth, libraryWidth);
+    bottomPanelHeight = v.getProperty (view::bottomPanelHeight, bottomPanelHeight);
+    setBottomPanelVisible (v.getProperty (view::bottomPanelVisible, bottomPanelVisible));
+    resized();
+
+    if (const auto transport = engine.getTransportState(); ! transport.playing)
+        engine.setPositionBeats (v.getProperty (view::playheadBeats, transport.positionBeats));
+
+    // The track first: the bottom panel's tabs are about it (only a guitar
+    // track has the Pedals tab, say). A track that's gone keeps the first.
+    const auto track = (TrackId) (juce::int64) v.getProperty (view::selectedTrack, 0);
+    const auto tracks = engine.getTracks().getTracks();
+
+    if (std::any_of (tracks.begin(), tracks.end(), [track] (const TrackInfo& t) { return t.id == track; }))
+        selection.selectTrack (track);
+
+    bottomPanel.setInspectorVisible (v.getProperty (view::inspectorVisible, bottomPanel.isInspectorVisible()));
+    bottomPanel.setMasterMode (v.getProperty (view::masterMode, bottomPanel.isMasterMode()));
+
+    const auto tabName = v[view::bottomTab].toString();
+
+    for (auto [tab, name] : view::tabNames)
+        if (tabName == name)
+            bottomPanel.setTab (tab);   // after Master: Master has no Pedals tab
+
+    if (v.getProperty (view::mixerShown, false))
+        bottomPanel.setMixerShown (true);
+
+    toolbar.getLcd().setShowsTime (v.getProperty (view::lcdShowsTime, toolbar.getLcd().isShowingTime()));
+
+    if (v.hasProperty (view::pixelsPerBeat))
+        arrangement.setViewPosition ({ v[view::pixelsPerBeat], v[view::scrollBeats], v[view::scrollY] });
+
+    commands.commandStatusChanged();   // the View menu's tick marks
+}
+
+//==============================================================================
 void MainComponent::refreshAll()
 {
     arrangement.refresh();
@@ -295,6 +428,16 @@ void MainComponent::sessionChanged (const ModelChanges& changes)
     if (changes.session)
     {
         refreshAll();
+
+        // A session was just opened or created (a new view tree), not saved:
+        // show it the way it was left, or the default layout for a new one.
+        // ValueTree's != compares which tree it is, not what's in it.
+        if (auto opened = engine.getViewState(); opened != appliedViewState)
+        {
+            appliedViewState = opened;
+            applyViewState (opened);
+        }
+
         return;
     }
 

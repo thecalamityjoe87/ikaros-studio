@@ -701,7 +701,12 @@ void LcdDisplay::mouseUp (const juce::MouseEvent& e)
     if (tunerShown || ! e.mouseWasClicked() || ! positionArea.contains (e.getPosition()))
         return;
 
-    showsTime = ! showsTime;
+    setShowsTime (! showsTime);
+}
+
+void LcdDisplay::setShowsTime (bool shouldShowTime)
+{
+    showsTime = shouldShowTime;
     positionText = countInText.isNotEmpty() ? countInText : showsTime ? timeText : barText;
     repaint (positionArea);
 }
