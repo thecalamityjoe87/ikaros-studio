@@ -11,6 +11,7 @@
 #include "engine/FreesoundStore.h"
 #include "engine/LoopKey.h"
 #include "engine/RecordingGuard.h"
+#include "engine/SessionViews.h"
 #include "engine/SfzPlugin.h"
 #include "engine/SoundShaper.h"
 #include "engine/SoundLibrary.h"
@@ -77,6 +78,15 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // Takes are recorded straight into the session's working copy (its
     // Audio folder), whether or not it has been saved yet.
     std::function<juce::File()> getRecordingFolder;   // set by AudioEngine::Impl
+
+    // Plug-ins the user turned off in the Preferences aren't loaded (see
+    // PluginLibrary::applyDisabledPlugins); the track shows them as disabled.
+    std::function<bool (const juce::PluginDescription&)> isPluginBlocked;   // set by AudioEngine::Impl
+
+    bool shouldLoadPlugin (te::ExternalPlugin& p) override
+    {
+        return te::EngineBehaviour::shouldLoadPlugin (p) && ! (isPluginBlocked && isPluginBlocked (p.desc));
+    }
 
     juce::String getDefaultAudioRecordingFilePattern() override
     {
@@ -283,9 +293,14 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<AmpPlugin>();
 
         // The Engine owns the behaviour we gave it, so this cast always works.
-        dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour()).getRecordingFolder = [this]
+        auto& behaviour = dynamic_cast<IkarosEngineBehaviour&> (engine.getEngineBehaviour());
+        behaviour.getRecordingFolder = [this]
         {
             return getAudioFolder();
+        };
+        behaviour.isPluginBlocked = [this] (const juce::PluginDescription& description)
+        {
+            return owner.plugins != nullptr && owner.plugins->isBlocked (description);
         };
 
         deleteStaleWorkFolders();
@@ -380,6 +395,32 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     // A session just recovered after a crash: it stays "unsaved" when the
     // clean-slate timer below resets the changed flag.
     bool keepUnsavedAfterSetup = false;
+
+    // How the window looked (see AudioEngine.h): the UI's describer, the
+    // view the session was opened with, and the copies kept on this
+    // computer (next to the settings, so tests keep theirs apart).
+    std::function<juce::ValueTree()> viewSource;
+    juce::ValueTree openedView;
+    SessionViews views { engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Session Views.xml") };
+
+    juce::ValueTree describeView() const
+    {
+        return viewSource != nullptr ? viewSource() : juce::ValueTree();
+    }
+
+    void rememberView()
+    {
+        if (edit != nullptr && ! untitled)
+            views.set (bundleFile, describeView());
+    }
+
+    // The newer of the view in the session's working copy (unpacked from
+    // its bundle) and the one remembered for its file.
+    juce::ValueTree findView() const
+    {
+        auto inFile = SessionViews::readFile (workFolder.getChildFile (SessionBundle::viewEntry));
+        return SessionViews::newerOf (inFile, untitled ? juce::ValueTree() : views.get (bundleFile));
+    }
 
     //==============================================================================
     // Working copies live in the local data folder, one folder each.
@@ -838,12 +879,16 @@ private:
         if (edit != nullptr && ! userHasMadeChanges)
         {
             edit->getUndoManager().clearUndoHistory();
-            edit->resetChangedStatus();
+            edit->resetChangedStatus();   // (delivers the history's change message first)
+            autosaver.clearUserChanges();
             addPending ({});   // nothing to re-read, but Undo is no longer available
         }
 
         if (edit != nullptr && std::exchange (keepUnsavedAfterSetup, false))
+        {
             edit->markAsChanged();
+            autosaver.markUserChanges();
+        }
     }
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override
@@ -855,39 +900,88 @@ private:
 };
 
 //==============================================================================
-AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice)
-    : impl (std::make_unique<Impl> (*this, settingsName, openAudioDevice))
+AudioEngine::AudioEngine (const juce::String& settingsName, bool openAudioDevice, bool startNow)
 {
-    // The first run after an update takes the choices from Tracktion's settings file.
-    auto& storage = impl->engine.getPropertyStorage();
-    preferences = std::make_unique<Preferences> (storage.getAppPrefsFolder().getChildFile ("Preferences.xml"),
-                                                 &storage.getPropertiesFile());
+    // Starting is a list of stages, so the app can show each one while it
+    // runs (see runNextStartupStage). Each stage's work stays in the same
+    // order as it always was.
+    startupStages =
+    {
+        { "Starting audio engine...", [this, settingsName, openAudioDevice]
+        {
+            impl = std::make_unique<Impl> (*this, settingsName, openAudioDevice);
+        } },
 
-    recordingGuard = std::make_unique<RecordingGuard> (*this);
-    tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
-    liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
-    deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
-    sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
-    packStore = std::make_unique<PackStore> (*sounds);
-    packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
-    freesoundStore = std::make_unique<FreesoundStore> (*sounds, *preferences);
-    freesoundStore->onLibraryChanged = [this] { soundPacksChanged (FreesoundStore::packId); };
-    plugins = std::make_unique<PluginLibrary> (*this);
-    preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
-                                              impl->engine.getAudioFileFormatManager().readFormatManager);
-    trackController = std::make_unique<TrackController> (*this);
-    exporter = std::make_unique<SongExporter> (*this);
+        { "Loading preferences...", [this]
+        {
+            // The first run after an update takes the choices from Tracktion's settings file.
+            auto& storage = impl->engine.getPropertyStorage();
+            preferences = std::make_unique<Preferences> (storage.getAppPrefsFolder().getChildFile ("Preferences.xml"),
+                                                         &storage.getPropertiesFile());
+        } },
 
-    // Turning the tuner on or off mutes or unmutes the input it listens to.
-    tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+        { "Setting up audio inputs...", [this]
+        {
+            recordingGuard = std::make_unique<RecordingGuard> (*this);
+            tuner = std::make_unique<Tuner> (impl->engine.getDeviceManager().deviceManager);
+            liveWaveform = std::make_unique<LiveWaveform> (impl->engine.getDeviceManager().deviceManager);
+            deviceWatcher = std::make_unique<AudioDeviceWatcher> (*this);
+        } },
 
-    preferences->addListener (this);
-    newSession();
+        { "Loading sound library...", [this]
+        {
+            sounds = std::make_unique<SoundLibrary> (getUserSoundsFolder());
+            packStore = std::make_unique<PackStore> (*sounds);
+            packStore->onPacksChanged = [this] (const juce::String& packId) { soundPacksChanged (packId); };
+            freesoundStore = std::make_unique<FreesoundStore> (*sounds, *preferences);
+            freesoundStore->onLibraryChanged = [this] { soundPacksChanged (FreesoundStore::packId); };
+        } },
+
+        { "Loading plug-ins...", [this]
+        {
+            plugins = std::make_unique<PluginLibrary> (*this);
+            preview = std::make_unique<AudioPreview> (impl->engine.getDeviceManager().deviceManager,
+                                                      impl->engine.getAudioFileFormatManager().readFormatManager);
+            trackController = std::make_unique<TrackController> (*this);
+            exporter = std::make_unique<SongExporter> (*this);
+
+            // Turning the tuner on or off mutes or unmutes the input it listens to.
+            tuner->onActiveChanged = [this] { trackController->inputs().routeAudioInputs(); };
+
+            preferences->addListener (this);
+        } },
+
+        { "Preparing session...", [this] { newSession(); } },
+    };
+
+    if (startNow)
+        while (getNextStartupStage().has_value())
+            runNextStartupStage();
+}
+
+std::optional<AudioEngine::StartupStage> AudioEngine::getNextStartupStage() const
+{
+    if (nextStartupStage >= startupStages.size())
+        return std::nullopt;
+
+    return StartupStage { startupStages[nextStartupStage].description,
+                          (float) nextStartupStage / (float) startupStages.size() };
+}
+
+void AudioEngine::runNextStartupStage()
+{
+    if (nextStartupStage < startupStages.size())
+        startupStages[nextStartupStage++].run();
 }
 
 AudioEngine::~AudioEngine()
 {
-    preferences->removeListener (this);
+    // Nothing to undo if the app quit before the first start-up stage ran.
+    if (impl == nullptr)
+        return;
+
+    if (preferences != nullptr)
+        preferences->removeListener (this);
 
     // Order matters: stop playback and drop anything that references the Edit
     // before the Edit itself goes away, and the Edit before the Engine.
@@ -999,6 +1093,7 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
     // Building the template isn't something to undo.
     impl->edit->getUndoManager().clearUndoHistory();
     impl->edit->resetChangedStatus();
+    impl->autosaver.clearUserChanges();
     impl->startFromCleanSlateSoon();
     notifyModelChanged();
 }
@@ -1177,6 +1272,9 @@ static void prepareRegions (te::Edit& edit, const SoundLibrary& sounds)
 void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& workFolder,
                             const juce::File& bundle, const juce::File& legacySessionFile)
 {
+    // While the window still shows the old session, remember how it looked.
+    impl->rememberView();
+
     exporter->cancelAndWait();   // it renders the old Edit
 
     if (impl->edit != nullptr)
@@ -1204,9 +1302,16 @@ void AudioEngine::loadEdit (const juce::ValueTree& state, const juce::File& work
     impl->bundleFile = bundle;
     impl->legacySessionFile = legacySessionFile;
     impl->untitled = bundle == juce::File();
+    plugins->applyDisabledPlugins();   // before the plug-ins load
     impl->edit = impl->createEdit (state);   // the old Edit is destroyed here
     prepareRegions (*impl->edit, *sounds);
     impl->keepUnsavedAfterSetup = false;
+    impl->openedView = impl->findView();
+
+    // A new tree every time (an empty one if there's no view), so the UI
+    // can tell this session from the last one even when neither has a view.
+    if (! impl->openedView.isValid())
+        impl->openedView = juce::ValueTree (SessionViews::viewType);
 
     impl->autosaver.attach (*impl->edit, workFolder, [this]
     {
@@ -1464,6 +1569,16 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
     if (auto preview = getPreviewFile(); preview.existsAsFile())
         job->entries.push_back ({ SessionBundle::previewEntry, preview, false });
 
+    // How the window looks, so the session opens the same way anywhere.
+    if (auto view = impl->describeView(); view.isValid())
+    {
+        SessionViews::stamp (view);
+        auto viewFile = workFolder.getChildFile (SessionBundle::viewEntry);
+
+        if (SessionViews::writeFile (view, viewFile))
+            job->entries.push_back ({ SessionBundle::viewEntry, viewFile, true });
+    }
+
     for (auto& f : audioFiles)
         job->entries.push_back ({ juce::String (SessionBundle::audioFolder) + "/" + f.getFileName(), f, false });
 
@@ -1509,8 +1624,26 @@ bool AudioEngine::finishSave (SaveJob& job)
     impl->addToRecentSessions (job.bundle);
     impl->edit->resetChangedStatus();
     impl->autosaver.sessionSaved();   // the saved session has it all now
+    impl->rememberView();             // under its new name, after Save As
     notifyModelChanged();
     return true;
+}
+
+//==============================================================================
+// The window's view of the session
+void AudioEngine::setViewStateSource (std::function<juce::ValueTree()> source)
+{
+    impl->viewSource = std::move (source);
+}
+
+juce::ValueTree AudioEngine::getViewState() const
+{
+    return impl->openedView;
+}
+
+void AudioEngine::rememberViewState()
+{
+    impl->rememberView();
 }
 
 float AudioEngine::renderPeak (double startBeat, double endBeat)
@@ -1766,6 +1899,7 @@ bool AudioEngine::recoverSession (const RecoverableSession& session)
     impl->startFromCleanSlateSoon();
     impl->keepUnsavedAfterSetup = true;
     impl->edit->markAsChanged();
+    impl->autosaver.markUserChanges();
 
     // A fresh recovery copy with the takes in it (this also replaces the old
     // Recovery.json, takes and all).
@@ -1793,7 +1927,7 @@ void AudioEngine::setAutosaveTiming (int quietMs, int minIntervalMs, int maxWait
 
 bool AudioEngine::hasUnsavedChanges() const
 {
-    return impl->edit != nullptr && impl->edit->hasChangedSinceSaved();
+    return impl->edit != nullptr && impl->edit->hasChangedSinceSaved() && impl->autosaver.hasUserChanges();
 }
 
 void AudioEngine::notifyModelChanged (const ModelChanges& changes)
@@ -2062,6 +2196,9 @@ void AudioEngine::preferenceChanged (const juce::String& key)
 
     if (all || key == settings::pluginFolders.key || key == settings::disabledPluginFormats.key)
         plugins->preferencesChanged();
+
+    if (all || key == settings::disabledPlugins.key)
+        plugins->disabledPluginsChanged();
 
     if ((all || key == settings::muteWhileTuning.key) && tuner->isActive())
         trackController->inputs().routeAudioInputs();

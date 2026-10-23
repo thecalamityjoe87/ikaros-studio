@@ -8,7 +8,10 @@
 #include "engine/TempoMap.h"
 #include <juce_events/juce_events.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 // Forward declarations only: UI code that includes this header can't reach
 // Tracktion types, which keeps the "only src/engine touches te::" rule enforced
@@ -79,8 +82,32 @@ public:
         plug-in list...). Tests use their own, so they don't touch the app's.
         Tests that drive a TestAudioDevice pass openAudioDevice = false, so
         the computer's own audio device is never opened. */
-    explicit AudioEngine (const juce::String& settingsName = "IkarosStudio", bool openAudioDevice = true);
+    /** settingsName picks where Tracktion keeps its settings (devices, the
+        plug-in list...). Tests use their own, so they don't touch the app's.
+        Tests that drive a TestAudioDevice pass openAudioDevice = false, so
+        the computer's own audio device is never opened.
+
+        Starting takes a moment. Normally the constructor does all of it. With
+        startNow = false it does nothing, and the caller runs the stages one
+        at a time (see below), which lets the app show what's loading. */
+    explicit AudioEngine (const juce::String& settingsName = "IkarosStudio", bool openAudioDevice = true,
+                          bool startNow = true);
     ~AudioEngine();
+
+    /** One part of starting the engine, like "Loading sound library...". */
+    struct StartupStage
+    {
+        juce::String description;
+        float fractionDone;   // 0 to 1: how much of the start-up is done before this stage
+    };
+
+    /** The stage that runs next, or nothing once the engine has started.
+        Only used with startNow = false. */
+    std::optional<StartupStage> getNextStartupStage() const;
+
+    /** Runs that stage. Call it again for each following stage, and don't use
+        the engine for anything else until getNextStartupStage() is empty. */
+    void runNextStartupStage();
 
     //==============================================================================
     // Sessions ("Sessions" in the UI). A saved session is one file, a
@@ -161,6 +188,26 @@ public:
     juce::File getSessionFile() const;
     juce::String getSessionName() const;
     bool hasUnsavedChanges() const;
+
+    //==============================================================================
+    // How the window looked for the session (panels, tabs, zoom, playhead...),
+    // as a VIEW tree the UI builds and reads (see SessionViews). The engine
+    // doesn't look inside it. It's saved in the bundle with the session, and
+    // also remembered on this computer whenever the session closes, saved or
+    // not. Neither ever counts as an unsaved change.
+
+    /** The UI's function that describes the window as it is now. The engine
+        calls it when saving and when the session is about to be replaced. */
+    void setViewStateSource (std::function<juce::ValueTree()>);
+
+    /** The view the current session was opened with: the newer of the one in
+        its file and the one remembered here. For a new session, a VIEW with
+        nothing in it. A different tree for every session opened. */
+    juce::ValueTree getViewState() const;
+
+    /** Remembers the current session's view now (the app is quitting, say).
+        Does nothing while the session is untitled. */
+    void rememberViewState();
 
     //==============================================================================
     // Crash recovery (see Autosaver and SessionRecovery). A few seconds after
@@ -469,6 +516,15 @@ private:
 
     struct Impl;                                // Tracktion-typed members live in the .cpp
     std::unique_ptr<Impl> impl;
+
+    // The start-up stages (built in the constructor), and which runs next.
+    struct StartupStageWork
+    {
+        juce::String description;
+        std::function<void()> run;
+    };
+    std::vector<StartupStageWork> startupStages;
+    size_t nextStartupStage = 0;
 
     // Declared after impl, so they're destroyed before it (members are
     // destroyed in reverse order), while Tracktion's Engine still exists.

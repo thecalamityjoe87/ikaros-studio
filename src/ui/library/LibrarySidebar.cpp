@@ -33,6 +33,7 @@ namespace
         { "Brass",       "Brass" },
         { "Loops",       "Loops" },
         { "Audio Files", "Audio" },
+        { "Plug-ins",    "Plug-ins" },
     };
 
     constexpr int tileColumns = 4, tileGap = 6;
@@ -72,7 +73,8 @@ public:
     {
         setTitle (n);
         setTooltip (n == "Loops" ? juce::String ("Browse loops")
-                                 : n == "Audio Files" ? juce::String ("Audio files on this computer") : n);
+                                 : n == "Audio Files" ? juce::String ("Audio files on this computer")
+                                 : n == "Plug-ins" ? juce::String ("Plug-in instruments and effects") : n);
         setMouseClickGrabsKeyboardFocus (false);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
@@ -136,7 +138,7 @@ public:
 };
 
 //==============================================================================
-// One line of the list: a sound, a pack to download, a plug-in, a file, a
+// One line of the list: a sound, a pack to download, a plug-in instrument, a file, a
 // folder or a small heading.
 class LibrarySidebar::Row  : public juce::Button
 {
@@ -155,7 +157,6 @@ public:
             case Item::Kind::sound:
             case Item::Kind::pluginInstrument: setTooltip ("Click to use " + i.name + " on the selected track, or drag it onto a track"); break;
             case Item::Kind::pack:             setTooltip ("Download " + i.name + " (" + i.detail + ")"); break;
-            case Item::Kind::pluginEffect:     setTooltip ("Add " + i.name + " to the selected track"); break;
             case Item::Kind::file:             setTooltip ("Click to listen. Drag onto the timeline to use it."); break;
             case Item::Kind::folder:           setTooltip ("Open " + i.name); break;
             case Item::Kind::label:            break;
@@ -243,15 +244,11 @@ public:
 
         auto content = getLocalBounds().reduced (size::libraryRowInset, 0);
 
-        // Folders and plug-in effects have a small icon in front.
+        // Folders have a small icon in front.
         switch (item.kind)
         {
             case Item::Kind::folder:
                 icons::draw (g, Icon::folder, content.removeFromLeft (16).toFloat(), theme().textSecondary, 15.0f);
-                content.removeFromLeft (8);
-                break;
-            case Item::Kind::pluginEffect:
-                icons::draw (g, Icon::plugin, content.removeFromLeft (16).toFloat(), theme().textSecondary, 14.0f);
                 content.removeFromLeft (8);
                 break;
             case Item::Kind::sound:
@@ -611,19 +608,21 @@ std::vector<LibrarySidebar::Item> LibrarySidebar::collectItems() const
         }
     };
 
-    auto addPlugins = [&] (bool instruments)
+    // Only instruments: plug-in effects are added from the track's effects
+    // menu, like the built-in ones.
+    auto addPlugins = [&] (bool withLabel)
     {
-        bool labelled = false;
+        bool labelled = ! withLabel;
 
-        for (auto& p : instruments ? plugins.getInstruments() : plugins.getEffects())
+        for (auto& p : plugins.getInstruments())
         {
             if (matches (p.name) || matches (p.manufacturer))
             {
                 if (! labelled)
-                    items.push_back ({ Item::Kind::label, {}, instruments ? "Plug-in instruments" : "Plug-in effects" });
+                    items.push_back ({ Item::Kind::label, {}, "Plug-in instruments" });
 
                 labelled = true;
-                items.push_back ({ instruments ? Item::Kind::pluginInstrument : Item::Kind::pluginEffect,
+                items.push_back ({ Item::Kind::pluginInstrument,
                                    p.id, p.name, p.manufacturer.isNotEmpty() ? p.manufacturer : p.format });
             }
         }
@@ -638,11 +637,9 @@ std::vector<LibrarySidebar::Item> LibrarySidebar::collectItems() const
 
         addLoops (true);
         addPlugins (true);
-        addPlugins (false);
     }
     else if (selectedCategory == "Plug-ins")
     {
-        addPlugins (true);
         addPlugins (false);
     }
     else if (selectedCategory.isEmpty())
@@ -690,7 +687,7 @@ void LibrarySidebar::rebuildList()
     else if (selectedCategory == "Plug-ins")
     {
         crumbText = "Plug-ins";
-        countText = countOf (count, "plug-in");
+        countText = countOf (count, "instrument");
     }
     else
     {
@@ -707,11 +704,11 @@ void LibrarySidebar::rebuildList()
     else if (selectedCategory == "Audio Files")
         emptyText = "No audio files in this folder.";
     else if (selectedCategory == "Plug-ins")
-        emptyText = "No plug-ins found yet. Install VST3 or LV2 plug-ins, then scan again.";
+        emptyText = "No plug-in instruments found yet. Install VST3 or LV2 instruments, then scan again.";
     else
         emptyText = "No sounds here yet.";
 
-    knownPluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
+    knownPluginCount = (int) engine.getPlugins().getInstruments().size();
     knownSoundCount = (int) (engine.getSounds().getSounds().size() + engine.getSounds().getLoops().size());
     packSignature = describePacksToOffer();
     updateScanText();
@@ -726,7 +723,7 @@ void LibrarySidebar::refresh()
     loopBrowser.refresh();
 
     // New plug-ins arrived (a scan found some): show them.
-    const auto pluginCount = (int) (engine.getPlugins().getInstruments().size() + engine.getPlugins().getEffects().size());
+    const auto pluginCount = (int) engine.getPlugins().getInstruments().size();
 
     if (pluginCount != knownPluginCount && (selectedCategory == "Plug-ins" || searchField.getText().isNotEmpty()))
     {
@@ -836,18 +833,6 @@ void LibrarySidebar::activate (const Item& item)
     {
         case Item::Kind::sound:             useSound (item.id); break;
         case Item::Kind::pluginInstrument:  useSound ("plugin:" + item.id); break;
-
-        case Item::Kind::pluginEffect:
-        {
-            auto track = tracks.getTrack (selection.getTrack());
-
-            if (! track.has_value())
-                return;
-
-            if (auto added = tracks.effects().addEffect (track->id, "plugin:" + item.id))
-                tracks.effects().showPluginWindow (track->id, added);
-            break;
-        }
 
         case Item::Kind::pack:
             installPack (item.id);

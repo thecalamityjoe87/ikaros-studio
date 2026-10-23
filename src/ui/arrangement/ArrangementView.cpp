@@ -338,6 +338,31 @@ void ArrangementView::resetZoom()
     setZoom (startPixelsPerBeat, getZoomAnchorX ((float) getLaneWidth() * 0.5f));
 }
 
+ArrangementView::ViewPosition ArrangementView::getViewPosition() const
+{
+    if (pendingViewPosition.has_value())
+        return *pendingViewPosition;
+
+    return { geometry.pixelsPerBeat, geometry.scrollBeats, viewport.getViewPositionY() };
+}
+
+void ArrangementView::setViewPosition (const ViewPosition& position)
+{
+    if (! zoomInitialised)
+    {
+        pendingViewPosition = position;
+        return;
+    }
+
+    pendingViewPosition.reset();
+
+    // Anchored at the left edge, then scrolled: setZoom also sets the
+    // tracks' height, which the vertical scroll below depends on.
+    setZoom (position.pixelsPerBeat > 0.0 ? position.pixelsPerBeat : startPixelsPerBeat, 0.0f);
+    scrollToBeat (position.scrollBeats);
+    viewport.setViewPosition (0, position.scrollY);
+}
+
 void ArrangementView::scrollToBeat (double beat)
 {
     geometry.scrollBeats = beat;
@@ -647,6 +672,9 @@ void ArrangementView::resized()
     }
 
     layoutContent();
+
+    if (zoomInitialised && pendingViewPosition.has_value())
+        setViewPosition (*pendingViewPosition);
 
     // Overlays: ghosts over the lanes; the playhead over the ruler and lanes,
     // but not the track headers column.

@@ -46,7 +46,7 @@ void Autosaver::attach (te::Edit& e, const juce::File& folder, std::function<Ses
     if (! workFolder.getChildFile (SessionRecovery::infoFile).existsAsFile())
         writeInfo();
 
-    pending = hasAutosaved = recording = false;
+    pending = hasAutosaved = recording = userChanged = false;
     lastAutosaveId = {};
     lastAutosaveTime = {};
 
@@ -110,6 +110,8 @@ void Autosaver::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     if (ignoringChanges)
         return;
+
+    userChanged = true;
 
     const auto now = juce::Time::getMillisecondCounter();
 
@@ -210,6 +212,8 @@ void Autosaver::sessionSaved()
 {
     if (edit == nullptr)
         return;
+
+    userChanged = false;
 
     // Mid-take, the take isn't in the saved session yet, and the recovery
     // copy written when recording started is still the session as it is.

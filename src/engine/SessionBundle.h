@@ -22,6 +22,7 @@ namespace ikaros
                                 and the sound packs the session uses
         Session.tracktionedit   the session itself (Tracktion's XML)
         Preview.png             the picture the session chooser shows
+        View.xml                how the window looked (see SessionViews)
         Audio/...               recordings, imported files and loops
 
     The session is edited in an unpacked copy (a working folder, see
@@ -39,6 +40,7 @@ public:
     static constexpr const char* mimeType = "application/x-ikaros-session";
     static constexpr const char* sessionEntry = "Session.tracktionedit";
     static constexpr const char* previewEntry = "Preview.png";
+    static constexpr const char* viewEntry = "View.xml";
     static constexpr const char* infoEntry = "bundle.json";
     static constexpr const char* audioFolder = "Audio";
 

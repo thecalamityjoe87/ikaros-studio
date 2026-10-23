@@ -79,12 +79,14 @@ public:
 private:
     class FormatToggles;
     class FolderList;
+    class InstalledList;
 
     AudioEngine& engine;
     FolderField soundFolderField { "Folder for sound packs" };
     IconButton soundLibraryButton { "Open the Sound Library", std::nullopt, "Open Sound Library..." };
     std::unique_ptr<FormatToggles> formatToggles;
     std::unique_ptr<FolderList> folderList;
+    std::unique_ptr<InstalledList> installedList;
     IconButton rescanButton { "Rescan plug-ins", std::nullopt, "Rescan Plug-ins" };
     IconButton clearSkippedButton { "Clear the skipped plug-ins", std::nullopt, "Clear Skipped Plug-ins" };
     juce::String shownScanNote, shownSkippedNote;

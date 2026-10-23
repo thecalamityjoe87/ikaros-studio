@@ -29,12 +29,20 @@ public:
         just flash it. Zero once it has been up long enough. */
     int getRemainingMilliseconds() const;
 
+    /** Shows what is loading now ("Loading plug-ins...") and how far along
+        startup is (0 to 1), and draws it straight away. The message thread
+        is busy starting the app, so a normal repaint() would wait until
+        it was all over. */
+    void setStage (const juce::String& text, float fraction);
+
     void paint (juce::Graphics&) override;
 
 private:
     void timerCallback() override;
 
     std::function<void()> onShown;
+    juce::String stage { "Starting audio engine..." };
+    float progress = 0.03f;
     juce::Image icon;
     juce::uint32 createdAt = 0, paintedAt = 0;   // juce::Time::getMillisecondCounter() values
 

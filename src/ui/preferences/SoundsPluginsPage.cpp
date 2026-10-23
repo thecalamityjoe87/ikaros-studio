@@ -1,6 +1,7 @@
 #include "ui/preferences/PreferencesPages.h"
 #include "engine/PluginLibrary.h"
 #include "engine/SoundLibrary.h"
+#include "ui/dialogs/AlertDialog.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -172,10 +173,183 @@ private:
 };
 
 //==============================================================================
+// The plug-ins found on this computer, one row each, with a tick to turn each on or off.
+// Turned-off ones stay in the list (dimmed) so they can be turned on again.
+class SoundsPluginsPage::InstalledList  : public juce::Component,
+                                          private juce::ListBoxModel
+{
+public:
+    explicit InstalledList (AudioEngine& e) : engine (e)
+    {
+        listBox.setModel (this);
+        listBox.setRowHeight (28);
+        listBox.setOutlineThickness (1);
+        listBox.setTitle ("Installed plug-ins");
+        addAndMakeVisible (listBox);
+
+        refresh();
+        setSize (100, 240);
+    }
+
+    /** Reads the list again; does nothing if it hasn't changed. */
+    void refresh()
+    {
+        auto found = engine.getPlugins().getInstalledPlugins();
+
+        const auto same = std::equal (found.begin(), found.end(), plugins.begin(), plugins.end(),
+                                      [] (const PluginInfo& a, const PluginInfo& b)
+                                      { return a.id == b.id && a.disabled == b.disabled; });
+        const auto scanning = engine.getPlugins().getScanStatus().scanning;
+
+        if (same && scanning == wasScanning)
+            return;
+
+        plugins = std::move (found);
+        wasScanning = scanning;
+        listBox.updateContent();
+        listBox.repaint();
+        repaint();
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (plugins.empty())
+        {
+            g.setColour (theme().textSecondary);
+            g.setFont (fonts::ui (textSize::md));
+            g.drawText (wasScanning ? "Scanning..." : "No plug-ins found",
+                        listBox.getBounds().reduced (10, 0).withHeight (28), juce::Justification::centredLeft);
+        }
+    }
+
+    void resized() override   { listBox.setBounds (getLocalBounds()); }
+
+private:
+    AudioEngine& engine;
+    std::vector<PluginInfo> plugins;
+    bool wasScanning = false;
+    juce::ListBox listBox;
+
+    int getNumRows() override   { return (int) plugins.size(); }
+
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+    {
+        if (! juce::isPositiveAndBelow (row, (int) plugins.size()))
+            return;
+
+        const auto& p = plugins[(size_t) row];
+        const auto format = p.format == "AudioUnit" ? juce::String ("Audio Unit") : p.format;
+        auto r = juce::Rectangle<int> (0, 0, width, height).reduced (10, 0);
+
+        if (selected)
+        {
+            g.setColour (theme().selectedRow);
+            g.fillRect (0, 0, width, height);
+        }
+
+        // The tick
+        const auto box = r.removeFromLeft (16).withSizeKeepingCentre (16, 16).toFloat();
+        r.removeFromLeft (10);
+        g.setColour (p.disabled ? theme().textSecondary : theme().text);
+        g.drawRoundedRectangle (box.reduced (0.5f), 3.0f, 1.0f);
+
+        if (! p.disabled)
+        {
+            juce::Path tick;
+            tick.startNewSubPath (box.getX() + 3.5f, box.getCentreY());
+            tick.lineTo (box.getCentreX() - 0.5f, box.getBottom() - 4.0f);
+            tick.lineTo (box.getRight() - 3.0f, box.getY() + 4.0f);
+            g.strokePath (tick, juce::PathStrokeType (1.6f));
+        }
+
+        g.setFont (fonts::ui (textSize::md));
+
+        auto kind = r.removeFromRight (80);
+        auto fmt = r.removeFromRight (90);
+        auto maker = r.removeFromRight (r.getWidth() / 3);
+
+        g.setColour (p.disabled ? theme().textSecondary : theme().text);
+        g.drawText (p.name, r, juce::Justification::centredLeft, true);
+
+        g.setColour (theme().textSecondary);
+        g.drawText (p.manufacturer, maker, juce::Justification::centredLeft, true);
+        g.drawText (format, fmt, juce::Justification::centredLeft, true);
+        g.drawText (p.disabled ? "Off" : p.isInstrument ? "Instrument" : "Effect", kind, juce::Justification::centredLeft, true);
+    }
+
+    void toggle (int row)
+    {
+        if (! juce::isPositiveAndBelow (row, (int) plugins.size()))
+            return;
+
+        const auto plugin = plugins[(size_t) row];
+
+        if (plugin.disabled)
+        {
+            engine.getPlugins().setPluginEnabled (plugin.id, true);
+            refresh();
+            return;
+        }
+
+        // Tracks that use it keep it until the session opens next: say so first.
+        const auto users = engine.getPlugins().getTracksUsing (plugin.id);
+
+        if (users.isEmpty())
+        {
+            engine.getPlugins().setPluginEnabled (plugin.id, false);
+            refresh();
+            return;
+        }
+
+        auto trackList = users.size() <= 3 ? users.joinIntoString (", ")
+                                           : users.joinIntoString (", ", 0, 3) + " and " + juce::String (users.size() - 3) + " more";
+
+        auto options = juce::MessageBoxOptions()
+                           .withTitle ("Turn off " + plugin.name + "?")
+                           .withMessage (plugin.name + " is used in this session (" + trackList + "). It stays loaded until the session "
+                                         "is opened again; then those tracks show it as disabled and it won't make a sound. "
+                                         "Its settings are kept, and turning it back on brings it back.")
+                           .withButton ("Turn Off")
+                           .withButton ("Cancel")
+                           .withAssociatedComponent (this);
+
+        AlertDialog::show (options, [safeThis = SafePointer<InstalledList> (this), &lib = engine.getPlugins(), id = plugin.id] (int result)
+        {
+            if (result != 1)
+                return;
+
+            lib.setPluginEnabled (id, false);
+
+            if (safeThis != nullptr)
+                safeThis->refresh();
+        });
+    }
+
+    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    {
+        if (e.x < 36)   // the tick; the rest of the row just selects it
+            toggle (row);
+    }
+
+    void returnKeyPressed (int row) override   { toggle (row); }
+
+    juce::String getNameForRow (int row) override
+    {
+        if (! juce::isPositiveAndBelow (row, (int) plugins.size()))
+            return {};
+
+        const auto& p = plugins[(size_t) row];
+        return p.name + ", " + p.manufacturer + ", " + p.format + (p.isInstrument ? ", instrument" : ", effect")
+                 + (p.disabled ? ", off" : ", on");
+    }
+};
+
+//==============================================================================
 SoundsPluginsPage::SoundsPluginsPage (AudioEngine& e, std::function<void()> openSoundLibrary)
     : engine (e),
       formatToggles (std::make_unique<FormatToggles> (e)),
-      folderList (std::make_unique<FolderList> (e))
+      folderList (std::make_unique<FolderList> (e)),
+      installedList (std::make_unique<InstalledList> (e))
 {
     soundFolderField.onChanged = [this] (const juce::File& folder)
     {
@@ -207,6 +381,8 @@ SoundsPluginsPage::SoundsPluginsPage (AudioEngine& e, std::function<void()> open
     addRow ("Sound Library", soundLibraryButton, 220, "Download more instruments and loops.");
 
     addHeading ("Plug-ins");
+    addRow ("Installed", *installedList, 0, "The plug-ins found on this computer. Untick one to turn it off: it's left out of the lists and can't be picked, and "
+            "sessions that use it stop loading it the next time they open. Tick it again to turn it back on.");
     addRow ("Plug-in formats", *formatToggles, 240, "A format that's turned off is left out of scans, and its plug-ins out of the lists.");
     addRow ("Extra folders", *folderList, 0, "Searched as well as the standard plug-in folders.");
     addRow ("Scan", rescanButton, 220, {});
@@ -258,6 +434,7 @@ void SoundsPluginsPage::updateScanState()
 
 void SoundsPluginsPage::timerCallback()
 {
+    installedList->refresh();
     updateScanState();
 }
 

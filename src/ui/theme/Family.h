@@ -12,6 +12,6 @@ namespace ikaros::tokens
 
     This tiny header exists so component headers can name a Family without
     including all of Tokens.h. */
-enum class Family { drums, audio, strings, bass, keys, synths, guitar, woodwinds, brass, loops, master };
+enum class Family { drums, audio, strings, bass, keys, synths, guitar, woodwinds, brass, loops, plugins, master };
 
 } // namespace ikaros::tokens

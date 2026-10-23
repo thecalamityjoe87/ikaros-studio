@@ -26,6 +26,9 @@ public:
     /** For hints about recording to point at. */
     juce::Component& getRecordButton() noexcept     { return recordButton; }
 
+    /** The LCD, for the session's view state (bars and beats or time). */
+    LcdDisplay& getLcd() noexcept                   { return lcd; }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

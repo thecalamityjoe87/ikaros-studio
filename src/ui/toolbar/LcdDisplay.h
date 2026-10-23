@@ -50,6 +50,11 @@ public:
     std::function<void (int numerator, int denominator)> onTimeSignatureChanged;
     std::function<void (int root, bool minor)> onKeyChanged;
 
+    /** The position as the song's time (true) or bars and beats (false).
+        Clicking the position switches it. */
+    void setShowsTime (bool);
+    bool isShowingTime() const noexcept     { return showsTime; }
+
     /** Shows the tuner instead of the position and session settings. */
     void setTunerShown (bool);
     bool isTunerShown() const noexcept      { return tunerShown; }

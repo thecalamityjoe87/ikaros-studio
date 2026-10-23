@@ -12,7 +12,7 @@ namespace
 
     // The icon's background (resources/icons/*.svg) with light text, whatever the theme.
     const juce::Colour background (0xff1a1d23);
-    const juce::Colour title (0xfff4f5f7), subtitle (0xff9aa0ab);
+    const juce::Colour title (0xfff4f5f7), subtitle (0xff9aa0ab), accent (0xffffb547);
 
     // Long enough to read the name, short enough not to hold anyone up.
     constexpr juce::uint32 minimumVisibleMs = 1200;
@@ -48,6 +48,19 @@ int StartupSplash::getRemainingMilliseconds() const
 {
     const auto shownFor = juce::Time::getMillisecondCounter() - createdAt;
     return shownFor >= minimumVisibleMs ? 0 : (int) (minimumVisibleMs - shownFor);
+}
+
+void StartupSplash::setStage (const juce::String& text, float fraction)
+{
+    stage = text;
+    progress = juce::jlimit (0.0f, 1.0f, fraction);
+
+    repaint();
+
+    // Draws the pending repaint now instead of on a later pass of the
+    // message loop. Without this the splash would stay on its first text.
+    if (auto* peer = getPeer())
+        peer->performAnyPendingRepaintsNow();
 }
 
 void StartupSplash::timerCallback()
@@ -99,7 +112,15 @@ void StartupSplash::paint (juce::Graphics& g)
 
     g.setColour (subtitle);
     g.setFont (fonts::ui (12.0f));
-    g.drawText ("Starting...", area.removeFromBottom (16), juce::Justification::centred);
+    g.drawText (stage, area.removeFromBottom (16), juce::Justification::centred);
+
+    // A thin bar above the text: a track, and the amber part for what's done.
+    area.removeFromBottom (8);
+    const auto track = area.removeFromBottom (3).reduced (40, 0).toFloat();
+    g.setColour (juce::Colours::white.withAlpha (0.1f));
+    g.fillRoundedRectangle (track, 1.5f);
+    g.setColour (accent);
+    g.fillRoundedRectangle (track.withWidth (track.getWidth() * progress), 1.5f);
 }
 
 } // namespace ikaros

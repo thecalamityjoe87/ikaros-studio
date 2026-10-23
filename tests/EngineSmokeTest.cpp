@@ -10,6 +10,7 @@
 #include "engine/TrackController.h"
 #include "engine/SessionBundle.h"
 #include "engine/SessionRecovery.h"
+#include "engine/SessionViews.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
 #include "engine/Tuner.h"
@@ -1651,6 +1652,88 @@ static void runEffectsSection (const juce::File& dir)
     }
 
     device.reset();
+}
+
+//==============================================================================
+// The window's view of a session (see SessionViews): saved in the bundle,
+// and remembered on this computer when the session closes, saved or not.
+static void runViewsSection (const juce::File& dir)
+{
+    const auto songA = dir.getChildFile ("Views A.iksession"), songB = dir.getChildFile ("Views B.iksession");
+
+    // The UI's view, reduced to one number.
+    int shown = 1;
+    const auto describe = [&shown]
+    {
+        juce::ValueTree v (SessionViews::viewType);
+        v.setProperty ("x", shown, nullptr);
+        return v;
+    };
+    const auto viewOf = [] (AudioEngine& e) { return (int) e.getViewState().getProperty ("x", 0); };
+
+    {
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        engine.newSession();
+        pumpMessages();
+        engine.setViewStateSource (describe);
+        const auto firstView = engine.getViewState();
+        check (firstView.getNumProperties() == 0, "a new session has no view of its own");
+        engine.newSession();
+        pumpMessages();
+        check (engine.getViewState() != firstView, "each new session has a view tree of its own");
+
+        check (engine.saveSessionAs (songA), "(save)");
+        check (juce::ZipFile (songA).getEntry (SessionBundle::viewEntry) != nullptr, "the bundle holds the view");
+
+        check (engine.openSession (songA), "(reopen)");
+        pumpMessages();
+        check (viewOf (engine) == 1, "a saved session opens with its view");
+
+        // Change the view only, and close: no save needed, nothing unsaved.
+        shown = 2;
+        check (! engine.hasUnsavedChanges(), "a view change isn't an unsaved change");
+        engine.newSession();
+        pumpMessages();
+        check (engine.openSession (songA), "(reopen)");
+        pumpMessages();
+        check (viewOf (engine) == 2, "a view changed without saving is remembered when the session closes");
+
+        // Save As: the copy has the view, the original keeps its own.
+        shown = 3;
+        check (engine.saveSessionAs (songB), "(save as)");
+        check (engine.openSession (songA), "(open the original)");
+        pumpMessages();
+        check (viewOf (engine) == 2, "Save As leaves the original's view alone");
+        check (engine.openSession (songB), "(open the copy)");
+        pumpMessages();
+        check (viewOf (engine) == 3, "Save As keeps the view under the new name");
+
+        engine.setViewStateSource (nullptr);
+    }
+
+    // Another computer (settings of its own) only has the view in the file.
+    {
+        AudioEngine engine { testSettings + "Other" };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        check (engine.openSession (songA), "(open elsewhere)");
+        pumpMessages();
+        check (viewOf (engine) == 1, "another computer opens the view saved in the file");
+
+        shown = 7;
+        engine.setViewStateSource (describe);
+        check (engine.saveSession(), "(save elsewhere)");
+        engine.setViewStateSource (nullptr);
+    }
+
+    // Back here: the file's view is newer than the one remembered.
+    {
+        AudioEngine engine { testSettings };
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+        check (engine.openSession (songA), "(open back here)");
+        pumpMessages();
+        check (viewOf (engine) == 7, "a newer view in the file wins over the one remembered");
+    }
 }
 
 static void runPreferencesSection (const juce::File& dir)
@@ -5256,6 +5339,37 @@ int main (int argc, char* argv[])
 
     if (runs ("main"))
     {
+        std::cout << "Starting in stages\n";
+        {
+            AudioEngine staged { testSettings, false, false };
+            check (staged.getNextStartupStage().has_value(), "an engine started later has stages waiting");
+
+            auto last = -1.0f;
+            auto rising = true, described = true;
+            auto count = 0;
+
+            while (auto stage = staged.getNextStartupStage())
+            {
+                rising = rising && stage->fractionDone > last && stage->fractionDone < 1.0f;
+                described = described && stage->description.isNotEmpty();
+                last = stage->fractionDone;
+                staged.runNextStartupStage();
+                ++count;
+            }
+
+            check (count > 1 && rising && described, "each stage says what it loads, and the progress rises");
+            check (staged.getSessionName().isNotEmpty(), "a session is open after the last stage");
+        }
+        {
+            AudioEngine neverStarted { testSettings, false, false };   // quit before the first stage
+        }
+        {
+            AudioEngine partlyStarted { testSettings, false, false };  // quit in the middle
+            partlyStarted.runNextStartupStage();
+            partlyStarted.runNextStartupStage();
+        }
+        check (true, "closing an engine that didn't finish starting is safe");
+
         AudioEngine engine { testSettings };
         auto& tracks = engine.getTracks();
 
@@ -7229,6 +7343,21 @@ int main (int argc, char* argv[])
             check (synth.has_value() && gain.has_value(), "VST3 instruments and effects are found");
             check (findNamed (plugins.getInstruments(), "Ikaros Test Synth", "LV2").has_value()
                      && findNamed (plugins.getEffects(), gainName, "LV2").has_value(), "LV2 ones too");
+            if (synth)
+            {
+                plugins.setPluginEnabled (synth->id, false);
+                auto installed = plugins.getInstalledPlugins();
+                auto off = std::find_if (installed.begin(), installed.end(), [&] (const PluginInfo& p) { return p.id == synth->id; });
+                check (off != installed.end() && off->disabled, "a turned-off plug-in stays in the installed list");
+                check (! findNamed (plugins.getInstruments(), "Ikaros Test Synth", "VST3").has_value()
+                         && ! plugins.findPlugin (synth->id).has_value(),
+                       "but is left out of the lists and can't be picked");
+                plugins.setPluginEnabled (synth->id, true);
+                check (findNamed (plugins.getInstruments(), "Ikaros Test Synth", "VST3").has_value()
+                         && plugins.findPlugin (synth->id).has_value(),
+                       "and comes back when turned on");
+            }
+
             check (status.failed.contains ("Ikaros Crash Test") && status.failed.contains ("Ikaros Hang Test"),
                    "a plug-in that crashes or hangs fails without taking the app down");
             check (plugins.getSkippedPlugins().size() == 2, "and is skipped from then on");
@@ -7285,6 +7414,66 @@ int main (int argc, char* argv[])
             check (chain.size() == 1 && chain[0].isThirdParty && ! chain[0].missing, "the plug-in effect comes back");
             check (instrument && instrument->isThirdParty && ! instrument->missing, "and the plug-in instrument");
             check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)), "and the plug-in's automation");
+        }
+
+        {
+            // Turning plug-ins off: the open session keeps them until it's opened again.
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "reopen to turn plug-ins off");
+            pumpMessages();
+            auto& plugins = engine.getPlugins();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            auto trackName = engine.getTracks().getTrack (t1)->name;
+
+            juce::String synthId, gainId;
+
+            for (auto& p : plugins.getInstalledPlugins())
+            {
+                if (p.format != "VST3") continue;
+                if (p.name == "Ikaros Test Synth") synthId = p.id;
+                if (p.name == gainName) gainId = p.id;
+            }
+
+            check (synthId.isNotEmpty() && gainId.isNotEmpty(), "(found the test plug-ins)");
+            check (plugins.getTracksUsing (synthId) == juce::StringArray (trackName)
+                     && plugins.getTracksUsing (gainId) == juce::StringArray (trackName),
+                   "the tracks using a plug-in are listed");
+
+            plugins.setPluginEnabled (synthId, false);
+            plugins.setPluginEnabled (gainId, false);
+            pumpMessages();
+            auto chain = engine.getTracks().effects().getEffectChain (t1);
+            auto instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && ! chain[0].missing && instrument && ! instrument->missing,
+                   "turning plug-ins off leaves the open session as it was");
+        }
+
+        {
+            AudioEngine engine { testSettings };
+            check (engine.openSession (pluginSession), "reopen with plug-ins turned off");
+            pumpMessages();
+            auto t1 = engine.getTracks().getTracks().front().id;
+            auto chain = engine.getTracks().effects().getEffectChain (t1);
+            auto instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && chain[0].isThirdParty && chain[0].missing && chain[0].disabledByUser
+                     && instrument && instrument->missing && instrument->disabledByUser,
+                   "the next time, they show as disabled");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "and the plug-in's automation is kept");
+            check (engine.saveSessionAs (pluginSession), "a session with disabled plug-ins can be saved");
+
+            for (auto& p : engine.getPlugins().getInstalledPlugins())
+                if (p.disabled)
+                    engine.getPlugins().setPluginEnabled (p.id, true);
+
+            pumpMessages();
+            chain = engine.getTracks().effects().getEffectChain (t1);
+            instrument = engine.getTracks().effects().getInstrument (t1);
+            check (chain.size() == 1 && ! chain[0].missing && ! chain[0].disabledByUser
+                     && instrument && ! instrument->missing,
+                   "turning them back on loads them again at once");
+            check (sameGainPoints (engine.getTracks().automation().getPoints (t1, gainTarget)),
+                   "with the automation intact");
         }
 
         // Pretend the gain plug-in was uninstalled: rename it in the saved
@@ -8037,6 +8226,9 @@ int main (int argc, char* argv[])
 
     if (runs ("sections"))
         runSectionsSection (dir);
+
+    if (runs ("views"))
+        runViewsSection (dir);
 
     if (runs ("stretch"))
         runStretchSection (dir);

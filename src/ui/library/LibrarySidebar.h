@@ -23,10 +23,11 @@ namespace ikaros
                          region. It browses folders on the computer.
       Loops              opens the loop browser, a page over the whole
                          sidebar (see LoopBrowser)
-      Plug-ins           no tile: Mix > Plug-ins... shows it (see showPlugins).
-                         Third-party instruments (click to use) and effects
-                         (click to add to the selected track), with the scan's
-                         progress and a button to scan again
+      Plug-ins           (also Mix > Plug-ins..., see showPlugins)
+                         third-party instruments (click to use), with the
+                         scan's progress and a button to scan again. Plug-in
+                         effects aren't listed: they're in the track's
+                         effects menu
 
     Typing in the search field searches every category (in Audio, the
     folder being shown).
@@ -46,7 +47,7 @@ public:
     void update();
 
     /** Shows the plug-in list (Mix > Plug-ins...): third-party instruments
-        and effects, and the plug-in scan. */
+        and the plug-in scan. */
     void showPlugins();
 
     /** The "Manage Sounds" button: the owner opens the Manage Sounds window
@@ -68,7 +69,7 @@ private:
     // One line of the list.
     struct Item
     {
-        enum class Kind { sound, pack, pluginInstrument, pluginEffect, file, folder, label };
+        enum class Kind { sound, pack, pluginInstrument, file, folder, label };
 
         Kind kind = Kind::label;
         juce::String id;           // sounds: SoundInfo::id; packs: StorePack::id; plug-ins: PluginInfo::id

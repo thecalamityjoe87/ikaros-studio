@@ -42,26 +42,9 @@ public:
 
     void finishStarting (const juce::String& commandLine)
     {
-        engine = std::make_unique<AudioEngine>();
-
-        // The saved theme (Preferences > Appearance), before the window
-        // exists so it opens in the right colours.
-        themeManager = std::make_unique<ThemeManager> (engine->getPreferences(), *lookAndFeel);
-
-        // The saved interface size, before the window exists (Preferences > Appearance
-        // changes it later without a restart; see MainComponent).
-        MainComponent::setInterfaceScale (engine->getPreferences().getInterfaceScale());
-
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
-        platform::enableDropsFromWaylandApps();
-
-        // Started by double-clicking a session (or "ikaros-studio My Song.iksession").
-        openSessionsIn (commandLine);
-
-        // The window is up behind the splash; close the splash once it has
-        // been seen. The app object outlives the message loop, so `this` is
-        // safe here.
-        juce::Timer::callAfterDelay (splash->getRemainingMilliseconds(), [this] { splash.reset(); });
+        // Doesn't start yet: the engine's stages run below, one at a time.
+        engine = std::make_unique<AudioEngine> ("IkarosStudio", true, false);
+        runNextStartupStep (commandLine);
     }
 
     void shutdown() override
@@ -97,6 +80,66 @@ public:
     }
 
 private:
+    // The engine's stages fill this much of the splash's progress bar, and
+    // opening the window fills the rest.
+    static constexpr float engineShare = 0.88f;
+
+    // Each step shows what it's about to do on the splash, then does it a
+    // moment later: the splash can only draw (and the window system confirm
+    // it) while the message loop is running, and a step blocks it.
+    void runNextStartupStep (const juce::String& commandLine)
+    {
+        juce::String text;
+        float fraction;
+        std::function<void()> work;
+
+        if (auto stage = engine->getNextStartupStage())
+        {
+            text = stage->description;
+            fraction = stage->fractionDone * engineShare;
+            work = [this, commandLine] { engine->runNextStartupStage(); runNextStartupStep (commandLine); };
+        }
+        else
+        {
+            text = "Opening main window...";
+            fraction = engineShare;
+            work = [this, commandLine] { openMainWindow (commandLine); };
+        }
+
+        splash->setStage (text, fraction);
+
+        // The app object outlives the message loop, so `this` is safe here.
+        juce::Timer::callAfterDelay (20, [work = std::move (work)]
+        {
+            // Not if the app was asked to quit in the meantime.
+            if (! juce::MessageManager::getInstance()->hasStopMessageBeenSent())
+                work();
+        });
+    }
+
+    void openMainWindow (const juce::String& commandLine)
+    {
+        // The saved theme (Preferences > Appearance), before the window
+        // exists so it opens in the right colours.
+        themeManager = std::make_unique<ThemeManager> (engine->getPreferences(), *lookAndFeel);
+
+        // The saved interface size, before the window exists (Preferences > Appearance
+        // changes it later without a restart; see MainComponent).
+        MainComponent::setInterfaceScale (engine->getPreferences().getInterfaceScale());
+
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
+        platform::enableDropsFromWaylandApps();
+
+        splash->setStage ("Ready", 1.0f);
+
+        // Started by double-clicking a session (or "ikaros-studio My Song.iksession").
+        openSessionsIn (commandLine);
+
+        // The window is up behind the splash; close the splash once it has
+        // been seen.
+        juce::Timer::callAfterDelay (splash->getRemainingMilliseconds(), [this] { splash.reset(); });
+    }
+
     // Opens the first session named in a command line, once the window is up
     // (after the session chooser has appeared, so it can replace it).
     void openSessionsIn (const juce::String& commandLine)

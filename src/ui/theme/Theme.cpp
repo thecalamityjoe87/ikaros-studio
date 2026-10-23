@@ -175,6 +175,7 @@ namespace
                             hex (0xff7cc4a0),    // woodwinds
                             hex (0xffd6a35a),    // brass
                             hex (0xffa2a9b4),    // loops
+                            hex (0xffe5625e),    // plugins
                             hex (0xffa2a9b4) };  // master: neutral grey
         p.inkColours = p.familyColours;          // dark mode: ink is the family colour
         p.knobArcColours = p.familyColours;
@@ -382,6 +383,7 @@ namespace
                          hex (0xff3e8c66),    // woodwinds
                          hex (0xff9a6a22),    // brass
                          hex (0xff5f6672),    // loops
+                         hex (0xffc23d3a),    // plugins
                          hex (0xff5f6672) };  // master
 
         // The Smart Controls arcs keep the family colours on their white

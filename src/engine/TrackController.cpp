@@ -484,7 +484,9 @@ TrackDetails TrackController::getDetails (TrackId id) const
     if (auto instrument = effectsController->getInstrument (id))
     {
         if (instrument->isThirdParty)
-            d.pluginName = instrument->name + (instrument->missing ? " (not installed)" : " (" + instrument->manufacturer + ")");
+            d.pluginName = instrument->name + (instrument->disabledByUser ? " (disabled)"
+                                                     : instrument->missing ? " (not installed)"
+                                                                           : " (" + instrument->manufacturer + ")");
         else
             d.pluginName = instrument->name + " (built-in)";
     }

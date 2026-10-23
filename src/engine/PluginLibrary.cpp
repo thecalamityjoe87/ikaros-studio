@@ -42,11 +42,9 @@ PluginLibrary::~PluginLibrary()
 std::vector<PluginInfo> PluginLibrary::list (bool instruments) const
 {
     std::vector<PluginInfo> result;
-    const auto disabled = owner.getPreferences().getList (settings::disabledPluginFormats);
-
-    for (auto& d : owner.getTeEngine().getPluginManager().knownPluginList.getTypes())
-        if (d.isInstrument == instruments && ! disabled.contains (d.pluginFormatName))
-            result.push_back (makeInfo (d));
+    for (auto& info : getInstalledPlugins())
+        if (info.isInstrument == instruments && ! info.disabled)
+            result.push_back (info);
 
     std::sort (result.begin(), result.end(), [] (const PluginInfo& a, const PluginInfo& b)
     {
@@ -59,12 +57,134 @@ std::vector<PluginInfo> PluginLibrary::list (bool instruments) const
 std::vector<PluginInfo> PluginLibrary::getInstruments() const   { return list (true); }
 std::vector<PluginInfo> PluginLibrary::getEffects() const       { return list (false); }
 
+std::vector<PluginInfo> PluginLibrary::getInstalledPlugins() const
+{
+    std::vector<PluginInfo> result;
+    auto& prefs = owner.getPreferences();
+    const auto disabledFormats = prefs.getList (settings::disabledPluginFormats);
+    const auto disabledPlugins = prefs.getList (settings::disabledPlugins);
+
+    for (auto& d : owner.getTeEngine().getPluginManager().knownPluginList.getTypes())
+    {
+        if (disabledFormats.contains (d.pluginFormatName))
+            continue;
+
+        auto info = makeInfo (d);
+        info.disabled = disabledPlugins.contains (info.id);
+        result.push_back (std::move (info));
+    }
+
+    std::sort (result.begin(), result.end(), [] (const PluginInfo& a, const PluginInfo& b)
+    {
+        return a.name.compareNatural (b.name) < 0;
+    });
+
+    return result;
+}
+
 std::optional<PluginInfo> PluginLibrary::findPlugin (const juce::String& id) const
 {
     if (auto d = owner.getTeEngine().getPluginManager().knownPluginList.getTypeForIdentifierString (id))
-        return makeInfo (*d);
+    {
+        auto info = makeInfo (*d);
+
+        if (! owner.getPreferences().getList (settings::disabledPlugins).contains (info.id))
+            return info;
+    }
 
     return std::nullopt;
+}
+
+namespace
+{
+    // Calls fn (plug-in, track name) for every third-party plug-in in the session.
+    template <typename Fn>
+    void forEachExternalPlugin (te::Edit* edit, Fn fn)
+    {
+        if (edit == nullptr)
+            return;
+
+        auto visit = [&] (te::PluginList& list, const juce::String& trackName)
+        {
+            for (auto* p : list)
+                if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
+                    fn (*external, trackName);
+        };
+
+        visit (edit->getMasterPluginList(), "Master");
+
+        for (auto* t : te::getAudioTracks (*edit))
+            visit (t->pluginList, t->getName());
+    }
+}
+
+juce::StringArray PluginLibrary::getTracksUsing (const juce::String& id) const
+{
+    juce::StringArray names;
+
+    const auto wanted = owner.getTeEngine().getPluginManager().knownPluginList.getTypeForIdentifierString (id);
+
+    // A loaded plug-in's description can differ from the scan's in its file
+    // and IDs, so it's matched by what the user sees.
+    forEachExternalPlugin (owner.getEdit(), [&] (te::ExternalPlugin& p, const juce::String& track)
+    {
+        if (wanted != nullptr && p.desc.name == wanted->name && p.desc.pluginFormatName == wanted->pluginFormatName
+              && p.desc.manufacturerName == wanted->manufacturerName)
+            names.addIfNotAlreadyThere (track);
+    });
+
+    return names;
+}
+
+void PluginLibrary::applyDisabledPlugins()
+{
+    blocked = owner.getPreferences().getList (settings::disabledPlugins);
+}
+
+void PluginLibrary::disabledPluginsChanged()
+{
+    const auto disabled = owner.getPreferences().getList (settings::disabledPlugins);
+    bool turnedBackOn = false;
+
+    for (int i = blocked.size(); --i >= 0;)
+    {
+        if (! disabled.contains (blocked[i]))
+        {
+            blocked.remove (i);
+            turnedBackOn = true;
+        }
+    }
+
+    if (turnedBackOn)
+    {
+        // Plug-ins that weren't loaded because of the block load now.
+        forEachExternalPlugin (owner.getEdit(), [&] (te::ExternalPlugin& p, const juce::String&)
+        {
+            if (p.getAudioPluginInstance() == nullptr && ! isBlocked (p.desc))
+                p.forceFullReinitialise();
+        });
+
+    }
+
+    owner.notifyModelChanged();   // the lists changed
+}
+
+bool PluginLibrary::isBlocked (const juce::PluginDescription& description) const
+{
+    return ! blocked.isEmpty() && blocked.contains (description.createIdentifierString());
+}
+
+void PluginLibrary::setPluginEnabled (const juce::String& id, bool enabled)
+{
+    auto& prefs = owner.getPreferences();
+    auto disabled = prefs.getList (settings::disabledPlugins);
+
+    if (enabled)
+        disabled.removeString (id);
+    else
+        disabled.addIfNotAlreadyThere (id);
+
+    prefs.setList (settings::disabledPlugins, disabled);
 }
 
 void PluginLibrary::scan (bool rescanEverything)
