@@ -1,0 +1,16 @@
+{
+  "name": "Novation Impulse",
+  "about": "From Ardour's map for this controller (Novation_Impulse61.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Impulse*"
+  ],
+  "controls": [
+    {"cc": 112, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 113, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 114, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 115, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 116, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 117, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 49, "type": "knob", "channel": 1, "action": "masterVolume"}
+  ]
+}

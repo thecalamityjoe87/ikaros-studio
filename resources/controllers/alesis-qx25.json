@@ -1,0 +1,14 @@
+{
+  "name": "Alesis QX25",
+  "about": "From Ardour's map for this controller (Alesis_QX25.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "QX25*"
+  ],
+  "controls": [
+    {"cc": 114, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 115, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 116, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 118, "type": "button", "channel": 1, "action": "goToStart"},
+    {"cc": 119, "type": "button", "channel": 1, "action": "loop"}
+  ]
+}

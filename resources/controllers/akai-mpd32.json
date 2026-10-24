@@ -1,0 +1,14 @@
+{
+  "name": "Akai MPD32",
+  "about": "From Ardour's map for this controller (akai-mpd-32.map, Ardour commit d34a51e, GPL v2 or later). Preset 3 (Cubase) on the MPD32. Not tried on the hardware yet.",
+  "ports": [
+    "Akai MPD32*",
+    "MPD32*"
+  ],
+  "controls": [
+    {"cc": 115, "type": "button", "channel": 1, "action": "goToStart"},
+    {"cc": 117, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 118, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 119, "type": "button", "channel": 1, "action": "record"}
+  ]
+}

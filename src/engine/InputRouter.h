@@ -2,6 +2,7 @@
 
 #include "engine/EngineTypes.h"
 #include "engine/RecordingTypes.h"
+#include <bitset>
 #include <memory>
 
 namespace ikaros
@@ -69,6 +70,10 @@ public:
     void noteOn (int noteNumber, float velocity0to1);
     void noteOff (int noteNumber);
     void allNotesOff();
+
+    /** The notes held down on hardware MIDI keyboards right now (bit n =
+        note n), for the piano roll to light its keys. */
+    std::bitset<128> getHeldControllerNotes() const;
 
     void routeMidiInputs();
     void routeAudioInputs();

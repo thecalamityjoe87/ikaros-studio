@@ -184,6 +184,17 @@ The Drummer's grooves: the Groove MIDI Dataset
   are the drummers' own. The dataset itself isn't part of Ikaros Studio.
 
 
+Controller maps: Ardour's MIDI maps
+  https://ardour.org (share/midi_maps in https://github.com/Ardour/ardour)
+  GNU General Public License, version 2 or later
+  Copyright the maps' authors, named in each map file.
+  Most profiles in resources/controllers are made from Ardour's maps by
+  tools/controllers/convert_ardour_maps.py (Ardour commit d34a51e): their
+  transport and track buttons, and the knob numbers for the knob layouts.
+  The port names, the knob layouts and the Arturia MiniLab 3 profile are our
+  own. The maps themselves aren't part of Ikaros Studio.
+
+
 Sounds
   Ikaros Basics, the sound pack that comes with the app, is made from scratch
   by tools/generate_sounds.py. It contains no third-party samples, and it's

@@ -4,6 +4,7 @@
 #include "ui/bottompanel/EditorGrid.h"
 #include "ui/theme/Family.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <bitset>
 #include <optional>
 
 namespace ikaros
@@ -48,6 +49,10 @@ public:
 
     void setRegion (std::optional<RegionInfo>, tokens::Family, const TempoMap&);
     void setPlayheadBeat (double editBeat);
+
+    /** Lights the keys held down on a hardware keyboard (see
+        InputRouter::getHeldControllerNotes). */
+    void setHeldNotes (const std::bitset<128>&);
 
     /** Where notes snap to when they're drawn, moved or resized (see RegionInspector). */
     void setGrid (EditorGrid);
@@ -103,6 +108,7 @@ private:
     std::vector<NoteId> selected;   // note IDs, sorted
     Gesture gesture;
     int previewNote = -1;           // the note sounding while the mouse is held, or -1
+    std::bitset<128> heldNotes;     // keys held on a hardware keyboard
 
     juce::Slider timeZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Slider noteZoom { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };

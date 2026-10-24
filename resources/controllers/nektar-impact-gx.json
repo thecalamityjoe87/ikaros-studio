@@ -1,0 +1,17 @@
+{
+  "name": "Nektar Impact GX",
+  "about": "From Ardour's map for this controller (Nektar_Impact_GX.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Impact GX*"
+  ],
+  "controls": [
+    {"cc": 101, "type": "button", "channel": 16, "action": "metronome"},
+    {"cc": 102, "type": "button", "channel": 16, "action": "loop"},
+    {"cc": 105, "type": "button", "channel": 16, "action": "stop"},
+    {"cc": 106, "type": "button", "channel": 16, "action": "play"},
+    {"cc": 107, "type": "button", "channel": 16, "action": "record"},
+    {"cc": 114, "type": "button", "channel": 16, "action": "goToStart"},
+    {"cc": 109, "type": "button", "channel": 16, "action": "previousTrack"},
+    {"cc": 110, "type": "button", "channel": 16, "action": "nextTrack"}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "M-Audio Axiom 25",
+  "about": "From Ardour's map for this controller (M-Audio_Axiom25.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Axiom 25*"
+  ],
+  "controls": [
+    {"cc": 20, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 21, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 22, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 23, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 24, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 25, "type": "button", "channel": 1, "action": "record"}
+  ]
+}

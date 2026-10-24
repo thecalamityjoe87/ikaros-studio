@@ -32,6 +32,7 @@ class SongExporter;
 class RecordingGuard;
 class AudioDeviceWatcher;
 class Tuner;
+class ControllerMap;
 class LiveWaveform;
 struct LiveRecording;
 
@@ -430,6 +431,9 @@ public:
         it's on, that input's monitoring is off if the preference
         settings::muteWhileTuning says so. */
     Tuner& getTuner() noexcept                  { return *tuner; }
+
+    /** What known MIDI controllers' knobs and buttons do (see ControllerMap). */
+    ControllerMap& getControllerMap() noexcept;
 
     /** The audio take being recorded, drawn live in the arrangement (see
         LiveWaveform): updateLiveRecording() takes in what the input has

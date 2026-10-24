@@ -23,6 +23,7 @@
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "engine/Tuner.h"
+#include "engine/ControllerMap.h"
 #include "engine/LiveWaveform.h"
 #include "platform/AppFolders.h"
 #include "platform/FileLock.h"
@@ -83,6 +84,14 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // Plug-ins the user turned off in the Preferences aren't loaded (see
     // PluginLibrary::applyDisabledPlugins); the track shows them as disabled.
     std::function<bool (const juce::PluginDescription&)> isPluginBlocked;   // set by AudioEngine::Impl
+
+    // Mapped controller messages are swallowed (see ControllerMap). On the MIDI thread.
+    std::function<bool (const juce::String&, const juce::MidiMessage&)> interceptMidi;   // set by AudioEngine::Impl
+
+    bool interceptMidiInputMessage (const juce::String& deviceName, const juce::MidiMessage& m) override
+    {
+        return interceptMidi && interceptMidi (deviceName, m);
+    }
 
     bool shouldLoadPlugin (te::ExternalPlugin& p) override
     {
@@ -304,6 +313,14 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
             return owner.plugins != nullptr && owner.plugins->isBlocked (description);
         };
 
+        // Controls of a known controller that are mapped to app actions (its
+        // transport buttons, say) never reach the instrument.
+        controllerMap.setProfiles (ControllerProfile::getBuiltIn());
+        behaviour.interceptMidi = [this] (const juce::String& deviceName, const juce::MidiMessage& m)
+        {
+            return controllerMap.handleMessage (deviceName, m);
+        };
+
         deleteStaleWorkFolders();
 
         // Listen for MIDI devices being plugged in or removed so they can be
@@ -365,6 +382,10 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
     }
 
     AudioEngine& owner;
+
+    // The controller maps (see ControllerMap). Declared before `engine`, so
+    // it outlives the MIDI inputs that hand it their messages.
+    ControllerMap controllerMap;
 
     // te::Engine is the root object: device manager, plugin manager, temp files...
     // There should only be one per app.
@@ -992,6 +1013,11 @@ void AudioEngine::runNextStartupStage()
 {
     if (nextStartupStage < startupStages.size())
         startupStages[nextStartupStage++].run();
+}
+
+ControllerMap& AudioEngine::getControllerMap() noexcept
+{
+    return impl->controllerMap;
 }
 
 AudioEngine::~AudioEngine()

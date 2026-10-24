@@ -301,6 +301,12 @@ public:
 
     /// Restore a custom control surface from custom XML
     virtual ControlSurface* getCustomControlSurfaceForXML (ExternalControllerManager&, const juce::XmlElement&)     { return {}; }
+
+    /** Called on the MIDI thread with each message from a physical MIDI input
+        (the device's name), before it goes anywhere else. Return true to
+        swallow it, e.g. a controller knob that's mapped to an app action.
+    */
+    virtual bool interceptMidiInputMessage (const juce::String& /*deviceName*/, const juce::MidiMessage&)  { return false; }
 };
 
 } // namespace tracktion::inline engine

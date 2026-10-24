@@ -85,9 +85,15 @@ public:
         return ! hasShortcutModifier() && juce::MidiKeyboardComponent::keyStateChanged (isKeyDown);
     }
 
+    // Keys held on a hardware keyboard look pressed too. (Only drawn: the
+    // keyboard's own state would play them a second time.)
+    std::bitset<128> heldOnController;
+
     void drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> area,
                         bool isDown, bool isOver, juce::Colour, juce::Colour) override
     {
+        isDown = isDown || heldOnController[(size_t) note];
+
         // The 1px gaps either side of the key are its dividers.
         g.setColour (theme().pianoKeyDivider);
         g.fillRect (area);
@@ -104,9 +110,11 @@ public:
         }
     }
 
-    void drawBlackNote (int, juce::Graphics& g, juce::Rectangle<float> area,
+    void drawBlackNote (int note, juce::Graphics& g, juce::Rectangle<float> area,
                         bool isDown, bool isOver, juce::Colour) override
     {
+        isDown = isDown || heldOnController[(size_t) note];
+
         auto key = area.withTrimmedTop (-4.0f);
         g.setColour (isDown ? theme().pianoBlackDown : (isOver ? theme().pianoBlack.brighter (0.15f) : theme().pianoBlack));
         g.fillRoundedRectangle (key, size::radiusXs);
@@ -117,6 +125,39 @@ public:
 };
 
 //==============================================================================
+void PianoKeyboard::setHeldNotes (const std::bitset<128>& notes)
+{
+    if (notes == keys->heldOnController)
+        return;
+
+    // A key just pressed outside the octaves shown (the controller's own
+    // octave buttons, say): move the keyboard so it's in view, by octaves.
+    const auto highest = lowestNote + numOctaves * 12 - 1;
+    auto start = lowestNote;
+
+    for (int note = 0; note < 128; ++note)
+    {
+        const bool justPressed = notes[(size_t) note] && ! keys->heldOnController[(size_t) note];
+
+        if (justPressed && note < lowestNote)
+            start = note / 12 * 12;                                // it's in the bottom octave
+        else if (justPressed && note > highest)
+            start = note / 12 * 12 - (numOctaves - 1) * 12;        // ...or the top one
+    }
+
+    keys->heldOnController = notes;
+    start = juce::jlimit (minLowestNote, maxLowestNote, start);
+
+    if (start != lowestNote)
+    {
+        releaseAll();
+        lowestNote = start;
+        updateRange();
+    }
+
+    keys->repaint();
+}
+
 PianoKeyboard::PianoKeyboard (AudioEngine& e) : engine (e)
 {
     keys = std::make_unique<Keys> (state);

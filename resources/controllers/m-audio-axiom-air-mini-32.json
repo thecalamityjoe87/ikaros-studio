@@ -1,0 +1,15 @@
+{
+  "name": "M-Audio Axiom AIR Mini 32",
+  "about": "From Ardour's map for this controller (M-Audio_Axiom_AIR_Mini_32.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Axiom AIR Mini 32*"
+  ],
+  "controls": [
+    {"cc": 1, "type": "knob", "channel": 1, "action": "masterVolume"},
+    {"cc": 16, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 17, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 18, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 19, "type": "button", "channel": 1, "action": "goToStart"},
+    {"cc": 23, "type": "button", "channel": 1, "action": "loop"}
+  ]
+}

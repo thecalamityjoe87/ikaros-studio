@@ -514,6 +514,7 @@ void MainComponent::timerCallback()
     arrangement.updateTransport();
     bottomPanel.update();
     library.update();
+    controlSurface.update();
     updateSessionStatus();   // "unsaved" isn't broadcast, so check it here (cheap: it only tells the menu bar on a change)
 
     if (auto report = engine.takeRecordingReport())

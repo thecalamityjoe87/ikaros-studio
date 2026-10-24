@@ -1,0 +1,12 @@
+{
+  "name": "Alesis Q49 MKII",
+  "about": "From Ardour's map for this controller (Alesis_Q49v2.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Q49*"
+  ],
+  "controls": [
+    {"cc": 118, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 119, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 23, "type": "button", "channel": 1, "action": "goToStart"}
+  ]
+}

@@ -19,6 +19,9 @@
 #include "engine/AmpPlugin.h"
 #include "engine/LiveWaveform.h"
 #include "engine/DrumKitMap.h"                   // the Drummer's kit maps
+#include "engine/MidiPorts.h"
+#include "engine/ControlSurface.h"
+#include "engine/ControllerMap.h"
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -6172,6 +6175,280 @@ static void runDrummerSection (const juce::File& dir)
     }
 }
 
+//==============================================================================
+// MIDI controllers: which of a controller's ports play instruments.
+static void runControllersSection()
+{
+    // The MiniLab 3's ports as ALSA lists them (padded with spaces).
+    check (! isControlSurfacePort ("Minilab3 MIDI   "), "the MiniLab 3's MIDI port plays");
+    check (isControlSurfacePort ("Minilab3 MCU/HUI") && isControlSurfacePort ("Minilab3 DIN THRU")
+             && isControlSurfacePort ("Minilab3 ALV    "),
+           "its MCU/HUI, DIN THRU and ALV ports don't");
+
+    // Other controllers' DAW ports, and ordinary keyboards.
+    check (isControlSurfacePort ("Launchkey MK3 49 LKMK3 DAW Out") && isControlSurfacePort ("KeyLab mk2 61 DAW")
+             && isControlSurfacePort ("X-Touch Mini Mackie"),
+           "other controllers' DAW ports don't play");
+    check (! isControlSurfacePort ("Launchkey MK3 49 LKMK3 MIDI Out") && ! isControlSurfacePort ("MPK mini 3 MIDI 1")
+             && ! isControlSurfacePort ("Digital Piano MIDI 1") && ! isControlSurfacePort ("Midi Through Port-0")
+             && ! isControlSurfacePort ("Dawn Keys"),
+           "keyboards' note ports do (and \"Dawn\" isn't \"DAW\")");
+    check (isMackiePort ("Minilab3 MCU/HUI") && isMackiePort ("X-Touch Mini Mackie") && ! isMackiePort ("Minilab3 ALV    ")
+             && ! isMackiePort ("Launchkey MK3 49 LKMK3 DAW Out"),
+           "Mackie Control ports are told apart from other DAW ports");
+
+    // Mackie Control messages.
+    using T = mackie::Event::Type;
+    auto is = [] (const juce::MidiMessage& m, T type, int strip = -1)
+    {
+        auto e = mackie::decode (m);
+        return e.has_value() && e->type == type && e->strip == strip;
+    };
+
+    check (is (juce::MidiMessage::noteOn (1, 0x5e, (juce::uint8) 127), T::play)
+             && is (juce::MidiMessage::noteOn (1, 0x5f, (juce::uint8) 127), T::record)
+             && is (juce::MidiMessage::noteOn (1, 0x56, (juce::uint8) 127), T::cycle)
+             && ! mackie::decode (juce::MidiMessage::noteOn (1, 0x5e, (juce::uint8) 0)).has_value(),
+           "MCU: transport buttons are presses (a release is nothing)");
+    check (is (juce::MidiMessage::noteOn (1, 0x13, (juce::uint8) 127), T::mute, 3)
+             && is (juce::MidiMessage::noteOn (1, 0x08, (juce::uint8) 127), T::solo, 0)
+             && is (juce::MidiMessage::noteOn (1, 0x1f, (juce::uint8) 127), T::select, 7),
+           "MCU: strip buttons say which strip");
+
+    const auto fader = mackie::decode (juce::MidiMessage::pitchWheel (3, 0x3f70));
+    const auto master = mackie::decode (juce::MidiMessage::pitchWheel (9, 0));
+    check (fader && fader->type == T::fader && fader->strip == 2 && std::abs (fader->position - 1.0f) < 1.0e-4f
+             && master && master->strip == mackie::masterStrip && master->position == 0.0f,
+           "MCU: faders (channel 3 = strip 3, channel 9 = master)");
+
+    const auto knob = mackie::decode (juce::MidiMessage::controllerEvent (1, 0x11, 0x43));
+    const auto jog = mackie::decode (juce::MidiMessage::controllerEvent (1, 0x3c, 0x02));
+    check (knob && knob->type == T::vpot && knob->strip == 1 && knob->steps == -3
+             && jog && jog->type == T::jog && jog->steps == 2,
+           "MCU: knobs and the jog wheel count clicks (left = minus)");
+
+    const auto touch = mackie::decode (juce::MidiMessage::noteOn (1, 0x69, (juce::uint8) 127));
+    const auto letGo = mackie::decode (juce::MidiMessage::noteOn (1, 0x69, (juce::uint8) 0));
+    check (touch && touch->type == T::faderTouch && touch->strip == 1 && touch->pressed
+             && letGo && letGo->type == T::faderTouch && ! letGo->pressed,
+           "MCU: touching and letting go of a fader");
+    check (! mackie::decode (juce::MidiMessage::noteOn (2, 0x5e, (juce::uint8) 127)).has_value()
+             && ! mackie::decode (juce::MidiMessage::controllerEvent (1, 7, 100)).has_value(),
+           "MCU: other channels and controllers mean nothing");
+
+    // The surface: strips follow the bank, lights and faders follow the session.
+    ControlSurface surface (false);
+    std::vector<juce::MidiMessage> sent;
+    surface.setOutputForTests ([&sent] (const juce::MidiMessage& m) { sent.push_back (m); });
+
+    ControlSurface::State state;
+
+    for (TrackId id = 1; id <= 10; ++id)
+        state.tracks.push_back ({ id, id == 1, false, false, false, 0.5f, 0.0f });
+
+    auto press = [&surface] (int noteNumber) { surface.receiveForTests (juce::MidiMessage::noteOn (1, noteNumber, (juce::uint8) 127)); };
+
+    check (! surface.hasHeardFromSurface(), "(the surface hasn't said anything yet)");
+    press (mackie::note::mute + 2);
+    auto actions = surface.update (state);
+    check (actions.size() == 1 && actions[0].event.type == T::mute && actions[0].track == 3,
+           "strip 3's Mute is the third track's");
+
+    const auto countSent = [&sent] (std::function<bool (const juce::MidiMessage&)> which)
+    {
+        return (int) std::count_if (sent.begin(), sent.end(), which);
+    };
+    const auto isLight = [] (int noteNumber, bool on)
+    {
+        return [noteNumber, on] (const juce::MidiMessage& m)
+        {
+            return m.isNoteOnOrOff() && m.getNoteNumber() == noteNumber && (m.getVelocity() > 0) == on;
+        };
+    };
+
+    check (countSent (isLight (mackie::note::stop, true)) == 1 && countSent (isLight (mackie::note::play, false)) == 1
+             && countSent (isLight (mackie::note::select, true)) == 1 && countSent (isLight (mackie::note::select + 1, false)) == 1,
+           "the first update lights the surface (Stop lit, first track selected)");
+    check (countSent ([] (const juce::MidiMessage& m) { return m.isPitchWheel(); }) == mackie::numStrips + 1,
+           "...and moves its faders");
+
+    sent.clear();
+    surface.update (state);
+    check (sent.empty(), "nothing is sent again while nothing changes");
+
+    state.playing = true;
+    state.tracks[1].volume = 0.9f;
+    surface.update (state);
+    check (sent.size() == 3 && countSent (isLight (mackie::note::play, true)) == 1 && countSent (isLight (mackie::note::stop, false)) == 1
+             && countSent ([] (const juce::MidiMessage& m) { return m.isPitchWheel() && m.getChannel() == 2; }) == 1,
+           "only changes are sent (Play lit, Stop off, strip 2's fader moved)");
+
+    // A fader the user moves isn't moved back by the session straight away.
+    sent.clear();
+    surface.receiveForTests (juce::MidiMessage::pitchWheel (1, 0x2000));
+    actions = surface.update (state);
+    check (actions.size() == 1 && actions[0].event.type == T::fader && actions[0].track == 1
+             && sent.size() == 1 && sent[0].isPitchWheel() && sent[0].getChannel() == 1,
+           "moving a fader: its track's volume, and the position echoed (motor faders)");
+    sent.clear();
+    surface.update (state);   // still says 0.5
+    check (sent.empty(), "a fader just moved isn't pulled back to the old volume");
+
+    check (surface.hasHeardFromSurface(), "once it has, it's known to be talking Mackie Control");
+
+    press (mackie::note::bankRight);
+    press (mackie::note::select);
+    actions = surface.update (state);
+    check (surface.getFirstTrackIndex() == 8 && actions.size() == 1 && actions[0].event.type == T::select && actions[0].track == 9,
+           "Bank Right: strip 1 is the ninth track");
+
+    press (mackie::note::mute + 2);
+    actions = surface.update (state);
+    check (actions.size() == 1 && actions[0].track == 0, "a strip past the last track has none");
+
+    press (mackie::note::bankRight);
+    press (mackie::note::channelLeft);
+    surface.update (state);
+    check (surface.getFirstTrackIndex() == 8, "Bank stops at the last track; Channel moves one");
+
+    state.tracks.resize (3);
+    surface.update (state);
+    check (surface.getFirstTrackIndex() == 0, "...and goes back to the last group with a track when tracks are deleted");
+
+    // A surface with 4 faders (the MiniLab 3): groups of 4 that follow the selection.
+    ControlSurface four (false);
+    four.setOutputForTests ([] (const juce::MidiMessage&) {});
+    four.setNumStrips (4);
+    state.tracks.clear();
+
+    for (TrackId id = 1; id <= 10; ++id)
+        state.tracks.push_back ({ id, id == 6, false, false, false, 0.5f, 0.0f });
+
+    four.update (state);
+    check (four.getFirstTrackIndex() == 4, "4 faders: selecting track 6 shows tracks 5-8");
+
+    four.receiveForTests (juce::MidiMessage::pitchWheel (5, 0x2000));   // a fifth fader it doesn't have
+    four.receiveForTests (juce::MidiMessage::pitchWheel (1, 0x2000));
+    actions = four.update (state);
+    check (actions.size() == 2 && actions[0].track == 0 && actions[1].track == 5,
+           "...fader 1 is track 5, and a fifth strip has no track");
+
+    state.tracks[5].selected = false;
+    state.tracks[6].selected = true;
+    four.update (state);
+    check (four.getFirstTrackIndex() == 4, "selecting a track the faders already show doesn't move them");
+
+    four.showGroup (0);
+    four.update (state);
+    check (four.getFirstTrackIndex() == 0, "the controller's bank switch shows tracks 1-4 (until the selection moves away)");
+
+    four.receiveForTests (juce::MidiMessage::noteOn (1, mackie::note::bankRight, (juce::uint8) 127));
+    four.update (state);
+    check (four.getFirstTrackIndex() == 4, "Bank moves 4 tracks");
+
+    state.tracks.resize (3);
+    four.showGroup (1);
+    four.update (state);
+    check (four.getFirstTrackIndex() == 0, "a group past the last track shows the last one with tracks");
+
+    // Controller maps: the MiniLab 3's DAW mode, from the app's own profile.
+    const auto builtIn = ControllerProfile::getBuiltIn();
+    const auto miniLab = std::find_if (builtIn.begin(), builtIn.end(),
+                                       [] (const ControllerProfile& p) { return p.name == "Arturia MiniLab 3"; });
+    check (miniLab != builtIn.end() && miniLab->controls.size() >= 15, "the MiniLab 3's map comes with the app");
+    check (miniLab != builtIn.end() && miniLab->isFor ("Minilab3 MIDI   ") && ! miniLab->isFor ("Minilab3 MCU/HUI"),
+           "...for its MIDI port (as ALSA pads it), not its others");
+
+    ControllerMap map;
+    map.setProfiles (builtIn);
+    const juce::String port ("Minilab3 MIDI   ");
+    auto cc = [] (int number, int value) { return juce::MidiMessage::controllerEvent (1, number, value); };
+
+    check (map.handleMessage (port, cc (107, 127)) && map.handleMessage (port, cc (107, 0)),
+           "Shift + Pad 6 (Play) is swallowed, press and release");
+    auto mapped = map.takeEvents();
+    check (mapped.size() == 1 && mapped[0].action == ControllerAction::play, "...and plays once (on the press)");
+    check (map.takeEvents().empty(), "events are taken once");
+
+    check (map.handleMessage (port, cc (28, 66)) && map.handleMessage (port, cc (28, 61)) && map.handleMessage (port, cc (28, 64)),
+           "the main encoder is swallowed");
+    mapped = map.takeEvents();
+    check (mapped.size() == 2 && mapped[0].action == ControllerAction::selectTrack && mapped[0].steps == 2
+             && mapped[1].steps == -3,
+           "...and counts clicks either way from 64 (64 itself is nothing)");
+
+    map.handleMessage (port, cc (14, 127));
+    map.handleMessage (port, cc (90, 0));
+    mapped = map.takeEvents();
+    check (mapped.size() == 2 && mapped[0].action == ControllerAction::volume && mapped[0].value == 1.0f
+             && mapped[1].action == ControllerAction::soundKnob && mapped[1].index == 3 && mapped[1].value == 0.0f,
+           "fader 1 is the volume, knob 4 the fourth Sound knob");
+
+    map.handleMessage (port, cc (108, 127));
+    map.handleMessage (port, cc (87, 64));
+    mapped = map.takeEvents();
+    check (mapped.size() == 2 && mapped[0].alsoMackie && ! mapped[1].alsoMackie,
+           "the transport pads say they also send Mackie Control; the knobs don't");
+
+    const juce::uint8 bankB[] { 0xf0, 0x00, 0x20, 0x6b, 0x7f, 0x42, 0x02, 0x00, 0x40, 0x63, 0x01, 0xf7 };
+    const juce::uint8 other[] { 0xf0, 0x00, 0x20, 0x6b, 0x7f, 0x42, 0x02, 0x00, 0x40, 0x62, 0x01, 0xf7 };
+    check (map.handleMessage (port, juce::MidiMessage (bankB, (int) sizeof (bankB))) && ! map.handleMessage (port, juce::MidiMessage (other, (int) sizeof (other))),
+           "Shift + Pad 2's system message is mapped; other system messages aren't");
+    mapped = map.takeEvents();
+    check (mapped.size() == 1 && mapped[0].action == ControllerAction::faderBank && mapped[0].index == 1, "...Bank B = the second group");
+    check (miniLab != builtIn.end() && miniLab->faders == 4 && map.getProfileForMackiePort ("Minilab3 MCU/HUI").has_value()
+             && ! map.getProfileForMackiePort ("X-Touch Mini Mackie").has_value(),
+           "the MiniLab's Mackie port is known, and it has 4 faders");
+
+    // The profiles made from Ardour's maps (tools/controllers/convert_ardour_maps.py).
+    auto findBuiltIn = [&builtIn] (const juce::String& name) -> const ControllerProfile*
+    {
+        for (auto& p : builtIn)
+            if (p.name == name)
+                return &p;
+
+        return nullptr;
+    };
+
+    bool allComplete = builtIn.size() >= 20;
+
+    for (auto& p : builtIn)
+        allComplete = allComplete && ! p.ports.isEmpty() && ! p.controls.empty();
+
+    check (allComplete, "every built-in profile reads, with its ports and controls (20 or more)");
+
+    const auto* mpk = findBuiltIn ("Akai MPK mini mk3");
+    check (mpk != nullptr && mpk->isFor ("MPK mini 3 MIDI 1") && mpk->isFor ("MPK mini 3") && ! mpk->isFor ("MPK mini Plus")
+             && ! mpk->isFor ("Old MPK mini 3"),
+           "a port ending in * matches names that start with it (Linux and Windows/macOS names)");
+
+    map.handleMessage ("MPK mini 3 MIDI 1", juce::MidiMessage::programChange (10, 1));
+    map.handleMessage ("MPK mini 3 MIDI 1", juce::MidiMessage::programChange (1, 1));   // another channel
+    map.handleMessage ("MPK mini 3 MIDI 1", cc (70, 127));
+    mapped = map.takeEvents();
+    check (mapped.size() == 2 && mapped[0].action == ControllerAction::play
+             && mapped[1].action == ControllerAction::soundKnob && mapped[1].index == 0,
+           "MPK mini mk3: a pad's program change (channel 10) plays; knob 1 is the first Sound knob");
+
+    map.handleMessage ("nanoKONTROL2 nanoKONTROL2 _ CTRL", cc (41, 127));
+    map.handleMessage ("nanoKONTROL2 nanoKONTROL2 _ CTRL", cc (46, 127));
+    mapped = map.takeEvents();
+    check (mapped.size() == 2 && mapped[0].action == ControllerAction::play && mapped[1].action == ControllerAction::loop,
+           "nanoKONTROL2: Play and Cycle");
+
+    check (! map.handleMessage (port, cc (74, 100)) && ! map.handleMessage (port, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100))
+             && ! map.handleMessage (port, juce::MidiMessage::pitchWheel (1, 9000)),
+           "unmapped controllers, notes and pitch bend still play");
+    check (! map.handleMessage ("MPK mini 3 MIDI 1", cc (107, 127)) && map.takeEvents().empty(),
+           "another controller's messages aren't touched");
+
+    const auto broken = ControllerProfile::fromJson (R"({ "name": "Test", "ports": [ "Test Port" ],
+        "controls": [ { "cc": 1, "type": "knob", "action": "volume" }, { "cc": 2, "type": "knob", "action": "fly" },
+                      { "cc": 300, "type": "knob", "action": "pan" }, { "cc": 4, "type": "slider", "action": "pan" } ] })");
+    check (broken && broken->controls.size() == 1 && ! ControllerProfile::fromJson ("{ \"controls\": [] }"),
+           "a profile's unknown actions, types and numbers are skipped; one without a name or port isn't read");
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -9160,6 +9437,9 @@ int main (int argc, char* argv[])
 
     if (runs ("drummer"))
         runDrummerSection (dir);
+
+    if (runs ("controllers"))
+        runControllersSection();
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

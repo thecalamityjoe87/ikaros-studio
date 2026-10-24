@@ -3,6 +3,7 @@
 #include "engine/TrackHelpers.h"
 #include "engine/Tuner.h"
 #include "engine/LiveWaveform.h"
+#include "engine/MidiPorts.h"
 #include <map>
 
 namespace te = tracktion;
@@ -129,12 +130,26 @@ void InputRouter::routeMidiInputs()
     }
 
     // Enable every MIDI input and make it audible without arming
-    // (MonitorMode::on), so playing always makes sound.
+    // (MonitorMode::on), so playing always makes sound. Not a controller's
+    // DAW-control ports, though (see isControlSurfacePort): disabled, they
+    // get no input instance, so they can't reach a track.
     for (auto& midiIn : dm.getMidiInDevices())
     {
-        midiIn->setEnabled (true);
-        midiIn->setMonitorMode (te::InputDevice::MonitorMode::on);
+        const bool plays = midiIn->getDeviceType() != te::InputDevice::physicalMidiDevice
+                        || ! isControlSurfacePort (midiIn->getName());
+
+        midiIn->setEnabled (plays);
+
+        if (plays)
+            midiIn->setMonitorMode (te::InputDevice::MonitorMode::on);
     }
+
+    // A Mackie Control port's output belongs to the ControlSurface (its
+    // lights and motor faders). On Windows a port opens only once.
+    for (int i = 0; i < dm.getNumMidiOutDevices(); ++i)
+        if (auto* midiOut = dm.getMidiOutDevice (i); midiOut != nullptr && isMackiePort (midiOut->getName()))
+            if (midiOut->isEnabled())
+                midiOut->setEnabled (false);
 
     // The playback context creates an InputDeviceInstance per enabled device.
     // If a device was added after the context was built, rebuild it.
@@ -180,6 +195,21 @@ void InputRouter::routeMidiInputs()
     }
 
     routeAudioInputs();
+}
+
+std::bitset<128> InputRouter::getHeldControllerNotes() const
+{
+    std::bitset<128> held;
+
+    // Tracktion keeps each MIDI input's held keys in a juce::MidiKeyboardState.
+    // (Disabled inputs, such as a controller's DAW-control ports, play nothing.)
+    for (auto& midiIn : owner.getTeEngine().getDeviceManager().getMidiInDevices())
+        if (midiIn->getDeviceType() == te::InputDevice::physicalMidiDevice && midiIn->isEnabled())
+            for (int note = 0; note < 128; ++note)
+                if (midiIn->keyboardState.isNoteOnForChannels (0xffff, note))   // 0xffff = any of the 16 channels
+                    held.set ((size_t) note);
+
+    return held;
 }
 
 void InputRouter::routeAudioInputs()

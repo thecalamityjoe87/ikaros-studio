@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/AppMenuModel.h"
+#include "app/SurfaceHandler.h"
 #include "engine/AudioEngine.h"
 #include "ui/arrangement/ArrangementView.h"
 #include "ui/bottompanel/BottomPanel.h"
@@ -75,6 +76,7 @@ private:
     LibrarySidebar library { engine, selection };
     ArrangementView arrangement { engine, selection, commands };
     BottomPanel bottomPanel { engine, selection };
+    SurfaceHandler controlSurface { engine, selection, commands };   // a Mackie Control controller, if one is plugged in
 
     juce::TooltipWindow tooltipWindow { this, 700 };
     std::unique_ptr<juce::FileChooser> fileChooser;
