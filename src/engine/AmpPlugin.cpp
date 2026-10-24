@@ -335,6 +335,7 @@ double AmpPlugin::getLatencySeconds()
 
 void AmpPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 1.0);   // tail: the cabinet's impulse response and filters
     rate = info.sampleRate;
     maxBlockSize = juce::jmax (1, info.blockSizeSamples);
 
@@ -497,6 +498,10 @@ void AmpPlugin::processMono (float* samples, int n)
 void AmpPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr || fc.bufferNumSamples <= 0 || mono.getNumSamples() == 0)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK

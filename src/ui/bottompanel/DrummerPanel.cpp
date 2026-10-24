@@ -1,4 +1,5 @@
 #include "ui/bottompanel/DrummerPanel.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -452,6 +453,7 @@ void DrummerPanel::updateControls()
 //==============================================================================
 void DrummerPanel::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("DrummerPanel");
     Knob::drawShadow (g, fillsKnob);
     Knob::drawShadow (g, swingKnob);
 

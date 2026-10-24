@@ -1,4 +1,5 @@
 #include "ui/library/LibrarySidebar.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioPreview.h"
 #include "engine/PackStore.h"
 #include "engine/PluginLibrary.h"
@@ -1031,6 +1032,7 @@ void LibrarySidebar::chooseFolder()
 //==============================================================================
 void LibrarySidebar::paintOverChildren (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LibrarySidebar::paintOverChildren");
     if (loopBrowser.isVisible())
         return;
 
@@ -1043,6 +1045,7 @@ void LibrarySidebar::paintOverChildren (juce::Graphics& g)
 
 void LibrarySidebar::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LibrarySidebar");
     g.fillAll (theme().librarySidebarBg);
     g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));

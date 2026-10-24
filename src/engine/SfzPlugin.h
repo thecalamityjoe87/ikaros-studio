@@ -52,16 +52,16 @@ public:
 
     /** True once the current file has finished loading (whether or not it
         loaded successfully). */
-    bool isLoaded() const noexcept         { return loadedRequest.load() == requestCounter.load(); }
+    bool isLoaded() const noexcept         { return shared->loadedRequest.load() == requestCounter.load(); }
 
     /** How many sample regions the loaded file has (0 if it failed to load). */
-    int getNumRegions() const noexcept     { return numRegions.load(); }
+    int getNumRegions() const noexcept     { return shared->numRegions.load(); }
 
     /** The lowest and highest MIDI keys that make a sound, or false if the file isn't loaded or none do. */
     bool getKeyRange (int& lowest, int& highest) const noexcept
     {
-        lowest = lowestKey.load();
-        highest = highestKey.load();
+        lowest = shared->lowestKey.load();
+        highest = shared->highestKey.load();
         return isLoaded() && lowest >= 0;
     }
 
@@ -94,20 +94,34 @@ private:
     // plugin is processing).
     sfz::Sfizz* active = nullptr;
 
-    // Hand-overs between the loader thread and the audio thread, without
-    // locks: the loader puts a newly loaded synth in `incoming`; the audio
-    // thread swaps it in and puts the old one in `outgoing` for the loader
-    // to delete.
-    std::atomic<sfz::Sfizz*> incoming { nullptr }, outgoing { nullptr };
+    // What the loader thread writes and the plug-in reads. Both hold it (a
+    // shared_ptr deletes it when the last holder lets go), so a loader that
+    // is still busy with a big library when the plug-in is deleted can
+    // finish safely on its own (see ~SfzPlugin).
+    struct Shared
+    {
+        ~Shared();   // deletes any synth still waiting to be handed over or deleted
+
+        // Hand-overs between the loader thread and the audio thread, without
+        // locks: the loader puts a newly loaded synth in `incoming`; the audio
+        // thread swaps it in and puts the old one in `outgoing` for the loader
+        // to delete.
+        std::atomic<sfz::Sfizz*> incoming { nullptr }, outgoing { nullptr };
+
+        // The number of the last load request finished (see requestCounter).
+        std::atomic<int> loadedRequest { 0 };
+        std::atomic<int> numRegions { 0 };
+        std::atomic<int> lowestKey { -1 }, highestKey { -1 };
+
+        // The audio settings new synths are made for.
+        std::atomic<double> currentSampleRate { 44100.0 };
+    };
+
+    std::shared_ptr<Shared> shared = std::make_shared<Shared>();
 
     // Each load request gets a number; when the loader finishes one it
     // records it, so isLoaded() knows whether the latest has finished.
-    std::atomic<int> requestCounter { 0 }, loadedRequest { 0 };
-    std::atomic<int> numRegions { 0 };
-    std::atomic<int> lowestKey { -1 }, highestKey { -1 };
-
-    // The audio settings new synths are made for.
-    std::atomic<double> currentSampleRate { 44100.0 };
+    std::atomic<int> requestCounter { 0 };
     static constexpr int maxBlockSize = 4096;     // longer blocks are rendered in pieces
 
     juce::AudioBuffer<float> scratch;             // sfizz renders here, then it's added to the track

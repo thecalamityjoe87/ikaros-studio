@@ -1,4 +1,5 @@
 #include "ui/arrangement/RegionComponent.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -202,6 +203,7 @@ void RegionComponent::resized()
 //==============================================================================
 void RegionComponent::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("RegionComponent");
     auto r = getLocalBounds().toFloat();
 
     // Clip everything to the rounded shape so the strip gets rounded top corners.

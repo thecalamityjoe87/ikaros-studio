@@ -1,4 +1,5 @@
 #include "ui/bottompanel/RegionInspector.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
 #include "ui/widgets/IconButton.h"
@@ -779,6 +780,7 @@ void RegionInspector::layoutSections()
 
 void RegionInspector::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("RegionInspector");
     g.fillAll (theme().inspectorBg);
     g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));

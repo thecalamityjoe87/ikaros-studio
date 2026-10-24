@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/SilenceSkip.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <memory>
 #include <vector>
@@ -54,6 +55,10 @@ protected:
     tracktion::AutomatableParameter::Ptr addSetting (const juce::Identifier& id, const juce::String& name,
                                                      juce::NormalisableRange<float> range, float defaultValue,
                                                      std::function<juce::String (float)> toText);
+
+    /** Each effect prepares this in initialise() with its tail length, and
+        skips its DSP while it says so (see SilenceSkip). */
+    SilenceSkip silence;
 
 private:
     struct Setting

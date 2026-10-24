@@ -1,4 +1,5 @@
 #include "ui/titlebar/MenuBar.h"
+#include "ui/widgets/PaintProbe.h"
 #include "BinaryData.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
@@ -137,6 +138,7 @@ void MenuBar::mouseDoubleClick (const juce::MouseEvent&)
 //==============================================================================
 void MenuBar::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("MenuBar");
     g.fillAll (theme().titleBarBg);
 
     g.setColour (theme().titleBarBorder);

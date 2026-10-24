@@ -1,4 +1,5 @@
 #include "ui/widgets/ClipLight.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Tokens.h"
 
 namespace ikaros
@@ -27,6 +28,7 @@ void ClipLight::setClipped (bool shouldBeLit)
 
 void ClipLight::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ClipLight");
     // A small rounded square, centred: dark when off, red when lit.
     const auto side = (float) juce::jmin (getWidth(), getHeight());
     const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (side, side);

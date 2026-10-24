@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementAutomation.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -111,6 +112,7 @@ int ArrangementView::AutomationLane::numSelected() const
 //==============================================================================
 void ArrangementView::AutomationLane::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::AutomationLane");
     // No background: the track's lane (grid and faded regions) shows through.
     // Each kind of setting has its own colour (volume blue, pan green...).
     const float width = (float) getWidth();

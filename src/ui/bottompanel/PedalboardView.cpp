@@ -1,4 +1,5 @@
 #include "ui/bottompanel/PedalboardView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/bottompanel/AmpView.h"
 #include "ui/dialogs/AddPedalDialog.h"
 #include "ui/theme/Fonts.h"
@@ -503,6 +504,7 @@ void PedalboardView::showAddPedal (juce::Component& from)
 
 void PedalboardView::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("PedalboardView");
     g.fillAll (theme().pedalboardFloor);
 }
 

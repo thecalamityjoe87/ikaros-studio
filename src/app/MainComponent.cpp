@@ -16,6 +16,8 @@
 #include "engine/Tuner.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/widgets/PaintProbe.h"
+#include "ui/widgets/PerfOverlay.h"
 
 namespace ikaros
 {
@@ -96,6 +98,9 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
     refreshAll();
     startTimerHz (30);   // playhead, meters, CPU
+
+    if (auto* perf = engine.getPerfMonitor())
+        setUpPerfMonitor (*perf);
     setSize (1440, 900);
 
     // Like GarageBand, start with the session chooser: recent sessions if
@@ -145,6 +150,9 @@ MainComponent::~MainComponent()
     stopTimer();
     engine.removeListener (this);
     engine.getPreferences().removeListener (this);
+
+    if (perfKeys != nullptr)
+        removeKeyListener (perfKeys.get());
     selection.removeChangeListener (this);
     engine.setPluginWindowFactory (nullptr);
     engine.getPlugins().cancelScan();
@@ -157,7 +165,63 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("MainComponent");
     g.fillAll (theme().windowBg);
+}
+
+void MainComponent::paintOverChildren (juce::Graphics&)
+{
+    // Everything in this repaint has been drawn by now (see PaintProbe).
+    paintprobe::frameEnd();
+}
+
+//==============================================================================
+// Debug only (IKAROS_PERF=1, see engine/PerfMonitor.h).
+void MainComponent::setUpPerfMonitor (PerfMonitor& perf)
+{
+    perf.setUiSampler ([] { return paintprobe::takeSample(); });
+
+    // Always on top of the other children, dialogs included; showing unless
+    // IKAROS_PERF_OVERLAY=0.
+    perfOverlay = std::make_unique<PerfOverlay> (perf);
+    perfOverlay->setAlwaysOnTop (true);
+    addChildComponent (*perfOverlay);
+    perfOverlay->setVisible (juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_OVERLAY", "1") != "0");
+
+    // A KeyListener sees key presses that reach this component (from it or
+    // any child that doesn't use them) before the command shortcuts do.
+    struct ToggleKey  : juce::KeyListener
+    {
+        juce::Component& overlay;
+        explicit ToggleKey (juce::Component& o) : overlay (o) {}
+
+        bool keyPressed (const juce::KeyPress& key, juce::Component*) override
+        {
+            const auto mods = key.getModifiers();
+
+            if (juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key.getKeyCode()) != 'P'
+                 || ! mods.isCtrlDown() || ! mods.isShiftDown())
+                return false;
+
+            overlay.setVisible (! overlay.isVisible());
+            return true;
+        }
+    };
+
+    perfKeys = std::make_unique<ToggleKey> (*perfOverlay);
+    addKeyListener (perfKeys.get());
+}
+
+void MainComponent::scrollTimelineForPerf (double beats)
+{
+    auto position = arrangement.getViewPosition();
+    position.scrollBeats = std::fmod (position.scrollBeats + beats, 64.0);
+    arrangement.setViewPosition (position);
+}
+
+void MainComponent::closeSessionChooserForPerf()
+{
+    SessionChooser::dismiss (*this);
 }
 
 void MainComponent::resized()
@@ -173,6 +237,9 @@ void MainComponent::resized()
     auto r = getLocalBounds();
     menuBar.setBounds (r.removeFromTop (size::menuBarHeight));
     toolbar.setBounds (r.removeFromTop (size::toolbarHeight));
+
+    if (perfOverlay != nullptr)
+        perfOverlay->setTopRightPosition (getWidth() - 12, r.getY() + 12);
 
     library.setVisible (libraryVisible);
 

@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementOverlays.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -18,6 +19,7 @@ ArrangementView::DropZone::DropZone()
 
 void ArrangementView::DropZone::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::DropZone");
     auto r = getLocalBounds().toFloat().reduced (1.0f);
 
     juce::Path outline, dashed;
@@ -132,6 +134,7 @@ void ArrangementView::Playhead::setX (float newX)
 
 void ArrangementView::Playhead::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Playhead");
     if (x < -8.0f || x > (float) getWidth() + 8.0f)
         return;
 
@@ -197,6 +200,7 @@ void ArrangementView::Overlay::clear()
 
 void ArrangementView::Overlay::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Overlay");
     for (auto& ghost : ghosts)
     {
         const auto ghostColour = theme().family (ghost.family);

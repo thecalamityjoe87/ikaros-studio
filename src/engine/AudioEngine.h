@@ -34,6 +34,7 @@ class AudioDeviceWatcher;
 class Tuner;
 class ControllerMap;
 class LiveWaveform;
+class PerfMonitor;
 struct LiveRecording;
 
 //==============================================================================
@@ -363,6 +364,9 @@ public:
     // Meters and stats, polled by the UI at ~30 Hz
     StereoLevel getMasterLevel();
     SystemStats getSystemStats() const;
+
+    /** The debug performance monitor, or nullptr unless IKAROS_PERF=1 (see PerfMonitor). */
+    PerfMonitor* getPerfMonitor() const noexcept;
 
     /** After a take ends: why it stopped, whether the input clipped, and how
         many dropouts it had. Each report is returned once (then nullopt).

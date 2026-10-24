@@ -4926,6 +4926,83 @@ static void runPedalsSection (const juce::File& dir)
         check (knobs() == knobsBefore, "with their knobs");
     }
 
+    std::cout << "Effects rest during silence, but never cut sound off\n";
+    {
+        // Our effects stop processing once their input has been silent for
+        // longer than their tail (SilenceSkip). Sound that comes back must be
+        // processed from its first block, just as after a short pause.
+        constexpr double sampleRate = 48000.0;
+        constexpr int blockSize = 512;
+        const int toneLength = (int) sampleRate;   // a second of A440
+
+        juce::AudioBuffer<float> tone (2, toneLength);
+
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < toneLength; ++i)
+                tone.setSample (ch, i, 0.3f * std::sin (juce::MathConstants<float>::twoPi * 440.0f * (float) i / (float) sampleRate));
+
+        // `pause` seconds of silence, then the tone: what the tone came out as.
+        auto play = [&] (te::Plugin& plugin, double pause)
+        {
+            plugin.initialise ({ te::TimePosition(), sampleRate, blockSize });
+            plugin.reset();
+
+            const int silent = (int) (pause * sampleRate);
+            juce::AudioBuffer<float> buffer (2, silent + toneLength);
+            buffer.clear();
+
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.copyFrom (ch, silent, tone, ch, 0, toneLength);
+
+            for (int start = 0; start < buffer.getNumSamples(); start += blockSize)
+            {
+                te::PluginRenderContext context (&buffer, start, std::min (blockSize, buffer.getNumSamples() - start),
+                                                 nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            juce::AudioBuffer<float> played (2, toneLength);
+
+            for (int ch = 0; ch < 2; ++ch)
+                played.copyFrom (ch, 0, buffer, ch, silent, toneLength);
+
+            return played;
+        };
+
+        auto db = [] (const juce::AudioBuffer<float>& b, int start, int num)
+        {
+            return juce::Decibels::gainToDecibels (b.getRMSLevel (0, start, num), -200.0f);
+        };
+
+        const char* types[] { AmpPlugin::xmlTypeName, TunePlugin::xmlTypeName, SpringTankPlugin::xmlTypeName,
+                              YellowDrivePlugin::xmlTypeName, GoldenBoostPlugin::xmlTypeName, LimiterPlugin::xmlTypeName,
+                              NoiseGatePlugin::xmlTypeName, DistortionPlugin::xmlTypeName, TremoloPlugin::xmlTypeName };
+
+        for (auto* type : types)
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = TestAudioDevice::getEditOf (engine)->getPluginCache().createNewPlugin (type, {});
+
+            if (plugin == nullptr)
+            {
+                check (false, (juce::String (type) + " can be made").toRawUTF8());
+                continue;
+            }
+
+            // 12 s more is longer than any of their tails (Spring Tank's is
+            // 4 s), and a whole number of cycles of the Tremolo's 5 Hz pulse.
+            const auto afterShortPause = play (*plugin, 0.1);
+            const auto afterLongPause = play (*plugin, 12.1);
+            const int firstPart = (int) (0.1 * sampleRate);
+            const auto name = plugin->getName();
+
+            check (std::abs (db (afterLongPause, 0, firstPart) - db (afterShortPause, 0, firstPart)) < 1.0f,
+                   (name + ": its first tenth of a second after a long silence sounds as after a short one").toRawUTF8());
+            check (std::abs (db (afterLongPause, 0, toneLength) - db (afterShortPause, 0, toneLength)) < 1.0f,
+                   (name + ": and the whole second does").toRawUTF8());
+        }
+    }
+
     device.reset();
 }
 

@@ -100,6 +100,7 @@ LimiterPlugin::~LimiterPlugin()
 
 void LimiterPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 1.0);   // tail: lookahead and release
     rate = info.sampleRate;
     window = juce::jmax (1, juce::roundToInt (lookaheadSeconds * rate)) + 1;
 
@@ -127,6 +128,10 @@ void LimiterPlugin::reset()
 void LimiterPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr || neededGain.empty())
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK
@@ -224,6 +229,7 @@ NoiseGatePlugin::~NoiseGatePlugin()
 
 void NoiseGatePlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 1.0);   // tail: the gate closing
     // prepare() allocates, so it's done here, on the message thread.
     gate.prepare ({ info.sampleRate, (juce::uint32) juce::jmax (1, info.blockSizeSamples), 2 });
 
@@ -243,6 +249,10 @@ void NoiseGatePlugin::reset()
 void NoiseGatePlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK
@@ -303,6 +313,7 @@ double DistortionPlugin::getLatencySeconds()
 
 void DistortionPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 0.5);   // tail: its tone filter
     rate = info.sampleRate;
     maxBlockSize = juce::jmax (1, info.blockSizeSamples);
 
@@ -326,6 +337,10 @@ void DistortionPlugin::reset()
 void DistortionPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK
@@ -404,6 +419,7 @@ TremoloPlugin::~TremoloPlugin()
 
 void TremoloPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 0.2);   // tail: nothing rings on
     rate = info.sampleRate;
     smoothedDepth.reset (rate, 0.05);
     smoothedShape.reset (rate, 0.05);
@@ -421,6 +437,14 @@ void TremoloPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr)
         return;
+
+    // Nothing to do while the input is silent and the tail is over (see
+    // SilenceSkip), except keep the pulse in time, as if it had played on.
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
+    {
+        phase = std::fmod (phase + rateParam->getCurrentValue() / rate * fc.bufferNumSamples, 1.0);
+        return;
+    }
 
     SCOPED_REALTIME_CHECK
 

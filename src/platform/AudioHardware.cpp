@@ -85,12 +85,18 @@ namespace
     // without a break (the RLIMIT_RTTIME soft limit), and kills the app at
     // the hard limit. Putting the thread back to ordinary priority stops the
     // count. (Only system calls are safe in a signal handler; this is one.)
+    //
+    // SCHED_RESET_ON_FORK must stay set: RealtimeKit (and makeThreadRealtime
+    // below) set it, and only a privileged process may clear it. Asking for
+    // plain SCHED_OTHER fails with EPERM, the thread stays real-time, and the
+    // kernel kills the app 100 ms later at the hard limit. That was the crash
+    // when the CPU meter got near 90-100%.
     void onCpuLimit (int)
     {
         if (const auto tid = realtimeThread.load())
         {
             sched_param ordinary {};
-            sched_setscheduler (tid, SCHED_OTHER, &ordinary);
+            sched_setscheduler (tid, SCHED_OTHER | SCHED_RESET_ON_FORK, &ordinary);
         }
     }
 
@@ -219,6 +225,58 @@ std::optional<bool> isThreadRealtime (std::int64_t threadId)
    #else
     juce::ignoreUnused (threadId);
     return std::nullopt;
+   #endif
+}
+
+bool keepOnFastestCores (std::int64_t threadId)
+{
+   #if JUCE_LINUX
+    const auto tid = (pid_t) threadId;
+
+    if (tid <= 0)
+        return false;
+
+    // The cores this process may use (a cpu_set_t is a bit per core).
+    cpu_set_t allowed;
+    CPU_ZERO (&allowed);
+
+    if (sched_getaffinity (0, sizeof (allowed), &allowed) != 0)
+        return false;
+
+    // Each allowed core's top speed, from the kernel's cpufreq files.
+    std::vector<std::pair<int, int>> speeds;   // core, kHz
+    int fastest = 0;
+
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    {
+        if (! CPU_ISSET (cpu, &allowed))
+            continue;
+
+        const juce::File f ("/sys/devices/system/cpu/cpu" + juce::String (cpu) + "/cpufreq/cpuinfo_max_freq");
+        const int kHz = f.existsAsFile() ? f.loadFileAsString().trim().getIntValue() : 0;
+
+        if (kHz <= 0)
+            return false;   // speeds unknown (a VM, say): leave the scheduler to it
+
+        speeds.push_back ({ cpu, kHz });
+        fastest = juce::jmax (fastest, kHz);
+    }
+
+    cpu_set_t fast;
+    CPU_ZERO (&fast);
+
+    for (auto [cpu, kHz] : speeds)
+        if (kHz >= fastest * 9 / 10)
+            CPU_SET (cpu, &fast);
+
+    // All cores alike: nothing to choose.
+    if (CPU_COUNT (&fast) == (int) speeds.size())
+        return false;
+
+    return sched_setaffinity (tid, sizeof (fast), &fast) == 0;
+   #else
+    juce::ignoreUnused (threadId);
+    return false;
    #endif
 }
 

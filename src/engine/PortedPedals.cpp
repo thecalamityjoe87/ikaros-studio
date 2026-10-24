@@ -104,6 +104,7 @@ double GxPedalPlugin::getLatencySeconds()
 
 void GxPedalPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 4.0);   // tail: long enough for Spring Tank's reverb
     rate = info.sampleRate;
     maxBlockSize = juce::jmax (1, info.blockSizeSamples);
 
@@ -171,6 +172,10 @@ void GxPedalPlugin::process (StageState& s, juce::dsp::AudioBlock<float>& block)
 void GxPedalPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr || fc.bufferNumSamples <= 0)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK
@@ -428,6 +433,7 @@ double GoldenBoostPlugin::getLatencySeconds()
 
 void GoldenBoostPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 1.0);   // tail: its filters
     rate = info.sampleRate;
     dsp->prepare (rate, juce::jmax (1, info.blockSizeSamples));   // allocates: message thread
 }
@@ -440,6 +446,10 @@ void GoldenBoostPlugin::reset()
 void GoldenBoostPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr || fc.bufferNumSamples <= 0)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK

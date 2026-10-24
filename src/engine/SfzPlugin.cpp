@@ -15,20 +15,82 @@ juce::Identifier SfzPlugin::ccProperty (int controllerNumber)
 }
 
 //==============================================================================
+namespace
+{
+    // Threads finishing on their own after their owner has gone (see
+    // ~SfzPlugin). Each is deleted once it has ended, so nobody waits for it
+    // and it's never killed. JUCE deletes this object when the app quits
+    // (that's what DeletedAtShutdown is for), and that waits for any still
+    // running. A JUCE singleton: getInstance() makes it the first time.
+    class FinishingThreads  : public juce::DeletedAtShutdown,
+                              private juce::Timer
+    {
+    public:
+        ~FinishingThreads() override
+        {
+            for (auto& t : threads)
+                t->stopThread (-1);   // -1: wait as long as it takes
+
+            clearSingletonInstance();
+        }
+
+        static void adopt (std::unique_ptr<juce::Thread> thread)
+        {
+            auto* self = getInstance();
+
+            // Already gone (the app is past its shutdown): wait here instead.
+            if (self == nullptr)
+            {
+                thread->stopThread (-1);
+                return;
+            }
+
+            self->threads.push_back (std::move (thread));
+            self->startTimer (500);
+        }
+
+        JUCE_DECLARE_SINGLETON_INLINE (FinishingThreads, true)
+
+    private:
+        std::vector<std::unique_ptr<juce::Thread>> threads;
+
+        void timerCallback() override
+        {
+            std::erase_if (threads, [] (auto& t) { return ! t->isThreadRunning(); });
+
+            if (threads.empty())
+                stopTimer();
+        }
+    };
+}
+
+//==============================================================================
+SfzPlugin::Shared::~Shared()
+{
+    delete incoming.exchange (nullptr);
+    delete outgoing.exchange (nullptr);
+}
+
+//==============================================================================
 // Loads SFZ files on a thread of its own, and deletes synths the audio thread
 // has finished with. It wakes up when asked to load, and every 50 ms anyway
-// to tidy up.
+// to tidy up. It only uses `shared`, never the plug-in itself, so it can
+// outlive the plug-in.
 class SfzPlugin::Loader  : public juce::Thread
 {
 public:
-    explicit Loader (SfzPlugin& o) : juce::Thread ("SFZ loader"), owner (o)
+    explicit Loader (std::shared_ptr<Shared> s) : juce::Thread ("SFZ loader"), shared (std::move (s))
     {
         startThread();
     }
 
     ~Loader() override
     {
-        stopThread (10000);   // a big library can take a moment to stop loading
+        // Only deleted once it has stopped, or when it's about to (see
+        // ~SfzPlugin), so this waits as long as it takes: loadSfzFile can't be
+        // interrupted, and killing the thread would leave it running on into
+        // freed memory.
+        stopThread (-1);
     }
 
     void request (const juce::File& file, int id)
@@ -49,7 +111,7 @@ public:
         while (! threadShouldExit())
         {
             // A synth the audio thread has swapped out (delete of nullptr does nothing).
-            delete owner.outgoing.exchange (nullptr);
+            delete shared->outgoing.exchange (nullptr);
 
             juce::File file;
             int id = 0;
@@ -65,11 +127,11 @@ public:
                 // A fresh synth for the new sound. If loading fails it stays
                 // empty, and playing it is silent.
                 auto synth = std::make_unique<sfz::Sfizz>();
-                synth->setSampleRate ((float) owner.currentSampleRate.load());
+                synth->setSampleRate ((float) shared->currentSampleRate.load());
                 synth->setSamplesPerBlock (maxBlockSize);
 
                 const bool ok = file.existsAsFile() && synth->loadSfzFile (file.getFullPathName().toStdString());
-                owner.numRegions = ok ? synth->getNumRegions() : 0;
+                shared->numRegions = ok ? synth->getNumRegions() : 0;
 
                 // Which keys make a sound: the on-screen keyboard shows that range. (Each key is played
                 // for one block on this new synth, which the audio thread doesn't have yet.)
@@ -98,15 +160,15 @@ public:
                     }
                 }
 
-                owner.lowestKey = lowest;
-                owner.highestKey = highest;
+                shared->lowestKey = lowest;
+                shared->highestKey = highest;
 
                 // Hand it over. If an earlier one is still waiting (never
                 // played), it's out of date: delete it.
-                delete owner.incoming.exchange (synth.release());
+                delete shared->incoming.exchange (synth.release());
 
                 finishedId = id;
-                owner.loadedRequest = id;
+                shared->loadedRequest = id;
                 continue;   // another request may have arrived meanwhile
             }
 
@@ -115,7 +177,7 @@ public:
     }
 
 private:
-    SfzPlugin& owner;
+    std::shared_ptr<Shared> shared;
     juce::CriticalSection lock;   // guards the request (the message thread writes it, this thread reads it)
     juce::File requestedFile;
     int requestedId = 0;
@@ -141,7 +203,7 @@ SfzPlugin::SfzPlugin (te::PluginCreationInfo info) : te::Plugin (info)
     }
 
     readCcValues();
-    loader = std::make_unique<Loader> (*this);
+    loader = std::make_unique<Loader> (shared);
     requestLoad();
 }
 
@@ -152,11 +214,19 @@ SfzPlugin::~SfzPlugin()
     for (auto& p : ccParameters)
         p.parameter->detachFromCurrentValue();
 
-    // Stop the loader first, so nothing hands over a synth while we tidy up.
-    loader.reset();
-    delete active;
-    delete incoming.exchange (nullptr);
-    delete outgoing.exchange (nullptr);
+    // Stop the loader. It can't stop in the middle of loading a file, which
+    // can take many seconds for a big library: if it hasn't stopped in a
+    // moment, it finishes on its own and is deleted afterwards, keeping
+    // `shared` (and any synth it hands over there) alive until then.
+    loader->signalThreadShouldExit();
+    loader->notify();
+
+    if (loader->waitForThreadToExit (200))
+        loader.reset();
+    else
+        FinishingThreads::adopt (std::move (loader));
+
+    delete active;   // the synths in `shared` go with it
 }
 
 te::AutomatableParameter* SfzPlugin::getCcParameter (int controllerNumber) const
@@ -230,9 +300,9 @@ void SfzPlugin::initialise (const te::PluginInitialisationInfo& info)
 
     // A different sample rate needs a synth made for it. (Tracktion doesn't
     // run this while the plugin is processing, so `active` can be touched.)
-    if (info.sampleRate != currentSampleRate.load())
+    if (info.sampleRate != shared->currentSampleRate.load())
     {
-        currentSampleRate = info.sampleRate;
+        shared->currentSampleRate = info.sampleRate;
 
         if (active != nullptr)
             active->setSampleRate ((float) info.sampleRate);
@@ -260,12 +330,12 @@ bool SfzPlugin::takeIncomingSynth()
 {
     // Only swap when the loader has deleted the last synth we gave back, so
     // there's never more than one waiting to be deleted.
-    if (outgoing.load() != nullptr)
+    if (shared->outgoing.load() != nullptr)
         return false;
 
-    if (auto* next = incoming.exchange (nullptr))
+    if (auto* next = shared->incoming.exchange (nullptr))
     {
-        outgoing.store (active);   // the loader deletes it (nullptr the first time)
+        shared->outgoing.store (active);   // the loader deletes it (nullptr the first time)
         active = next;
         return true;
     }

@@ -8,6 +8,7 @@
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
+#include "engine/PerfMonitor.h"
 #include "engine/RealtimeAudioThread.h"
 #include "engine/FreesoundStore.h"
 #include "engine/LoopKey.h"
@@ -76,7 +77,16 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // it saves; worse, the workers run at ordinary priority, so when the
     // desktop is busy the audio thread sits waiting for them and the sound
     // breaks up. A session of a beginner's size fits on one core easily.
-    int getNumberOfCPUsToUseForAudio() override     { return 1; }
+    int getNumberOfCPUsToUseForAudio() override
+    {
+        // The performance monitor can try other counts (IKAROS_PERF_AUDIO_THREADS=N)
+        // to compare one thread with several on the same session.
+        if (PerfMonitor::isEnabled())
+            if (auto n = juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_AUDIO_THREADS", {}).getIntValue(); n > 0)
+                return n;
+
+        return 1;
+    }
 
     // Takes are recorded straight into the session's working copy (its
     // Audio folder), whether or not it has been saved yet.
@@ -264,6 +274,10 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
         if (openAudioDevice)
         {
+            // Before Tracktion's initialise adds its callback (see PerfMonitor).
+            if (PerfMonitor::isEnabled())
+                perfMonitor = std::make_unique<PerfMonitor> (engine, [this] { return edit.get(); });
+
             engine.getDeviceManager().initialise (2, 2);
             chooseSmallBufferOnce();
 
@@ -397,6 +411,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
     // Declared after `engine`, so it's destroyed (and leaves the device) first.
     std::unique_ptr<RealtimeAudioThread> realtimeThread;
+
+    // Only with IKAROS_PERF=1 (see PerfMonitor). Also after `engine`.
+    std::unique_ptr<PerfMonitor> perfMonitor;
 
     // The session being edited: its working copy (an unpacked bundle, see
     // AudioEngine.h), the session file inside it that Tracktion reads and
@@ -1047,6 +1064,11 @@ AudioEngine::~AudioEngine()
     preview.reset();
     trackController.reset();
     impl->stopObservingEdit();
+
+    // The autosaver listens to the Edit's undo manager, so it lets go first
+    // (as when a session is replaced). Impl's destructor detaches it too,
+    // but by then the Edit would be gone; the second detach does nothing.
+    impl->autosaver.detach();
     impl->edit.reset();   // closes any plug-in windows
     plugins.reset();
     freesoundStore.reset();   // stops downloads
@@ -2716,6 +2738,11 @@ juce::String AudioEngine::getStateSnapshot() const
 StereoLevel AudioEngine::getMasterLevel()
 {
     return impl->readMasterLevel();
+}
+
+PerfMonitor* AudioEngine::getPerfMonitor() const noexcept
+{
+    return impl->perfMonitor.get();
 }
 
 SystemStats AudioEngine::getSystemStats() const

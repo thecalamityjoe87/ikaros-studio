@@ -1,4 +1,5 @@
 #include "ui/toolbar/LcdDisplay.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -329,6 +330,7 @@ juce::Rectangle<int> LcdDisplay::Field::getValueArea() const
 
 void LcdDisplay::Field::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LcdDisplay::Field");
     const auto r = getLocalBounds().toFloat();
 
     // A shade lighter than the readout; lighter still under the mouse.
@@ -435,6 +437,7 @@ LcdDisplay::TempoField::Part LcdDisplay::TempoField::getPartAt (juce::Point<int>
 
 void LcdDisplay::TempoField::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LcdDisplay::TempoField");
     Field::paint (g);   // the field and caption; the label draws the number
 
     for (auto part : { Part::stepUp, Part::stepDown })
@@ -705,6 +708,7 @@ int LcdDisplay::getValueRowHeight() noexcept
 
 void LcdDisplay::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LcdDisplay");
     paintPanel (g, getLocalBounds().toFloat());
 
     if (tunerShown)

@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementContent.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/arrangement/ArrangementOverlays.h"
@@ -570,6 +571,7 @@ void ArrangementView::updateTransport()
 
 void ArrangementView::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView");
     g.fillAll (theme().arrangement.laneBg);   // under the lanes: the scrollbar strip
 
     // The bottom strip: a line along its top, and under the track headers
@@ -596,6 +598,7 @@ void ArrangementView::paint (juce::Graphics& g)
 
 void ArrangementView::paintOverChildren (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::paintOverChildren");
     icons::draw (g, Icon::search, zoomIconArea.toFloat(), theme().textSecondary, 13.0f, 1.6f);
 }
 

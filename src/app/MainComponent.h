@@ -57,7 +57,13 @@ public:
     WindowControlKind getWindowControlAt (juce::Point<float>) const;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
+
+    // For the stress harness (app/PerfHarness, IKAROS_PERF=1 only).
+    bool invokeCommandForPerf (juce::CommandID id)       { return commands.invokeDirectly (id, false); }
+    void scrollTimelineForPerf (double beats);
+    void closeSessionChooserForPerf();
 
     // ApplicationCommandTarget
     juce::ApplicationCommandTarget* getNextCommandTarget() override  { return nullptr; }
@@ -67,6 +73,11 @@ public:
 
 private:
     AudioEngine& engine;
+
+    // Debug only (IKAROS_PERF=1): the performance overlay and its Ctrl+Shift+P key.
+    std::unique_ptr<juce::Component> perfOverlay;
+    std::unique_ptr<juce::KeyListener> perfKeys;
+    void setUpPerfMonitor (PerfMonitor&);
     juce::ApplicationCommandManager commands;
     Selection selection { engine };
     AppMenuModel menuModel { commands };

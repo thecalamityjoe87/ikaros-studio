@@ -1,4 +1,5 @@
 #include "ui/arrangement/TrackHeader.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -459,6 +460,7 @@ void TrackHeader::finishRenaming (bool keepNewName)
 
 void TrackHeader::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("TrackHeader");
     // Unselected headers are see-through: the column's background shows.
     auto r = getLocalBounds();
 

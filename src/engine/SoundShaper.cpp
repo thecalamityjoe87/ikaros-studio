@@ -82,6 +82,7 @@ void SoundShaperPlugin::restorePluginStateFromValueTree (const juce::ValueTree& 
 void SoundShaperPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
     rate = info.sampleRate;
+    silence.prepare (info.sampleRate, 0.5);   // the tail is set per block (see applyToBuffer)
     reverb.setSampleRate (info.sampleRate);    // allocates, so it's done here and not while playing
     driveGain.reset (info.sampleRate, 0.05);   // drive changes glide over 50 ms
     reset();
@@ -117,6 +118,13 @@ void SoundShaperPlugin::updateFilters (float t)
 void SoundShaperPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr)
+        return;
+
+    // Nothing to do while the instrument is silent and the tail is over (see
+    // SilenceSkip): with Room on, the reverb's tail; otherwise the filters'.
+    silence.setTail (room->getCurrentValue() > neutralTolerance ? 8.0 : 0.5);
+
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK

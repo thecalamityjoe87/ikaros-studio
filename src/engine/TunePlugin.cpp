@@ -322,6 +322,7 @@ double TunePlugin::getLatencySeconds()
 
 void TunePlugin::initialise (const te::PluginInitialisationInfo& info)
 {
+    silence.prepare (info.sampleRate, 1.0);   // tail: its latency and pitch tracking
     // Everything that allocates happens here, on the message thread.
     rate = info.sampleRate;
     retuner = std::make_unique<LV2AT::Retuner> ((int) rate);
@@ -355,6 +356,10 @@ void TunePlugin::reset()
 void TunePlugin::applyToBuffer (const te::PluginRenderContext& fc)
 {
     if (fc.destBuffer == nullptr || retuner == nullptr)
+        return;
+
+    // Nothing to do while the input is silent and the tail is over (see SilenceSkip).
+    if (! silence.shouldProcess (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples))
         return;
 
     SCOPED_REALTIME_CHECK

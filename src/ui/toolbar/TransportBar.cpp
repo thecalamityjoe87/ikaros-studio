@@ -1,4 +1,5 @@
 #include "ui/toolbar/TransportBar.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioEngine.h"
 #include "engine/TempoMap.h"
 #include "engine/Tuner.h"
@@ -138,6 +139,7 @@ void TransportBar::update()
 
 void TransportBar::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("TransportBar");
     auto r = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (theme().transportWell);
     g.fillRoundedRectangle (r, size::radiusPill);

@@ -17,6 +17,16 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 set(IKAROS_MILESTONE 12)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
+# Sanitizer builds for the stress tests (docs/perf-report.md), each in its own
+# build folder: -DIKAROS_SANITIZE=address, thread, or realtime (Clang 20+
+# only; PerfMonitor then marks the audio callback as real-time). Set before
+# any target, so JUCE, Tracktion and the libraries are checked too.
+set(IKAROS_SANITIZE "" CACHE STRING "Sanitizer to build with: address, thread or realtime")
+if(IKAROS_SANITIZE)
+    add_compile_options(-fsanitize=${IKAROS_SANITIZE} -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=${IKAROS_SANITIZE})
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -263,7 +273,8 @@ set(IKAROS_APP_SOURCES
     src/app/MainComponent.h         src/app/MainComponent.cpp
     src/app/AppMenuModel.h          src/app/AppMenuModel.cpp
     src/app/SurfaceHandler.h        src/app/SurfaceHandler.cpp
-    src/app/CommandIDs.h)
+    src/app/CommandIDs.h
+    src/app/PerfHarness.h           src/app/PerfHarness.cpp)
 
 # The only code that talks to Tracktion. Also built into the smoke test.
 set(IKAROS_ENGINE_SOURCES
@@ -330,7 +341,9 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/Tuner.h              src/engine/Tuner.cpp
     src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
-    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
+    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp
+    src/engine/PerfMonitor.h        src/engine/PerfMonitor.cpp
+    src/engine/SilenceSkip.h)
 
 # Tune's pitch correction is fat1's retuner (GPL 2+, see
 # external/fat1/README.ikaros), and Pitch mode's analysis is probabilistic
@@ -379,6 +392,8 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/PaintProbe.h             src/ui/widgets/PaintProbe.cpp
+    src/ui/widgets/PerfOverlay.h            src/ui/widgets/PerfOverlay.cpp
     src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
     src/ui/widgets/CachedShadow.h           src/ui/widgets/CachedShadow.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
@@ -484,6 +499,22 @@ target_compile_definitions(IkarosStudio PRIVATE
 
 # The version, as the engine records it in saved sessions.
 target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${IKAROS_VERSION_STRING}")
+
+# Performance tools (docs/perf-report.md): the monitor, overlay and stress
+# harness are built in but do nothing unless the app runs with IKAROS_PERF=1.
+# OFF compiles them out. (Only set when OFF: changing a definition rebuilds
+# everything, JUCE and Tracktion included.)
+option(IKAROS_PERF_TOOLS "Build the IKAROS_PERF=1 performance monitor and stress harness" ON)
+if(NOT IKAROS_PERF_TOOLS)
+    target_compile_definitions(IkarosStudio PRIVATE IKAROS_PERF_TOOLS=0)
+endif()
+
+# JUCE flashes every repainted area in a random colour, to see what redraws
+# too much. A full rebuild: use a separate build folder.
+option(IKAROS_REPAINT_DEBUGGING "Flash repainted areas (JUCE_ENABLE_REPAINT_DEBUGGING)" OFF)
+if(IKAROS_REPAINT_DEBUGGING)
+    target_compile_definitions(IkarosStudio PRIVATE JUCE_ENABLE_REPAINT_DEBUGGING=1)
+endif()
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
 # (see src/engine/PackStore.h): a web address or a file path, in the app's own

@@ -1,4 +1,5 @@
 #include "ui/bottompanel/BottomPanel.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/Tuner.h"
 #include "ui/widgets/AutomationHint.h"
 #include "ui/widgets/Knob.h"
@@ -960,6 +961,7 @@ void BottomPanel::update()
 
 void BottomPanel::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("BottomPanel");
     g.fillAll (theme().bottomPanelBg);
     g.setColour (theme().bottomPanelBorder);
     g.fillRect (getLocalBounds().removeFromTop (1));

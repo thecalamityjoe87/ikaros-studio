@@ -1,4 +1,5 @@
 #include "ui/bottompanel/EqView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
@@ -234,6 +235,7 @@ void EqView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDe
 //==============================================================================
 void EqView::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("EqView");
     // The graph's background and grid.
     g.setColour (theme().wellBg);
     g.fillRoundedRectangle (graphArea.toFloat(), size::radius);

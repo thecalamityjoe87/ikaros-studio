@@ -1,6 +1,7 @@
 // Ikaros Studio — application entry point.
 
 #include "app/MainWindow.h"
+#include "app/PerfHarness.h"
 #include "platform/ExternalDrops.h"
 #include "ui/dialogs/StartupSplash.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -52,6 +53,7 @@ public:
         // Destroy in reverse order of creation: UI first (it references the
         // engine), then the engine, then the LookAndFeel.
         splash.reset();
+        perfHarness.reset();
         mainWindow.reset();
         themeManager.reset();   // it listens to the engine's preferences
         engine.reset();
@@ -135,6 +137,10 @@ private:
         // Started by double-clicking a session (or "ikaros-studio My Song.iksession").
         openSessionsIn (commandLine);
 
+        // Debug only: a stress run (--perf-scenario=..., with IKAROS_PERF=1).
+        perfHarness = PerfHarness::createIfRequested (commandLine, *engine, *mainWindow->getMainComponent(),
+                                                      [] { juce::JUCEApplication::quit(); });
+
         // The window is up behind the splash; close the splash once it has
         // been seen.
         juce::Timer::callAfterDelay (splash->getRemainingMilliseconds(), [this] { splash.reset(); });
@@ -172,6 +178,7 @@ private:
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<ThemeManager> themeManager;   // after engine: members are destroyed in reverse order
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<PerfHarness> perfHarness;   // only for a stress run
 };
 
 } // namespace ikaros

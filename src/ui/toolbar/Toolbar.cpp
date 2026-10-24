@@ -1,4 +1,5 @@
 #include "ui/toolbar/Toolbar.h"
+#include "ui/widgets/PaintProbe.h"
 #include "app/CommandIDs.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
@@ -109,6 +110,7 @@ void Toolbar::update (bool libraryVisible)
 
 void Toolbar::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("Toolbar");
     g.fillAll (theme().toolbarBg);
     g.setColour (theme().toolbarBorder);
     g.fillRect (getLocalBounds().removeFromBottom (1));

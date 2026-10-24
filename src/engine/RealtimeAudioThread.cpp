@@ -69,14 +69,44 @@ void RealtimeAudioThread::timerCallback()
 {
     const auto id = audioThreadId.load();
 
-    if (id == 0 || id == promotedId)
+    if (id == 0)
         return;
 
-    // One try per thread: if it's refused, asking again won't help.
-    promotedId = id;
-    const bool ok = platform::makeThreadRealtime (id);
-    DBG ("Audio thread " << id << (ok ? " is now real-time" : " stays at ordinary priority"));
-    juce::ignoreUnused (ok);
+    if (id != promotedId)
+    {
+        // On a CPU with fast and slow cores, only the fast ones (the same
+        // block can take three times as long on a slow one).
+        platform::keepOnFastestCores (id);
+
+        // One try per thread: if it's refused, asking again won't help.
+        promotedId = id;
+        promoted = platform::makeThreadRealtime (id);
+        calmTicks = 0;
+        calmTicksNeeded = 4 * 5;   // 5 seconds at 4 Hz
+        DBG ("Audio thread " << id << (promoted ? " is now real-time" : " stays at ordinary priority"));
+        return;
+    }
+
+    // A thread that was real-time but isn't any more was put back to ordinary
+    // priority because it ran too long without a break (the session was too
+    // heavy; see platform::makeThreadRealtime), or by RealtimeKit when the
+    // whole desktop was starved. Once the load has been light for a few
+    // seconds, ask again, so one overload doesn't cost real-time for the
+    // rest of the session. Each overload is a 100 ms stall, and the CPU
+    // meter can't see every kind of load (a sound server or driver being
+    // slow, say), so the wait doubles each time, up to two minutes.
+    if (promoted && isRealtime() == false)
+    {
+        calmTicks = deviceManager.getCpuUsage() < 0.7 ? calmTicks + 1 : 0;
+
+        if (calmTicks >= calmTicksNeeded)
+        {
+            calmTicks = 0;
+            calmTicksNeeded = juce::jmin (calmTicksNeeded * 2, 4 * 120);
+            promoted = platform::makeThreadRealtime (id);
+            DBG ("Audio thread " << id << (promoted ? " is real-time again" : " stays at ordinary priority"));
+        }
+    }
 }
 
 } // namespace ikaros

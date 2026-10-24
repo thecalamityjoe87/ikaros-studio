@@ -35,7 +35,11 @@ private:
     std::atomic<juce::Thread::ThreadID> audioThread { nullptr };
     std::atomic<std::int64_t> audioThreadId { 0 };
 
-    std::int64_t promotedId = 0;   // message thread only
+    // Message thread only.
+    std::int64_t promotedId = 0;
+    bool promoted = false;         // whether promotedId was made real-time
+    int calmTicks = 0;             // timer ticks in a row with a light load (see timerCallback)
+    int calmTicksNeeded = 0;       // before asking again; doubles each time (see timerCallback)
 
     void audioDeviceIOCallbackWithContext (const float* const* inputs, int numInputs,
                                            float* const* outputs, int numOutputs, int numSamples,
