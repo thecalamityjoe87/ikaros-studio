@@ -69,6 +69,26 @@ public:
     /** The width this component wants, given its content. */
     static constexpr int preferredWidth = 328;
 
+    //==============================================================================
+    // The LCD's drawing, for other readouts that look like it (Tune's
+    // INPUT -> TARGET readout). The tuner draws with these too.
+
+    /** The black panel with its border. */
+    static void paintPanel (juce::Graphics&, juce::Rectangle<float>);
+
+    /** A note as the tuner shows it: "E" and a smaller "2" beside it, on the
+        same baseline, at the bottom left of `row` (the value row's height). */
+    static void paintNote (juce::Graphics&, juce::Rectangle<int> row, const juce::String& name, int octave, juce::Colour);
+
+    /** A short bar where a value would be, when there's nothing to show. */
+    static void paintBlank (juce::Graphics&, juce::Rectangle<int> row, float width);
+
+    /** A small caption under a value ("NOTE", "CENTS"). */
+    static void paintCaption (juce::Graphics&, juce::Rectangle<int>, const juce::String&, juce::Justification);
+
+    /** The height of the value row (the caption sits under it). */
+    static int getValueRowHeight() noexcept;
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;

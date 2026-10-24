@@ -436,6 +436,10 @@ juce::PopupMenu PluginChainView::buildEffectMenu (std::function<void (const Effe
 
     for (auto& effect : engine.getTracks().effects().getAvailableEffects())
     {
+        // Some only go on some tracks (Tune: audio tracks).
+        if (! engine.getTracks().effects().canAddEffect (trackId, effect.type))
+            continue;
+
         if (effect.category != currentCategory)
         {
             if (effect.isThirdParty)
@@ -496,6 +500,18 @@ void PluginChainView::showRowMenu (int rowIndex)
     {
         tracks.effects().replaceEffect (trackId, slot.id, effect.type);
     }));
+
+    // An effect's ready-made settings (Tune's Natural and Hard Tune).
+    if (const auto presets = tracks.effects().getEffectPresets (trackId, slot.id); ! presets.isEmpty())
+    {
+        juce::PopupMenu presetMenu;
+
+        for (int i = 0; i < presets.size(); ++i)
+            presetMenu.addItem (presets[i], [&tracks, this, slot, i] { tracks.effects().applyEffectPreset (trackId, slot.id, i); });
+
+        menu.addSubMenu ("Presets", presetMenu);
+    }
+
     menu.addSeparator();
     menu.addItem ("Move Up", rowIndex > 0, false, [&tracks, this, slot, rowIndex] { tracks.effects().moveEffect (trackId, slot.id, rowIndex - 1); });
     menu.addItem ("Move Down", rowIndex < (int) chain.size() - 1, false, [&tracks, this, slot, rowIndex] { tracks.effects().moveEffect (trackId, slot.id, rowIndex + 1); });

@@ -662,13 +662,50 @@ void LcdDisplay::setState (const TransportState& s, const juce::String& key)
     timeSigField.setValueText (juce::String (timeSigNum) + "/" + juce::String (timeSigDen));
 }
 
-void LcdDisplay::paint (juce::Graphics& g)
+void LcdDisplay::paintPanel (juce::Graphics& g, juce::Rectangle<float> bounds)
 {
-    const auto bounds = getLocalBounds().toFloat();
     g.setColour (theme().lcdBg);
     g.fillRoundedRectangle (bounds, size::radiusLarge);
     g.setColour (theme().lcdBorder);
     g.drawRoundedRectangle (bounds.reduced (0.5f), size::radiusLarge, 1.0f);
+}
+
+void LcdDisplay::paintNote (juce::Graphics& g, juce::Rectangle<int> row, const juce::String& name, int octave, juce::Colour colour)
+{
+    const auto nameFont = fonts::monoBold (textSize::lcd);
+    const auto octaveFont = fonts::monoBold (textSize::md);
+    const auto nameWidth = juce::GlyphArrangement::getStringWidthInt (nameFont, name);
+
+    g.setColour (colour);
+    g.setFont (nameFont);
+    g.drawText (name, row, juce::Justification::bottomLeft, false);
+    g.setFont (octaveFont);
+    g.drawText (juce::String (octave), row.withTrimmedLeft (nameWidth + 1).withTrimmedBottom (1),
+                juce::Justification::bottomLeft, false);
+}
+
+void LcdDisplay::paintBlank (juce::Graphics& g, juce::Rectangle<int> row, float width)
+{
+    const auto r = row.toFloat();
+    g.setColour (theme().lcdLabel);
+    g.fillRoundedRectangle (juce::Rectangle<float> (r.getX() + 1.0f, r.getBottom() - 9.0f, width, 2.5f), 1.0f);
+}
+
+void LcdDisplay::paintCaption (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& text, juce::Justification j)
+{
+    g.setColour (theme().lcdLabel);
+    g.setFont (fonts::mono (textSize::caption).withExtraKerningFactor (0.1f));
+    g.drawText (text, area, j);
+}
+
+int LcdDisplay::getValueRowHeight() noexcept
+{
+    return valueRowHeight;
+}
+
+void LcdDisplay::paint (juce::Graphics& g)
+{
+    paintPanel (g, getLocalBounds().toFloat());
 
     if (tunerShown)
     {
@@ -761,28 +798,12 @@ void LcdDisplay::paintTuner (juce::Graphics& g)
     auto valueRow = [] (juce::Rectangle<int> area) { return area.withHeight (valueRowHeight); };
 
     // A short bar where a value would be, when there's nothing to show.
-    auto drawBlank = [&] (juce::Rectangle<int> area, float width)
-    {
-        const auto row = valueRow (area).toFloat();
-        g.setColour (theme().lcdLabel);
-        g.fillRoundedRectangle (juce::Rectangle<float> (row.getX() + 1.0f, row.getBottom() - 9.0f, width, 2.5f), 1.0f);
-    };
+    auto drawBlank = [&] (juce::Rectangle<int> area, float width) { paintBlank (g, valueRow (area), width); };
 
     // Note: "E" and a smaller "2" beside it, on the same baseline.
     if (r.hasPitch)
     {
-        const auto name = r.note.getNoteName();
-        const auto nameFont = fonts::monoBold (textSize::lcd);
-        const auto octaveFont = fonts::monoBold (textSize::md);
-        const auto nameWidth = juce::GlyphArrangement::getStringWidthInt (nameFont, name);
-        auto row = valueRow (noteArea);
-
-        g.setColour (valueColour);
-        g.setFont (nameFont);
-        g.drawText (name, row, juce::Justification::bottomLeft, false);
-        g.setFont (octaveFont);
-        g.drawText (juce::String (r.note.getOctave()), row.withTrimmedLeft (nameWidth + 1).withTrimmedBottom (1),
-                    juce::Justification::bottomLeft, false);
+        paintNote (g, valueRow (noteArea), r.note.getNoteName(), r.note.getOctave(), valueColour);
     }
     else
     {

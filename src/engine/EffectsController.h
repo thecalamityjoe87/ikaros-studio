@@ -135,6 +135,62 @@ public:
     std::vector<ParameterInfo> getEffectParameters (TrackId, PluginId) const;
     void setEffectParameter (TrackId, PluginId, int parameterIndex, float normalised0to1);
 
+    /** A built-in effect's presets (Tune has Natural and Hard Tune; most
+        effects have none), and choosing one: one undo step named after it. */
+    juce::StringArray getEffectPresets (TrackId, PluginId) const;
+    void applyEffectPreset (TrackId, PluginId, int index);
+
+    /** True if an effect type can go on this track (Tune is for audio tracks only). */
+    bool canAddEffect (TrackId, const juce::String& type) const;
+
+    //==============================================================================
+    // Tune (see TunePlugin.h): its settings that aren't knobs, and its readout.
+    struct TuneSettings
+    {
+        bool exists = false;            // the plugin is a Tune
+        int key = -1;                   // its own key (root + 12 if minor), or -1: the song's
+        int keyRoot = 0;                // the key in use
+        bool keyMinor = false;
+        bool lockToKey = true;
+        int allowedNotes = 0xfff;       // the notes it can land on, bit 0 = C
+        TrackId followTrack = 0;        // Follow MIDI's track (0 = off)
+    };
+
+    TuneSettings getTune (TrackId, PluginId) const;
+
+    /** Each is one undo step ("Tune Key", "Lock to Key On"/"Off", "Tune
+        Notes", "Follow MIDI"). */
+    void setTuneKey (TrackId, PluginId, int keyOrMinusOne);
+    void setTuneLockToKey (TrackId, PluginId, bool);
+    void toggleTuneNote (TrackId, PluginId, int pitchClass);
+    void setTuneFollowMidi (TrackId, PluginId, TrackId midiTrackOrZero);
+
+    /** What Tune hears and where it's taking it, for the readout (polled). */
+    struct TuneReading
+    {
+        bool voiced = false;            // a clear pitch right now
+        float sungNote = 0.0f;          // fractional MIDI note
+        int targetNote = -1;            // MIDI note
+    };
+
+    TuneReading getTuneReading (TrackId, PluginId) const;
+
+    /** The track inspector's "Tune" section (Vocal tracks): a shortcut to
+        the first Tune in the track's chain, like the Noise Gate section.
+        0 if the track has none. */
+    PluginId getFirstTune (TrackId) const;
+
+    /** Turning it on adds a Tune if the track has none (at the top of the
+        chain, after a Noise Gate there; false if the chain is full);
+        turning it off bypasses it, keeping its settings. One undo step. */
+    bool setTuneOn (TrackId, bool on);
+
+    /** True if the track's inspector shows the Tune section: a Vocal track
+        (its icon is "vocals", see TrackController::addVocalTrack), an audio
+        track that has a Tune already, or (in older sessions) an audio track
+        named "Voice..." or "Vocal..." with the automatic icon. */
+    bool showsTuneSection (TrackId) const;
+
     //==============================================================================
     // The Amp at the end of the pedalboard (see AmpPlugin.h). Turning it
     // off (bypass) and removing it are setEffectEnabled and removeEffect.

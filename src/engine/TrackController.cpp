@@ -58,6 +58,7 @@ TrackController::TrackController (AudioEngine& o)
       automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses)),
       sectionEditor (std::make_unique<SectionEditor> (o)),
       flexEditor (std::make_unique<FlexEditor> (o)),
+      pitchEditor (std::make_unique<PitchEditor> (o, *flexEditor)),
       drummerEditor (std::make_unique<DrummerEditor> (o, *effectsController, *sectionEditor))
 {
 }
@@ -71,6 +72,7 @@ void TrackController::sessionChanged()
     inputRouter->sessionChanged();    // held notes, armed and selected track
     regionEditor->sessionChanged();   // clipboard, waveform cache
     flexEditor->sessionChanged();     // which files the hits were found in
+    pitchEditor->sessionChanged();    // its analyses and renders (they belong to the old session)
     drummerEditor->sessionChanged();  // an XY pad drag in progress
 }
 

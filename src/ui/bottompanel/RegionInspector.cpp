@@ -4,6 +4,7 @@
 #include "ui/widgets/IconButton.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
+#include <array>
 
 namespace ikaros
 {
@@ -365,16 +366,295 @@ private:
 };
 
 //==============================================================================
+// The "Pitch" section (every audio region): Pitch mode on or off (the same
+// switch as the Editor's Waveform | Pitch), the song's key, Snap to Key,
+// Vibrato, Note transitions, Correct All and Reset, and a line saying what
+// to do next. With Pitch mode off, or on a region that can't use it, the
+// controls are greyed out and the line says why.
+class RegionInspector::PitchControls  : public juce::Component
+{
+public:
+    explicit PitchControls (RegionInspector& o) : owner (o)
+    {
+        // Amber while it's on, like Flex's switch.
+        modeButton.setColours ([] { return IconButton::Colours { theme().controlFill, theme().textSecondary, theme().accent, theme().textOnAccent }; });
+        modeButton.setFont (fonts::uiSemiBold (textSize::sm));
+        modeButton.setCornerRadius (6.0f);
+        modeButton.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().pitch().setPitchMode (owner.region->id, ! modeButton.getToggleState());
+        };
+        addAndMakeVisible (modeButton);
+
+        setUpSlider (snap, "Snap to Key", "Snap to Key",
+                     "How far each note's centre moves to the nearest note in the key. Works on the selected notes, "
+                     "or every note if none are selected");
+        setUpSlider (vibrato, "Vibrato", "Vibrato",
+                     "Keep each note's vibrato and wavering as sung, or flatten it out. Works on the selected notes, "
+                     "or every note if none are selected");
+
+        const std::array<std::pair<IconButton*, NoteTransitions>, 3> segments {{
+            { &natural, NoteTransitions::natural }, { &tight, NoteTransitions::tight }, { &instant, NoteTransitions::instant } }};
+
+        for (auto [button, transitions] : segments)
+        {
+            button->setColours (IconButton::segmentColours);
+            button->setFont (fonts::ui (textSize::sm));
+            button->onClick = [this, t = transitions]
+            {
+                if (owner.region.has_value())
+                    owner.engine.getTracks().pitch().setTransitions (owner.region->id, t);
+            };
+            addAndMakeVisible (*button);
+        }
+
+        natural.setTooltip ("Corrected notes glide into each other, as sung (about 120 ms)");
+        tight.setTooltip ("Corrected notes move quickly from one to the next (about 40 ms)");
+        instant.setTooltip ("Corrected notes jump straight to the next, for a hard-tuned sound");
+
+        for (auto* b : { &correctAll, &reset })
+        {
+            b->setColours (IconButton::borderedColours);
+            b->setFont (fonts::uiSemiBold (textSize::sm));
+            b->setCornerRadius (size::radiusSmall);
+            addAndMakeVisible (b);
+        }
+
+        correctAll.setTooltip ("Use this Snap to Key and Vibrato for every note in the region");
+        correctAll.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().pitch().correctAll (owner.region->id, (float) snap.getValue() / 100.0f,
+                                                             (float) vibrato.getValue() / 100.0f);
+        };
+
+        reset.setTooltip ("Put every note back to its original pitch");
+        reset.onClick = [this]
+        {
+            if (owner.region.has_value())
+                owner.engine.getTracks().pitch().resetPitch (owner.region->id);
+        };
+    }
+
+    /** Shows the region's pitch state, for the selected notes (or all). */
+    void refresh (const PitchInfo& info)
+    {
+        keyText = getKeyName (info.keyRoot, info.keyMinor) + juce::String::fromUTF8 (" \xc2\xb7 song");
+
+        modeButton.setEnabled (info.available);
+        modeButton.setToggleState (info.on, juce::dontSendNotification);
+        modeButton.setText (info.on ? "Pitch on" : "Pitch off");
+        modeButton.setTooltip (! info.available ? info.unavailableReason
+                               : info.on ? juce::String ("The Editor shows the region's notes: click to show its waveform again")
+                                         : juce::String ("Show the region's notes in the Editor, to correct their pitch"));
+
+        // What to do next, or why nothing can be done.
+        hint = ! info.available       ? info.unavailableReason
+             : ! info.on              ? juce::String ("Turn Pitch on to see the region's notes in the Editor and correct them.")
+             : info.analysing         ? juce::String::fromUTF8 ("Finding the notes\xe2\x80\xa6")
+             : ! info.singleVoice     ? juce::String ("This recording doesn't look like a single voice or instrument.")
+             : owner.pitchSelection.empty() ? juce::String ("These work on every note. Select notes in the Editor to change just those.")
+                                            : juce::String ("These work on the selected notes.");
+
+        // The sliders show the chosen notes' value, or "Mixed" when they differ.
+        std::vector<const PitchNoteInfo*> chosen;
+
+        for (auto& n : info.notes)
+            if (owner.pitchSelection.empty()
+                 || std::any_of (owner.pitchSelection.begin(), owner.pitchSelection.end(),
+                                 [&] (double s) { return std::abs (s - n.sourceStart) < 0.003; }))
+                chosen.push_back (&n);
+
+        auto show = [&] (juce::Slider& slider, bool& mixed, float NoteCorrection::* member)
+        {
+            mixed = false;
+
+            if (chosen.empty())
+                return;
+
+            const float first = chosen.front()->correction.*member;
+
+            for (auto* n : chosen)
+                mixed = mixed || std::abs (n->correction.*member - first) > 0.005f;
+
+            if (dragging != &slider)
+                slider.setValue (first * 100.0, juce::dontSendNotification);
+        };
+
+        show (snap, snapMixed, &NoteCorrection::snap);
+        show (vibrato, vibratoMixed, &NoteCorrection::flatten);
+
+        const bool ready = info.on && info.analysed && info.singleVoice && ! info.notes.empty();
+
+        for (auto* c : std::initializer_list<juce::Component*> { &snap, &vibrato, &correctAll, &natural, &tight, &instant })
+            c->setEnabled (ready);
+
+        reset.setEnabled (info.available && info.hasCorrections);
+        natural.setToggleState (info.transitions == NoteTransitions::natural, juce::dontSendNotification);
+        tight.setToggleState (info.transitions == NoteTransitions::tight, juce::dontSendNotification);
+        instant.setToggleState (info.transitions == NoteTransitions::instant, juce::dontSendNotification);
+        repaint();
+    }
+
+    int getIdealHeight() const   { return padding / 2 + 7 * (rowHeight + rowGap) + hintHeight + padding / 2; }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setFont (fonts::ui (textSize::sm));
+        g.setColour (theme().textSecondary);
+        g.drawFittedText (hint, hintArea, juce::Justification::topLeft, 3, 1.0f);
+
+        // Greyed out like the controls while they can't be used.
+        const auto labels = snap.isEnabled() ? theme().textSecondary : theme().textSecondary.withMultipliedAlpha (0.5f);
+        g.setFont (fonts::ui (textSize::md));
+        g.setColour (theme().textSecondary);
+        g.drawText ("Pitch", modeRow, juce::Justification::centredLeft);
+        g.drawText ("Key", keyRow, juce::Justification::centredLeft);
+        g.setColour (labels);
+        g.drawText ("Snap to Key", snapRow, juce::Justification::centredLeft);
+        g.drawText ("Vibrato", vibratoRow, juce::Justification::centredLeft);
+        g.drawText ("Note transitions", transitionsRow, juce::Justification::centredLeft);
+
+        g.setColour (theme().text);
+        g.drawText (keyText, keyRow.withTrimmedLeft (pitchLabelWidth), juce::Justification::centredLeft);
+
+        g.setColour (snap.isEnabled() ? theme().text : theme().textSecondary.withMultipliedAlpha (0.5f));
+        g.setFont (fonts::mono (textSize::sm));
+        g.drawText (snapMixed ? juce::String ("Mixed") : juce::String (juce::roundToInt (snap.getValue())) + "%",
+                    snapValue, juce::Justification::centredRight);
+
+        const int v = juce::roundToInt (vibrato.getValue());
+        g.drawText (vibratoMixed ? juce::String ("Mixed") : v == 0 ? juce::String ("Keep") : v == 100 ? juce::String ("Flatten")
+                                                                    : juce::String (v) + "%",
+                    vibratoValue, juce::Justification::centredRight);
+
+        // The transitions switch's well, behind its segments.
+        g.setColour (theme().segmentWell);
+        g.fillRoundedRectangle (transitionsArea.toFloat(), size::radius);
+        g.setColour (theme().segmentWellBorder);
+        g.drawRoundedRectangle (transitionsArea.toFloat().reduced (0.5f), size::radius, 1.0f);
+
+        for (auto* segment : { &natural, &tight, &instant })
+            IconButton::drawSegmentShadow (g, *segment);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (padding, padding / 2);
+
+        auto row = [&r]
+        {
+            auto next = r.removeFromTop (rowHeight);
+            r.removeFromTop (rowGap);
+            return next;
+        };
+
+        modeRow = row();
+        modeButton.setBounds (modeRow.withTrimmedLeft (pitchLabelWidth).removeFromLeft (90).withSizeKeepingCentre (90, 26));
+        hintArea = r.removeFromTop (hintHeight);
+        r.removeFromTop (rowGap);
+        keyRow = row();
+
+        auto sliderRow = [&] (juce::Slider& slider, juce::Rectangle<int>& label, juce::Rectangle<int>& value)
+        {
+            label = row();
+            auto area = label.withTrimmedLeft (pitchLabelWidth);
+            value = area.removeFromRight (54);
+            slider.setBounds (area.withTrimmedRight (6));
+        };
+
+        sliderRow (snap, snapRow, snapValue);
+        sliderRow (vibrato, vibratoRow, vibratoValue);
+
+        // Note transitions: its name, then the switch across the width.
+        transitionsRow = row();
+        transitionsArea = row();
+        auto segments = transitionsArea.reduced (2);
+        const int segmentWidth = segments.getWidth() / 3;
+        natural.setBounds (segments.removeFromLeft (segmentWidth));
+        tight.setBounds (segments.removeFromLeft (segmentWidth));
+        instant.setBounds (segments);
+
+        auto buttons = row();
+        reset.setBounds (buttons.removeFromRight (72));
+        buttons.removeFromRight (8);
+        correctAll.setBounds (buttons);
+    }
+
+private:
+    RegionInspector& owner;
+
+    juce::Slider snap    { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider vibrato { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider* dragging = nullptr;   // the slider being dragged (it's ahead of the session)
+    bool snapMixed = false, vibratoMixed = false;
+    IconButton natural { "Natural transitions", std::nullopt, "Natural" };
+    IconButton tight   { "Tight transitions", std::nullopt, "Tight" };
+    IconButton instant { "Instant transitions", std::nullopt, "Instant" };
+    IconButton correctAll { "Correct All", std::nullopt, "Correct All" };
+    IconButton reset { "Reset Pitch", std::nullopt, "Reset" };
+    IconButton modeButton { "Pitch mode", std::nullopt, "Pitch off" };
+    juce::String keyText, hint;
+    juce::Rectangle<int> modeRow, hintArea;
+    static constexpr int hintHeight = 34;
+
+    juce::Rectangle<int> keyRow, snapRow, snapValue, vibratoRow, vibratoValue, transitionsRow, transitionsArea;
+
+    // Wider than the other sections' labels: "Snap to Key" is longer.
+    static constexpr int pitchLabelWidth = 86;
+
+    void setUpSlider (juce::Slider& slider, const juce::String& title, const juce::String& undoName, const juce::String& tip)
+    {
+        slider.setTitle (title);
+        slider.setTooltip (tip);
+        slider.setRange (0.0, 100.0, 1.0);
+        slider.setDoubleClickReturnValue (true, 0.0);
+        slider.setScrollWheelEnabled (false);   // every notch would be an undo step of its own
+
+        // A whole drag is one undo step (as with the gain slider): it starts
+        // on mouse-down, and every change until mouse-up goes into it.
+        slider.onDragStart = [this, &slider, undoName]
+        {
+            dragging = &slider;
+            owner.engine.beginUndoStep (undoName);
+        };
+        slider.onDragEnd = [this] { dragging = nullptr; };
+        slider.onValueChange = [this, &slider, undoName]
+        {
+            if (! owner.region.has_value())
+                return;
+
+            if (dragging != &slider)
+                owner.engine.beginUndoStep (undoName);   // a double-click: a step of its own
+
+            auto& pitch = owner.engine.getTracks().pitch();
+            const auto amount = (float) slider.getValue() / 100.0f;
+
+            if (&slider == &snap)
+                pitch.setSnap (owner.region->id, owner.pitchSelection, amount);
+            else
+                pitch.setFlatten (owner.region->id, owner.pitchSelection, amount);
+
+            repaint();
+        };
+        addAndMakeVisible (slider);
+    }
+};
+
+//==============================================================================
 RegionInspector::RegionInspector (AudioEngine& e) : engine (e)
 {
     setTitle ("Region inspector");
 
     audioControls = std::make_unique<AudioControls> (*this);
     editingControls = std::make_unique<EditingControls> (*this);
+    pitchControls = std::make_unique<PitchControls> (*this);
     audioSection = std::make_unique<CollapsibleSection> ("Audio", *audioControls, true);
     editingSection = std::make_unique<CollapsibleSection> ("Editing", *editingControls, true);
+    pitchSection = std::make_unique<CollapsibleSection> ("Pitch", *pitchControls, true);
 
-    for (auto* section : { audioSection.get(), editingSection.get() })
+    for (auto* section : { audioSection.get(), editingSection.get(), pitchSection.get() })
     {
         section->onExpandedChanged = [this] { layoutSections(); };
         sectionHolder.addChildComponent (section);
@@ -405,8 +685,45 @@ void RegionInspector::setRegion (std::optional<RegionInfo> r, Family family)
     if (region.has_value() && ! drummer)
         editingControls->refresh (*region);
 
+    // The Pitch section, for every audio region (greyed out while Pitch
+    // mode is off, with a line saying how to turn it on).
+    pitchSection->setVisible (audio);
+    const auto pitch = audio ? engine.getTracks().pitch().getPitch (region->id) : PitchInfo();
+
+    if (audio)
+        pitchControls->refresh (pitch);
+
+    // In Pitch mode the Pitch section opens and the others fold up (still
+    // there to open, in their usual order); leaving it puts them back as they were.
+    if (const bool on = audio && pitch.on; on != pitchLayout)
+    {
+        pitchLayout = on;
+
+        if (on)
+        {
+            savedExpanded = { audioSection->isExpanded(), editingSection->isExpanded(), pitchSection->isExpanded() };
+            audioSection->setExpanded (false);
+            editingSection->setExpanded (false);
+            pitchSection->setExpanded (true);
+        }
+        else
+        {
+            audioSection->setExpanded (savedExpanded[0]);
+            editingSection->setExpanded (savedExpanded[1]);
+            pitchSection->setExpanded (savedExpanded[2]);
+        }
+    }
+
     layoutSections();
     repaint();
+}
+
+void RegionInspector::setPitchSelection (std::vector<double> noteStarts)
+{
+    pitchSelection = std::move (noteStarts);
+
+    if (region.has_value() && ! region->isMidi && pitchSection->isVisible())
+        pitchControls->refresh (engine.getTracks().pitch().getPitch (region->id));
 }
 
 void RegionInspector::showGridMenu (juce::Component& target)
@@ -444,10 +761,11 @@ void RegionInspector::layoutSections()
     // Contents decide their own height; sections stack them with headers.
     audioControls->setSize (width, audioControls->getIdealHeight());
     editingControls->setSize (width, editingControls->getIdealHeight());
+    pitchControls->setSize (width, pitchControls->getIdealHeight());
 
     int y = 0;
 
-    for (auto* section : { audioSection.get(), editingSection.get() })
+    for (auto* section : { audioSection.get(), editingSection.get(), pitchSection.get() })
     {
         if (! section->isVisible())
             continue;

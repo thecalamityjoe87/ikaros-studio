@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/bottompanel/NoiseGateView.h"
+#include "ui/bottompanel/TuneSectionView.h"
 #include "ui/bottompanel/PluginChainView.h"
 #include "ui/bottompanel/RecordingView.h"
 #include "ui/theme/Tokens.h"
@@ -16,6 +17,7 @@ namespace ikaros
 
       Recording   input, monitoring and input level (audio tracks)
       Noise Gate  on/off and threshold (audio tracks)
+      Tune        on/off, Correction and Speed (Vocal tracks)
       Plug-ins    the instrument and effect chain
 
     New sections (sends to master reverb/echo, ...) slot in here.
@@ -45,10 +47,12 @@ public:
 private:
     RecordingView recording;
     NoiseGateView noiseGate;
+    TuneSectionView tune;
     PluginChainView plugins;
 
     CollapsibleSection recordingSection;
     CollapsibleSection noiseGateSection;
+    CollapsibleSection tuneSection;
     CollapsibleSection pluginsSection;
     bool masterMode = false;
 

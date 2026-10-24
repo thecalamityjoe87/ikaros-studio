@@ -5,6 +5,7 @@
 #include "engine/EffectsController.h"
 #include "engine/EqController.h"
 #include "engine/FlexEditor.h"
+#include "engine/PitchEditor.h"
 #include "engine/InputRouter.h"
 #include "engine/NoteEditor.h"
 #include "engine/RegionEditor.h"
@@ -35,6 +36,7 @@ class AudioEngine;
         automation() - automation curves and the lanes that show them
         sections() - the arrangement markers (song sections) above the tracks
         flex()     - Flex Time: moving the hits in audio recordings
+        pitch()    - Pitch mode: seeing and correcting the notes in audio recordings
         drummer()  - Drummer tracks and regions: a virtual drummer
 
     Every method runs on the message thread. Mutating methods record into the
@@ -65,6 +67,8 @@ public:
     const SectionEditor& sections() const noexcept          { return *sectionEditor; }
     FlexEditor& flex() noexcept                             { return *flexEditor; }
     const FlexEditor& flex() const noexcept                 { return *flexEditor; }
+    PitchEditor& pitch() noexcept                           { return *pitchEditor; }
+    const PitchEditor& pitch() const noexcept               { return *pitchEditor; }
     DrummerEditor& drummer() noexcept                       { return *drummerEditor; }
     const DrummerEditor& drummer() const noexcept           { return *drummerEditor; }
 
@@ -180,6 +184,7 @@ private:
     std::unique_ptr<AutomationEditor> automationEditor;   // after sendBuses: it uses them
     std::unique_ptr<SectionEditor> sectionEditor;
     std::unique_ptr<FlexEditor> flexEditor;
+    std::unique_ptr<PitchEditor> pitchEditor;       // after flexEditor: it uses it
     std::unique_ptr<DrummerEditor> drummerEditor;   // after effectsController and sectionEditor: it uses them
 
     TrackId createAudioTrack (const juce::String& name);

@@ -1,6 +1,7 @@
 #include "engine/SongExporter.h"
 #include "engine/AudioEngine.h"
 #include "engine/Mp3Format.h"
+#include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "platform/AppFolders.h"
 #include <tracktion_engine/tracktion_engine.h>
@@ -311,6 +312,11 @@ juce::Result SongExporter::start (const ExportSettings& settings, std::function<
 
     if (job != nullptr || edit == nullptr)
         return juce::Result::fail ("An export is already running.");
+
+    // Pitch-corrected regions play their corrected audio once it's rendered
+    // (see PitchEditor); finish any render still going, so the export is
+    // exactly what plays.
+    engine.getTracks().pitch().finishRendering();
 
     auto newJob = std::make_shared<Job>();
     newJob->settings = settings;

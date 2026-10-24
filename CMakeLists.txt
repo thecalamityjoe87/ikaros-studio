@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 11)
+set(IKAROS_MILESTONE 12)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -288,6 +288,10 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/DrumKitMap.h         src/engine/DrumKitMap.cpp
     src/engine/FlexHelpers.h
     src/engine/FlexMap.h
+    src/engine/PitchEditor.h        src/engine/PitchEditor.cpp
+    src/engine/PitchAnalysis.h      src/engine/PitchAnalysis.cpp
+    src/engine/PitchCurve.h
+    src/engine/PitchRender.h        src/engine/PitchRender.cpp
     src/engine/Quantize.h
     src/engine/LoopKey.h
     src/engine/TimeStretch.h
@@ -301,6 +305,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/SfzPlugin.h          src/engine/SfzPlugin.cpp
     src/engine/SoundShaper.h        src/engine/SoundShaper.cpp
     src/engine/BuiltInEffects.h     src/engine/BuiltInEffects.cpp
+    src/engine/TunePlugin.h         src/engine/TunePlugin.cpp
     src/engine/PortedPedals.h           src/engine/PortedPedals.cpp
     src/engine/KlonCentaurDsp.h         src/engine/KlonCentaurDsp.cpp
     src/engine/PedalStyles.h        src/engine/PedalStyles.cpp
@@ -326,6 +331,21 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
+
+# Tune's pitch correction is fat1's retuner (GPL 2+, see
+# external/fat1/README.ikaros), and Pitch mode's analysis is probabilistic
+# YIN from sevagh/pitch-detection (MIT, see external/pitch-detection/README.ikaros).
+# Both are compiled here, with JUCE's FFT in place of FFTW and FFTS, into the
+# app and the smoke test like the engine.
+set(IKAROS_PITCH_SOURCES
+    external/fat1/retuner.h         external/fat1/retuner.cc
+    external/pitch-detection/pitch_detection.h external/pitch-detection/yin.cpp)
+set_source_files_properties(external/fat1/retuner.cc src/engine/TunePlugin.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/external/fat1")
+set_source_files_properties(external/pitch-detection/yin.cpp src/engine/PitchAnalysis.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/external/pitch-detection")
+set_source_files_properties(external/fat1/retuner.cc external/pitch-detection/yin.cpp PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")   # third-party code's warnings
 
 # The Golden Boost's circuit model (KlonCentaur, BSD 3-clause, with parts of
 # chowdsp_utils, GPL 3) is compiled in KlonCentaurDsp.cpp. Its files include
@@ -418,6 +438,7 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/BottomPanel.h        src/ui/bottompanel/BottomPanel.cpp
     src/ui/bottompanel/PianoKeyboard.h      src/ui/bottompanel/PianoKeyboard.cpp
     src/ui/bottompanel/AudioEditor.h        src/ui/bottompanel/AudioEditor.cpp
+    src/ui/bottompanel/AudioEditorPitch.cpp
     src/ui/bottompanel/EditorGrid.h
     src/ui/bottompanel/RegionInspector.h    src/ui/bottompanel/RegionInspector.cpp
     src/ui/bottompanel/PianoRoll.h          src/ui/bottompanel/PianoRoll.cpp
@@ -433,12 +454,15 @@ set(IKAROS_UI_SOURCES
     src/ui/bottompanel/TrackInspector.h     src/ui/bottompanel/TrackInspector.cpp
     src/ui/bottompanel/PluginChainView.h    src/ui/bottompanel/PluginChainView.cpp
     src/ui/bottompanel/PluginEditor.h       src/ui/bottompanel/PluginEditor.cpp
+    src/ui/bottompanel/TuneControls.h       src/ui/bottompanel/TuneControls.cpp
     src/ui/bottompanel/NoiseGateView.h      src/ui/bottompanel/NoiseGateView.cpp
+    src/ui/bottompanel/TuneSectionView.h    src/ui/bottompanel/TuneSectionView.cpp
     src/ui/bottompanel/RecordingView.h      src/ui/bottompanel/RecordingView.cpp)
 
 target_sources(IkarosStudio PRIVATE
     ${IKAROS_APP_SOURCES}
     ${IKAROS_ENGINE_SOURCES}
+    ${IKAROS_PITCH_SOURCES}
     ${IKAROS_PLATFORM_SOURCES}
     ${IKAROS_UI_SOURCES})
 
@@ -581,7 +605,8 @@ if(IKAROS_BUILD_TESTS)
         src/platform/FileLock.cpp        # and marks them as open with a lock
         src/platform/AudioHardware.cpp   # and the audio device watcher notices new sound cards
         src/engine/TestAudioDevice.cpp   # a pretend audio interface the test drives
-        ${IKAROS_ENGINE_SOURCES})
+        ${IKAROS_ENGINE_SOURCES}
+        ${IKAROS_PITCH_SOURCES})
 
     target_include_directories(IkarosEngineSmokeTest PRIVATE src)
 
@@ -631,7 +656,7 @@ if(IKAROS_BUILD_TESTS)
     # The test scans the test plug-ins when they've been built.
     # One test per section (see main() in the test), so `ctest -L export`
     # runs just that section.
-    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,followtempo,tuner,pedals,amp,drummer,controllers)
+    add_test(NAME EngineSmokeTest COMMAND IkarosEngineSmokeTest "${CMAKE_BINARY_DIR}/TestPlugins" --skip=export,undo,recovery,recording,takes,longrecording,preferences,effects,tempo,sections,stretch,flex,quantize,followtempo,tuner,pedals,amp,drummer,controllers,tune,pitch)
     add_test(NAME EngineSmokeTest.Export COMMAND IkarosEngineSmokeTest --only=export)
     add_test(NAME EngineSmokeTest.Undo COMMAND IkarosEngineSmokeTest --only=undo)
     add_test(NAME EngineSmokeTest.Recovery COMMAND IkarosEngineSmokeTest --only=recovery)
@@ -681,6 +706,13 @@ if(IKAROS_BUILD_TESTS)
     set_tests_properties(EngineSmokeTest.Drummer PROPERTIES LABELS "drummer")
     add_test(NAME EngineSmokeTest.Controllers COMMAND IkarosEngineSmokeTest --only=controllers)
     set_tests_properties(EngineSmokeTest.Controllers PROPERTIES LABELS "controllers")
+
+    # Pitch correction: the Tune effect, and the audio editor's Pitch mode
+    # (analysis, editing, rendering).
+    add_test(NAME EngineSmokeTest.Tune COMMAND IkarosEngineSmokeTest --only=tune)
+    set_tests_properties(EngineSmokeTest.Tune PROPERTIES LABELS "tune")
+    add_test(NAME EngineSmokeTest.Pitch COMMAND IkarosEngineSmokeTest --only=pitch)
+    set_tests_properties(EngineSmokeTest.Pitch PROPERTIES LABELS "pitch" TIMEOUT 1800)
 endif()
 
 # Small VST3/LV2 plug-ins (and two deliberately broken ones) for testing

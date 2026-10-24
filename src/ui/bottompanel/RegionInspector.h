@@ -4,6 +4,7 @@
 #include "ui/bottompanel/EditorGrid.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/CollapsibleSection.h"
+#include <array>
 #include <optional>
 
 namespace ikaros
@@ -20,6 +21,16 @@ class AudioEngine;
 
       Audio region   Gain, Pitch, Reverse (and whether it follows the key), Flex
       Editing        Grid, Quantize, and Quantize's strength and swing
+      Pitch          audio regions: Pitch mode on/off (the same switch as the
+                     Editor's Waveform | Pitch), the song's key, Snap to Key,
+                     Vibrato, Note transitions, Correct All and Reset (see
+                     PitchEditor). They're greyed out while Pitch mode is
+                     off. The sliders work on the notes selected in the
+                     Editor, or on every note if none are.
+
+    In Pitch mode the Pitch section opens, and Audio and Editing fold up to
+    their headers (they keep their places, and can still be opened). Leaving
+    Pitch mode opens or closes them as they were.
 
     The audio settings go straight to the session (RegionEditor), each as an
     undo step. The grid and Quantize belong to the editors, so they're
@@ -46,6 +57,11 @@ public:
     /** Quantize's strength or swing was changed (each 0..1, see QuantizeSettings). */
     std::function<void (double strength, double swing)> onQuantizeFeelChanged;
 
+    /** The notes selected in the audio editor's Pitch mode (by their start
+        in the recording; empty = none), so the Pitch section's sliders
+        work on them. */
+    void setPitchSelection (std::vector<double> noteStarts);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -54,6 +70,7 @@ public:
 private:
     class AudioControls;
     class EditingControls;
+    class PitchControls;
 
     AudioEngine& engine;
     std::optional<RegionInfo> region;
@@ -64,7 +81,14 @@ private:
     // destroys members in reverse order: the sections go first.
     std::unique_ptr<AudioControls> audioControls;
     std::unique_ptr<EditingControls> editingControls;
-    std::unique_ptr<CollapsibleSection> audioSection, editingSection;
+    std::unique_ptr<PitchControls> pitchControls;
+    std::unique_ptr<CollapsibleSection> audioSection, editingSection, pitchSection;
+    std::vector<double> pitchSelection;
+
+    // In Pitch mode the others fold up; how they were before, to put them
+    // back afterwards.
+    bool pitchLayout = false;
+    std::array<bool, 3> savedExpanded { true, true, true };   // Audio, Editing, Pitch
 
     juce::Viewport viewport;
     juce::Component sectionHolder;

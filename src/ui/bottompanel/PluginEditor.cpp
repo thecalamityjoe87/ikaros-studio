@@ -38,6 +38,12 @@ PluginEditor::PluginEditor (AudioEngine& e, TrackId t, PluginId p, Family family
         addAndMakeVisible (knob);
     }
 
+    if (engine.getTracks().effects().getTune (trackId, pluginId).exists)
+    {
+        tuneControls = std::make_unique<TuneControls> (engine, trackId, pluginId, family);
+        addAndMakeVisible (*tuneControls);
+    }
+
     refreshValues();
     startTimerHz (10);
 }
@@ -57,6 +63,10 @@ void PluginEditor::refreshValues()
                 powerButton.setToggleState (slot.enabled, juce::dontSendNotification);
                 powerButton.setTitle ((slot.enabled ? "Turn off " : "Turn on ") + slot.name);
                 powerButton.setTooltip (slot.enabled ? "On (click to bypass)" : "Off (click to turn on)");
+
+                if (tuneControls != nullptr)
+                    resized();   // Tune's header controls start after the name, which just changed
+
                 repaint();
             }
             break;
@@ -67,6 +77,9 @@ void PluginEditor::refreshValues()
 
     for (int i = 0; i < knobs.size() && i < (int) params.size(); ++i)
         knobs[i]->setValue (params[(size_t) i].value, params[(size_t) i].valueText);
+
+    if (tuneControls != nullptr)
+        tuneControls->refresh();
 }
 
 void PluginEditor::timerCallback()
@@ -93,10 +106,30 @@ int PluginEditor::columnsFor (int width) const
     return juce::jmax (1, (width - padding * 2 + gap) / (Knob::preferredWidth + gap));
 }
 
-int PluginEditor::getIdealHeight (int width) const
+int PluginEditor::knobsHeight (int width) const
 {
     const int rows = juce::jmax (1, (knobs.size() + columnsFor (width) - 1) / columnsFor (width));
-    return headerHeight + padding + rows * Knob::preferredHeight + (rows - 1) * gap + padding;
+    return rows * Knob::preferredHeight + (rows - 1) * gap;
+}
+
+int PluginEditor::getIdealHeight (int width) const
+{
+    if (tuneControls != nullptr)
+        return headerHeight + padding + TuneControls::getBodyHeight() + padding;
+
+    return headerHeight + padding + knobsHeight (width) + padding;
+}
+
+juce::String PluginEditor::getTitleText() const
+{
+    // Tune's panel follows its design: the name in spaced capitals.
+    const auto name = tuneControls != nullptr ? slot.name.toUpperCase() : slot.name;
+    return name + (slot.enabled ? "" : " (off)");
+}
+
+juce::Font PluginEditor::getTitleFont() const
+{
+    return tuneControls != nullptr ? fonts::uiBold (textSize::xl).withExtraKerningFactor (0.12f) : fonts::uiBold (textSize::xl);
 }
 
 void PluginEditor::paint (juce::Graphics& g)
@@ -104,8 +137,8 @@ void PluginEditor::paint (juce::Graphics& g)
     auto header = getLocalBounds().removeFromTop (headerHeight).withTrimmedLeft (padding + 32);
 
     g.setColour (slot.enabled ? theme().text : theme().textSecondary);
-    g.setFont (fonts::uiBold (textSize::xl));
-    g.drawText (slot.name + (slot.enabled ? "" : " (off)"), header, juce::Justification::centredLeft, true);
+    g.setFont (getTitleFont());
+    g.drawText (getTitleText(), header, juce::Justification::centredLeft, true);
 
     if (knobs.isEmpty())
     {
@@ -122,8 +155,31 @@ void PluginEditor::resized()
     powerButton.setBounds (header.removeFromLeft (24).withSizeKeepingCentre (24, 24));
     doneButton.setBounds (header.removeFromRight (76).withSizeKeepingCentre (76, 30));
 
-    const int cols = columnsFor (getWidth());
     const int left = padding, top = headerHeight + padding;
+
+    if (tuneControls != nullptr)
+    {
+        // Tune's panel (see TuneControls): the header's free part, from after
+        // the name to the panel's right edge (and short of Done), and the
+        // body under it, at most the panel's width.
+        const int panelRight = juce::jmin (left + TuneControls::panelWidth, doneButton.getX() - 16);
+        const int titleRight = padding + 32 + juce::GlyphArrangement::getStringWidthInt (getTitleFont(), getTitleText()) + 16;
+        const auto headerFree = juce::Rectangle<int>::leftTopRightBottom (titleRight, header.getY(), juce::jmax (titleRight, panelRight),
+                                                                          header.getBottom());
+        const auto body = juce::Rectangle<int>::leftTopRightBottom (left, top, juce::jmax (left + 1, panelRight),
+                                                                    top + TuneControls::getBodyHeight());
+
+        tuneControls->setBounds (getLocalBounds());
+        const auto knobArea = tuneControls->layOut (headerFree, body);
+
+        for (int i = 0; i < knobs.size(); ++i)
+            knobs[i]->setBounds (knobArea.getX() + i * (Knob::preferredWidth + gap), knobArea.getY(),
+                                 Knob::preferredWidth, Knob::preferredHeight);
+
+        return;
+    }
+
+    const int cols = columnsFor (getWidth());
 
     for (int i = 0; i < knobs.size(); ++i)
         knobs[i]->setBounds (left + (i % cols) * (Knob::preferredWidth + gap),
