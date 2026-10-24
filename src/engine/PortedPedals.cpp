@@ -25,11 +25,15 @@ GxPedalPlugin::GxPedalPlugin (te::PluginCreationInfo info, juce::String pedalNam
     {
         StageState s;
         s.stage = stage;
-        s.dsp[0].reset (stage.create());
+        s.dsp[0].reset (stage.type->create());
         s.stereo = s.dsp[0]->mono_audio == nullptr && s.dsp[0]->stereo_audio != nullptr;
 
         if (! s.stereo)
-            s.dsp[1].reset (stage.create());   // one per channel
+            s.dsp[1].reset (stage.type->create());   // one per channel
+
+        // A mono DSP's state is copied from one copy to the other (see
+        // process()), which is only right when it has no buffers of its own.
+        jassert (s.stereo || (stage.type->copyState != nullptr && s.dsp[0]->activate_plugin == nullptr));
 
         if (stage.oversampling > 1)
         {
@@ -148,7 +152,16 @@ void GxPedalPlugin::reset()
     }
 }
 
-void GxPedalPlugin::process (StageState& s, juce::dsp::AudioBlock<float>& block)
+// Whether both channels hold exactly the same samples: a mono source, which
+// Tracktion copies to both. memcmp stops at the first difference, so a
+// stereo source costs next to nothing to check.
+static bool channelsMatch (const juce::dsp::AudioBlock<float>& block)
+{
+    return block.getNumChannels() > 1
+        && std::memcmp (block.getChannelPointer (0), block.getChannelPointer (1), block.getNumSamples() * sizeof (float)) == 0;
+}
+
+void GxPedalPlugin::process (StageState& s, juce::dsp::AudioBlock<float>& block, bool sameOnBoth)
 {
     const int n = (int) block.getNumSamples();
 
@@ -161,8 +174,35 @@ void GxPedalPlugin::process (StageState& s, juce::dsp::AudioBlock<float>& block)
         return;
     }
 
+    auto* left = block.getChannelPointer (0);
+
+    // The same input on both channels would give the same output: the left
+    // channel's copy alone, and its result on both.
+    if (sameOnBoth || block.getNumChannels() < 2)
+    {
+        s.dsp[0]->mono_audio (n, left, left, s.dsp[0].get());
+
+        if (block.getNumChannels() > 1)
+            juce::FloatVectorOperations::copy (block.getChannelPointer (1), left, n);
+
+        s.rightBehind = true;
+        return;
+    }
+
+    // The channels have just started to differ. Until now the right one had
+    // the left one's input, so its copy must carry on from where the left
+    // one is: the same filters, delay lines and LFO phase (or the Jet
+    // Flanger's two sweeps would be out of step from now on). It's a plain
+    // copy of the DSP's members: no allocation or lock, so fine on the audio
+    // thread, and only this thread ever runs the DSPs.
+    if (s.rightBehind)
+    {
+        s.stage.type->copyState (*s.dsp[0], *s.dsp[1]);
+        s.rightBehind = false;
+    }
+
     // In place, as the original wrappers run it: each channel through its own copy.
-    for (size_t ch = 0; ch < juce::jmin ((size_t) 2, block.getNumChannels()); ++ch)
+    for (size_t ch = 0; ch < 2; ++ch)
     {
         auto* samples = block.getChannelPointer (ch);
         s.dsp[ch]->mono_audio (n, samples, samples, s.dsp[ch].get());
@@ -205,15 +245,22 @@ void GxPedalPlugin::applyToBuffer (const te::PluginRenderContext& fc)
 
         for (auto& s : stages)
         {
+            // Checked at the track's rate, before any oversampling. A stage
+            // run once gives the next one the same on both channels again.
+            const bool sameOnBoth = ! s.stereo && channelsMatch (block);
+
             if (s.oversampler == nullptr)
             {
-                process (s, block);
+                process (s, block, sameOnBoth);
                 continue;
             }
 
-            // Up to the higher rate, run the stage there, and back down.
+            // Up to the higher rate, run the stage there, and back down. The
+            // oversampler always filters both channels, even when the stage
+            // runs once: its filters stay in step that way, so the right
+            // channel's history is right when the channels start to differ.
             auto up = s.oversampler->processSamplesUp (block);
-            process (s, up);
+            process (s, up, sameOnBoth);
             s.oversampler->processSamplesDown (block);
         }
     }
@@ -234,7 +281,7 @@ namespace
 const char* YellowDrivePlugin::xmlTypeName = "ikarosYellowDrive";
 
 YellowDrivePlugin::YellowDrivePlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::sd1::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::sd1::dsp } })
 {
     // The DSP itself turns Drive into its exponential curve.
     addControl (gx::sd1::drive, "drive", "Drive", { 0.0f, 1.0f }, 0.5f, percent);
@@ -248,7 +295,7 @@ YellowDrivePlugin::~YellowDrivePlugin()    { notifyListenersOfDeletion(); }   //
 const char* StackDrivePlugin::xmlTypeName = "ikarosStackDrive";
 
 StackDrivePlugin::StackDrivePlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::guvnor::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::guvnor::dsp } })
 {
     addControl (gx::guvnor::gain,   "gain",   "Gain",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::guvnor::bass,   "bass",   "Bass",   { 0.0f, 1.0f }, 0.5f, percent);
@@ -263,7 +310,7 @@ StackDrivePlugin::~StackDrivePlugin()    { notifyListenersOfDeletion(); }
 const char* HotPlatePlugin::xmlTypeName = "ikarosHotPlate";
 
 HotPlatePlugin::HotPlatePlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::hotbox::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::hotbox::dsp } })
 {
     addControl (gx::hotbox::gain,   "gain",   "Gain",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::hotbox::bass,   "bass",   "Bass",   { 0.0f, 1.0f }, 0.5f, percent);
@@ -277,7 +324,7 @@ HotPlatePlugin::~HotPlatePlugin()    { notifyListenersOfDeletion(); }
 const char* TubeDrivePlugin::xmlTypeName = "ikarosTubeDrive";
 
 TubeDrivePlugin::TubeDrivePlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::bottlerocket::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::bottlerocket::dsp } })
 {
     addControl (gx::bottlerocket::gain,   "gain",   "Gain",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::bottlerocket::bass,   "bass",   "Bass",   { 0.0f, 1.0f }, 0.5f, percent);
@@ -292,7 +339,7 @@ TubeDrivePlugin::~TubeDrivePlugin()    { notifyListenersOfDeletion(); }
 const char* MellowDrivePlugin::xmlTypeName = "ikarosMellowDrive";
 
 MellowDrivePlugin::MellowDrivePlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::eternity::create, 2, 1 } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::eternity::dsp, 2, 1 } })
 {
     addControl (gx::eternity::drive, "drive", "Drive", { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::eternity::glass, "glass", "Glass", { 0.0f, 1.0f }, 0.5f, percent);
@@ -305,7 +352,7 @@ MellowDrivePlugin::~MellowDrivePlugin()    { notifyListenersOfDeletion(); }
 const char* SunFuzzPlugin::xmlTypeName = "ikarosSunFuzz";
 
 SunFuzzPlugin::SunFuzzPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::sunface::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::sunface::dsp } })
 {
     addControl (gx::sunface::drive,  "drive",  "Fuzz",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::sunface::input,  "input",  "Input",  { 0.0f, 1.0f }, 0.5f, percent);
@@ -318,9 +365,9 @@ SunFuzzPlugin::~SunFuzzPlugin()    { notifyListenersOfDeletion(); }
 const char* VintageFuzzPlugin::xmlTypeName = "ikarosVintageFuzz";
 
 VintageFuzzPlugin::VintageFuzzPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::tonebender::createInput },
-                                              { gx::tonebender::createClip, 4, 4 },
-                                              { gx::tonebender::createOutput } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::tonebender::inputDsp },
+                                              { &gx::tonebender::clipDsp, 4, 4 },
+                                              { &gx::tonebender::outputDsp } })
 {
     addControl (gx::tonebender::fuzz,   "fuzz",   "Fuzz",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::tonebender::tone,   "tone",   "Tone",   { 0.0f, 1.0f }, 0.5f, percent);
@@ -333,9 +380,9 @@ VintageFuzzPlugin::~VintageFuzzPlugin()    { notifyListenersOfDeletion(); }
 const char* SuperFuzzPlugin::xmlTypeName = "ikarosSuperFuzz";
 
 SuperFuzzPlugin::SuperFuzzPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::superfuzz::createInput },
-                                              { gx::superfuzz::createClip, 4, 4 },
-                                              { gx::superfuzz::createOutput } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::superfuzz::inputDsp },
+                                              { &gx::superfuzz::clipDsp, 4, 4 },
+                                              { &gx::superfuzz::outputDsp } })
 {
     addControl (gx::superfuzz::expander, "expander", "Fuzz",   { 0.0f, 1.0f }, 0.5f, percent);
     addControl (gx::superfuzz::balance,  "balance",  "Volume", { 0.0f, 1.0f }, 0.5f, percent);
@@ -349,7 +396,7 @@ SuperFuzzPlugin::~SuperFuzzPlugin()    { notifyListenersOfDeletion(); }
 const char* EnvelopeWahPlugin::xmlTypeName = "ikarosEnvelopeWah";
 
 EnvelopeWahPlugin::EnvelopeWahPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::quack::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::quack::dsp } })
 {
     addControl (gx::quack::depth, "depth", "Depth", { 0.0f, 1.0f }, 1.0f, percent);
     addControl (gx::quack::peak,  "peak",  "Peak",  { -6.0f, 20.0f }, 5.0f, plainNumber);
@@ -366,7 +413,7 @@ EnvelopeWahPlugin::~EnvelopeWahPlugin()    { notifyListenersOfDeletion(); }
 const char* SlowSwellPlugin::xmlTypeName = "ikarosSlowSwell";
 
 SlowSwellPlugin::SlowSwellPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::slowgear::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::slowgear::dsp } })
 {
     addControl (gx::slowgear::threshold, "threshold", "Threshold", { 0.0f, 10.0f }, 1.0f, plainNumber);
     addControl (gx::slowgear::uptime,    "uptime",    "Swell",     { 0.0f, 1000.0f }, 100.0f, milliseconds);
@@ -379,7 +426,7 @@ SlowSwellPlugin::~SlowSwellPlugin()    { notifyListenersOfDeletion(); }
 const char* JetFlangerPlugin::xmlTypeName = "ikarosJetFlanger";
 
 JetFlangerPlugin::JetFlangerPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::flanger::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::flanger::dsp } })
 {
     addControl (gx::flanger::freq,     "freq",     "Speed",    logRange (0.05f, 10.0f), 0.2f, hertz);
     addControl (gx::flanger::depth,    "depth",    "Depth",    { 0.0f, 5.0f }, 0.5f, [] (float ms) { return juce::String (ms, 2) + " ms"; });
@@ -395,7 +442,7 @@ JetFlangerPlugin::~JetFlangerPlugin()    { notifyListenersOfDeletion(); }
 const char* SpringTankPlugin::xmlTypeName = "ikarosSpringTank";
 
 SpringTankPlugin::SpringTankPlugin (te::PluginCreationInfo info)
-    : GxPedalPlugin (info, getPluginName(), { { gx::reverb::create } })
+    : GxPedalPlugin (info, getPluginName(), { { &gx::reverb::dsp } })
 {
     addControl (gx::reverb::wetDry,   "dry_wet",  "Mix",     { 0.0f, 100.0f }, 50.0f, wholePercent);
     addControl (gx::reverb::roomSize, "roomsize", "Size",    { 0.0f, 1.0f }, 0.5f, percent);

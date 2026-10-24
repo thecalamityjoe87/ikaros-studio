@@ -31,5 +31,6 @@ namespace ikaros::gx::reverb
     static_assert (WET_DRY == wetDry && LFOFREQ == lfo && ROOMSIZE == roomSize && DAMP == damp && INVERT == invert,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return stereoverb::plugin(); }
+    // Stereo, and its buffers are its own (activate_plugin), so never copied.
+    const DspType dsp { stereoverb::plugin, nullptr };
 }

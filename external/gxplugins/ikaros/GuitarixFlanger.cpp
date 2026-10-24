@@ -30,5 +30,5 @@ namespace ikaros::gx::flanger
     static_assert (DEPTH == depth && WIDTH == width && FREQ == freq && FEEDBACK == feedback && WET == wet && MIX == mix,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return gx_flanger::plugin(); }
+    const DspType dsp { gx_flanger::plugin, copyStateOf<gx_flanger::Dsp> };
 }

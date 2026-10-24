@@ -4,6 +4,7 @@
 #include <array>
 
 struct PluginLV2;   // a GxPlugins pedal's DSP (see external/gxplugins/ikaros/GxDsp.h)
+namespace ikaros::gx { struct DspType; }
 
 namespace ikaros
 {
@@ -20,7 +21,9 @@ class KlonCentaurDsp;
 
     A pedal is one or more DSPs ("stages") in a row. Most original DSPs are
     mono, so there's one copy of each per channel (two on a stereo track); a
-    stereo one (Spring Tank's) gets both channels at once. A stage can run
+    stereo one (Spring Tank's) gets both channels at once. A mono source
+    (a guitar) arrives the same on both channels, and then a mono stage runs
+    once and its result is copied to the right channel: half the work. A stage can run
     oversampled: the original pedals did that with zita-resampler, which
     needs threads MSVC doesn't have, so here juce::dsp::Oversampling does it
     and the latency it adds is reported to Tracktion.
@@ -49,7 +52,7 @@ public:
 protected:
     struct Stage
     {
-        PluginLV2* (*create)();         // makes one copy of the DSP, e.g. gx::sd1::create
+        const gx::DspType* type;        // makes the DSP's copies, e.g. &gx::sd1::dsp
         int oversampling = 1;           // 1, 2 or 4: how many times the track's rate it runs at
         std::uint32_t rateFactor = 1;   // the DSP is told the rate times this (see the subclasses)
     };
@@ -80,6 +83,9 @@ private:
         Stage stage;
         std::array<DspPtr, 2> dsp;      // one per channel; only [0] for a stereo DSP
         bool stereo = false;
+        // The right channel's copy was skipped (the channels were the same,
+        // or there was only one), so its state is behind the left one's.
+        bool rightBehind = false;
         std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;   // if oversampling > 1
     };
 
@@ -92,7 +98,7 @@ private:
     };
 
     void forEachDsp (const std::function<void (PluginLV2&)>&);
-    void process (StageState&, juce::dsp::AudioBlock<float>&);
+    void process (StageState&, juce::dsp::AudioBlock<float>&, bool sameOnBoth);
 
     const juce::String name;
     std::vector<StageState> stages;

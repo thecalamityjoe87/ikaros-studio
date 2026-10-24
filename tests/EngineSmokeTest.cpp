@@ -4832,6 +4832,92 @@ static void runPedalsSection (const juce::File& dir)
         }
     }
 
+    std::cout << "Mono guitar goes through a pedal once, and stereo stays stereo\n";
+    {
+        // Mono guitar arrives the same on both channels, so a pedal runs its
+        // mono DSPs on the left only and copies the result. When the channels
+        // start to differ, the right channel's DSP takes over from the left
+        // one's state. Here the right channel is the guitar for the first
+        // second, then a quieter, shifted copy of it: from then on, it must
+        // sound exactly as that same input does through the left channel,
+        // which never stopped (no click, the Jet Flanger's sweep in step).
+        juce::AudioBuffer<float> guitar (1, 96000);
+        guitar.clear();
+        juce::WavAudioFormat wav;
+        const auto fixture = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals/di_guitar.wav");
+
+        if (std::unique_ptr<juce::AudioFormatReader> reader { wav.createReaderFor (fixture.createInputStream().release(), true) })
+            reader->read (&guitar, 0, 96000, 0, true, false);
+
+        constexpr int length = 96000, split = 48000, blockSize = 512;
+        const float* g = guitar.getReadPointer (0);
+        auto rightInput = [&] (int i) { return i < split ? g[i] : 0.5f * g[(i + 4801) % length]; };
+
+        // Plays left/right inputs through the plugin, in blocks.
+        auto render = [&] (tracktion::Plugin& plugin, const std::function<float (int)>& left, const std::function<float (int)>& right)
+        {
+            plugin.initialise ({ tracktion::TimePosition(), 48000.0, blockSize });
+            plugin.reset();
+            juce::AudioBuffer<float> buffer (2, length);
+
+            for (int i = 0; i < length; ++i)
+            {
+                buffer.setSample (0, i, left (i));
+                buffer.setSample (1, i, right (i));
+            }
+
+            for (int start = 0; start < length; start += blockSize)
+            {
+                tracktion::PluginRenderContext context (&buffer, start, std::min (blockSize, length - start),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            return buffer;
+        };
+
+        auto maxDifference = [] (const float* a, const float* b, int from, int to)
+        {
+            float most = 0.0f;
+
+            for (int i = from; i < to; ++i)
+                most = std::max (most, std::abs (a[i] - b[i]));
+
+            return most;
+        };
+
+        auto* edit = TestAudioDevice::getEditOf (engine);
+        int tested = 0;
+
+        for (auto& style : getPedalStyles())
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = edit->getPluginCache().createNewPlugin (style.pluginType, {});
+
+            // Ours with mono DSPs (Spring Tank's is stereo).
+            if (dynamic_cast<GxPedalPlugin*> (plugin.get()) == nullptr || style.pluginType == SpringTankPlugin::xmlTypeName)
+                continue;
+
+            ++tested;
+            const auto name = plugin->getName();
+            const auto mixed = render (*plugin, [&] (int i) { return g[i]; }, rightInput);
+            const auto reference = render (*plugin, rightInput, rightInput);   // the right input, mono throughout
+
+            const auto* left = mixed.getReadPointer (0);
+            const auto* right = mixed.getReadPointer (1);
+            const auto copied = maxDifference (left, right, 0, split);
+            const auto takenOver = maxDifference (right, reference.getReadPointer (0), 0, length);
+            const auto stereo = maxDifference (left, right, split + blockSize, length);
+
+            check (copied == 0.0f, (name + ": mono in, the same out on both channels").toRawUTF8());
+            check (takenOver <= 1.0e-6f, (name + ": when the channels start to differ, the right one carries on without a jump (largest difference "
+                                          + juce::String (takenOver, 9) + ")").toRawUTF8());
+            check (stereo > 1.0e-3f, (name + ": stereo in, stereo out").toRawUTF8());
+        }
+
+        check (tested == 11, "(all eleven pedals with mono DSPs were tried)");
+    }
+
     std::cout << "All twenty pedals at once\n";
     {
         // How much of the computer's time the pedals need: two seconds of

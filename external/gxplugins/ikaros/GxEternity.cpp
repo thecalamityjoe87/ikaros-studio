@@ -24,5 +24,5 @@ namespace ikaros::gx::eternity
     static_assert (DRIVE == drive && GLASS == glass && LEVEL == level,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return eternity::plugin(); }
+    const DspType dsp { eternity::plugin, copyStateOf<eternity::Dsp> };
 }

@@ -28,5 +28,5 @@ namespace ikaros::gx::quack
     static_assert (DEPTH == depth && DRIVE == drive && GAIN == gain && MODE == mode && PEAK == peak && RANGE == range && TONE == tone,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return quack::plugin(); }
+    const DspType dsp { quack::plugin, copyStateOf<quack::Dsp> };
 }

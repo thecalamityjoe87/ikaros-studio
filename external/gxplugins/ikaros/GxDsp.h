@@ -36,34 +36,54 @@
 namespace ikaros::gx
 {
 
+/** One of the DSPs below: makes new copies of it, and copies the whole
+    state of one copy (filters, delay lines, LFO phase) into another.
+    GxPedalPlugin runs a mono DSP's second copy only while the two channels
+    differ, and copies the first one's state into it when they start to. */
+struct DspType
+{
+    PluginLV2* (*create)();
+    void (*copyState) (const PluginLV2& from, PluginLV2& to);   // null if it can't be copied
+};
+
+/** A DspType's copyState for a generated DSP class: plain assignment, which
+    copies every member. Right for a DSP whose state is all in its own
+    members: every one here without an activate_plugin (the ones with one
+    allocate buffers that two copies would then share). */
+template <typename GeneratedDsp>
+void copyStateOf (const PluginLV2& from, PluginLV2& to)
+{
+    static_cast<GeneratedDsp&> (to) = static_cast<const GeneratedDsp&> (from);
+}
+
 /** GxSD1 (Yellow Drive). All linear:
       drive  0..1, default 0.5
       level  -20..+4 dB, default -16
       tone   100..1000 Hz, default 400 */
 namespace sd1
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t drive = 3, level = 4, tone = 5;
 }
 
 /** GxGuvnor (Stack Drive). All 0..1, default 0.5. */
 namespace guvnor
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t bass = 2, gain = 3, level = 4, mid = 5, treble = 6;
 }
 
 /** GxHotBox (Hot Plate). All 0..1, default 0.5, but volume 0.25. */
 namespace hotbox
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t bass = 3, gain = 4, treble = 5, volume = 6;
 }
 
 /** GxBottleRocket (Tube Drive). All 0..1, default 0.5. */
 namespace bottlerocket
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t bass = 3, gain = 4, treble = 5, volume = 6;
 }
 
@@ -71,14 +91,14 @@ namespace bottlerocket
     rate it's given in set_samplerate: the caller oversamples it 2x. */
 namespace eternity
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t drive = 3, glass = 4, level = 5;
 }
 
 /** GxSunFace (Sun Fuzz). All 0..1, default 0.5. */
 namespace sunface
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t drive = 3, input = 4, volume = 5;
 }
 
@@ -86,9 +106,7 @@ namespace sunface
     (the clipping) oversampled 4x by the caller. All 0..1, default 0.5. */
 namespace tonebender
 {
-    PluginLV2* createInput();
-    PluginLV2* createClip();
-    PluginLV2* createOutput();
+    extern const DspType inputDsp, clipDsp, outputDsp;
     constexpr std::uint32_t fuzz = 2, tone = 3, volume = 4;
 }
 
@@ -100,9 +118,7 @@ namespace tonebender
       trim      0..0.49, default 0.25 */
 namespace superfuzz
 {
-    PluginLV2* createInput();
-    PluginLV2* createClip();
-    PluginLV2* createOutput();
+    extern const DspType inputDsp, clipDsp, outputDsp;
     constexpr std::uint32_t balance = 2, expander = 3, tone = 4, trim = 5;
 }
 
@@ -116,7 +132,7 @@ namespace superfuzz
       tone   0 = off (default), 1 = low, 2 = high */
 namespace quack
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t depth = 3, drive = 4, gain = 5, mode = 6, peak = 7, range = 8, tone = 9;
 }
 
@@ -126,7 +142,7 @@ namespace quack
       uptime     0..1000 ms, default 100 (the swell in) */
 namespace slowgear
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t downtime = 2, threshold = 3, uptime = 4;
 }
 
@@ -139,7 +155,7 @@ namespace slowgear
       mix       -1..1, default 0 */
 namespace flanger
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t depth = 0, width = 1, freq = 2, feedback = 3, wet = 4, mix = 5;
 }
 
@@ -151,7 +167,7 @@ namespace flanger
       invert    0 = linear (default), 1 = ping-pong */
 namespace reverb
 {
-    PluginLV2* create();
+    extern const DspType dsp;
     constexpr std::uint32_t wetDry = 0, lfo = 1, roomSize = 2, damp = 3, invert = 4;
 }
 
