@@ -1,0 +1,17 @@
+{
+  "name": "Korg nanoKONTROL2",
+  "about": "From Ardour's map for this controller (Korg_nanoKONTROL2.map, Ardour commit d34a51e, GPL v2 or later). Factory settings (CC mode, not its DAW modes). Not tried on the hardware yet.",
+  "ports": [
+    "nanoKONTROL2*"
+  ],
+  "controls": [
+    {"cc": 41, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 42, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 43, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 44, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 45, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 46, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 58, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 59, "type": "button", "channel": 1, "action": "nextTrack"}
+  ]
+}

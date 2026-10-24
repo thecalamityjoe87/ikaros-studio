@@ -65,7 +65,7 @@ void PianoRoll::paintKeys (juce::Graphics& g)
     for (int note = firstPitch; note <= lastPitch; ++note)
     {
         auto row = juce::Rectangle<float> ((float) keysArea.getX(), pitchToY (note), (float) keysArea.getWidth(), rowHeight);
-        const bool down = note == previewNote;
+        const bool down = note == previewNote || heldNotes[(size_t) note];
 
         g.setColour (down ? (isBlackKey (note) ? theme().pianoBlackDown : theme().pianoWhiteDown)
                           : isBlackKey (note) ? theme().rollKeyBlack : theme().rollKeyWhite);

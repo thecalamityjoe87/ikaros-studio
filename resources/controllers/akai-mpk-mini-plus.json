@@ -1,0 +1,22 @@
+{
+  "name": "Akai MPK mini Plus",
+  "about": "From Ardour's map for this controller (AKAI_MPKminiplus.map, Ardour commit d34a51e, GPL v2 or later). Factory settings. Not tried on the hardware yet.",
+  "ports": [
+    "MPK mini Plus*"
+  ],
+  "controls": [
+    {"cc": 70, "type": "knob", "action": "soundKnob", "index": 0},
+    {"cc": 71, "type": "knob", "action": "soundKnob", "index": 1},
+    {"cc": 72, "type": "knob", "action": "soundKnob", "index": 2},
+    {"cc": 73, "type": "knob", "action": "soundKnob", "index": 3},
+    {"cc": 74, "type": "knob", "action": "soundKnob", "index": 4},
+    {"cc": 75, "type": "knob", "action": "pan"},
+    {"cc": 76, "type": "knob", "action": "reverbSend"},
+    {"cc": 77, "type": "knob", "action": "masterVolume"},
+    {"cc": 117, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 118, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 119, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 115, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 116, "type": "button", "channel": 1, "action": "nextTrack"}
+  ]
+}

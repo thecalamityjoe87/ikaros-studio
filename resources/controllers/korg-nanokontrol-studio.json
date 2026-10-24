@@ -1,0 +1,21 @@
+{
+  "name": "Korg nanoKONTROL Studio",
+  "about": "From Ardour's map for this controller (Korg_nanoKONTROL_Studio.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "nanoKONTROL Studio*"
+  ],
+  "controls": [
+    {"cc": 54, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 58, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 59, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 60, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 61, "type": "button", "channel": 1, "action": "nextTrack"},
+    {"cc": 63, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 80, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 81, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 29, "type": "button", "channel": 1, "action": "goToStart"},
+    {"cc": 2, "type": "knob", "channel": 1, "action": "masterVolume"},
+    {"cc": 14, "type": "knob", "channel": 1, "action": "pan"},
+    {"cc": 3, "type": "knob", "channel": 1, "action": "volume"}
+  ]
+}

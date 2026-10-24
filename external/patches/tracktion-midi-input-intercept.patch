@@ -1,0 +1,31 @@
+diff --git a/modules/tracktion_engine/playback/devices/tracktion_PhysicalMidiInputDevice.cpp b/modules/tracktion_engine/playback/devices/tracktion_PhysicalMidiInputDevice.cpp
+index 281ed12fff4..4426181fff4 100644
+--- a/modules/tracktion_engine/playback/devices/tracktion_PhysicalMidiInputDevice.cpp
++++ b/modules/tracktion_engine/playback/devices/tracktion_PhysicalMidiInputDevice.cpp
+@@ -462,6 +462,9 @@ void PhysicalMidiInputDevice::handleIncomingMidiMessageInt (const juce::MidiMess
+         listeners.call ([m] (Listener& l) { l.handleIncomingMidiMessage (m); });
+     }
+ 
++    if (engine.getEngineBehaviour().interceptMidiInputMessage (getName(), m))
++        return;
++
+     if (externalController != nullptr && externalController->wantsMessage (*this, m))
+     {
+         externalController->acceptMidiMessage (*this, m);
+diff --git a/modules/tracktion_engine/utilities/tracktion_EngineBehaviour.h b/modules/tracktion_engine/utilities/tracktion_EngineBehaviour.h
+index ecb02dda316..af440fcd465 100644
+--- a/modules/tracktion_engine/utilities/tracktion_EngineBehaviour.h
++++ b/modules/tracktion_engine/utilities/tracktion_EngineBehaviour.h
+@@ -301,6 +301,12 @@ public:
+ 
+     /// Restore a custom control surface from custom XML
+     virtual ControlSurface* getCustomControlSurfaceForXML (ExternalControllerManager&, const juce::XmlElement&)     { return {}; }
++
++    /** Called on the MIDI thread with each message from a physical MIDI input
++        (the device's name), before it goes anywhere else. Return true to
++        swallow it, e.g. a controller knob that's mapped to an app action.
++    */
++    virtual bool interceptMidiInputMessage (const juce::String& /*deviceName*/, const juce::MidiMessage&)  { return false; }
+ };
+ 
+ } // namespace tracktion::inline engine

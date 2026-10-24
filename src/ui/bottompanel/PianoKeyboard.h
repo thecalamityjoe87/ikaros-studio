@@ -3,6 +3,7 @@
 #include "engine/Preferences.h"
 #include "ui/widgets/IconButton.h"
 #include <juce_audio_utils/juce_audio_utils.h>
+#include <bitset>
 
 namespace ikaros
 {
@@ -39,6 +40,10 @@ public:
     /** Shows the keys an instrument plays (lowest to highest MIDI note): from the C
         below its lowest key, or around the middle if it's wider than the keyboard. */
     void showRange (int lowestPlayed, int highestPlayed);
+
+    /** Shows the keys held down on a hardware keyboard as pressed (see
+        InputRouter::getHeldControllerNotes). */
+    void setHeldNotes (const std::bitset<128>&);
 
 private:
     class Keys;

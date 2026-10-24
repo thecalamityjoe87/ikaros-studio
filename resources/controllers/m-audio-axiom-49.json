@@ -1,0 +1,15 @@
+{
+  "name": "M-Audio Axiom 49",
+  "about": "From Ardour's map for this controller (M-Audio_Axiom_49_mkII.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Axiom 49*"
+  ],
+  "controls": [
+    {"cc": 7, "type": "knob", "channel": 1, "action": "masterVolume"},
+    {"pgm": 8, "channel": 1, "action": "metronome"},
+    {"cc": 116, "type": "button", "channel": 16, "action": "stop"},
+    {"cc": 117, "type": "button", "channel": 16, "action": "play"},
+    {"cc": 113, "type": "button", "channel": 16, "action": "loop"},
+    {"cc": 118, "type": "button", "channel": 16, "action": "record"}
+  ]
+}

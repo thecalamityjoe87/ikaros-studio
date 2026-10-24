@@ -1,0 +1,14 @@
+{
+  "name": "Donner DMK25",
+  "about": "From Ardour's map for this controller (donnerdmk25.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "DMK25*"
+  ],
+  "controls": [
+    {"cc": 18, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 19, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 16, "type": "button", "channel": 1, "action": "goToStart"},
+    {"cc": 20, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 15, "type": "button", "channel": 1, "action": "loop"}
+  ]
+}

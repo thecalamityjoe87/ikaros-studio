@@ -1,0 +1,14 @@
+{
+  "name": "M-Audio Oxygen 25 (3rd generation)",
+  "about": "From Ardour's map for this controller (m-audio_oxygen25_3rdGen.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Oxygen 25*"
+  ],
+  "controls": [
+    {"cc": 113, "type": "button", "channel": 16, "action": "loop"},
+    {"cc": 114, "type": "button", "channel": 16, "action": "goToStart"},
+    {"cc": 116, "type": "button", "channel": 16, "action": "stop"},
+    {"cc": 117, "type": "button", "channel": 16, "action": "play"},
+    {"cc": 118, "type": "button", "channel": 16, "action": "record"}
+  ]
+}

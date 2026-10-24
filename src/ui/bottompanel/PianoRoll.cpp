@@ -106,6 +106,15 @@ void PianoRoll::setRegion (std::optional<RegionInfo> r, Family f, const TempoMap
     repaint();
 }
 
+void PianoRoll::setHeldNotes (const std::bitset<128>& notes)
+{
+    if (notes != heldNotes)
+    {
+        heldNotes = notes;
+        repaint (keysArea);
+    }
+}
+
 void PianoRoll::setPlayheadBeat (double editBeat)
 {
     double rel = -1.0;

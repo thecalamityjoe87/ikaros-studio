@@ -1,0 +1,36 @@
+{
+  "name": "Arturia MiniLab 3",
+  "about": "DAW mode (Shift + Pad 3). The numbers are the ones Arturia's own DAW scripts use; in Arturia mode the knobs and faders play the instrument as usual. With its transport mode set to MCU (MIDI Control Center), the pads and faders also send Mackie Control: the faders are then tracks 1-4, or 5-8 in pad Bank B (Shift + Pad 2), and they follow the selected track.",
+  "ports": [ "Minilab3 MIDI" ],
+  "mackiePorts": [ "Minilab3 MCU/HUI" ],
+  "faders": 4,
+  "controls": [
+    { "cc": 105, "type": "button", "action": "loop", "alsoMackie": true },
+    { "cc": 106, "type": "button", "action": "stop", "alsoMackie": true },
+    { "cc": 107, "type": "button", "action": "play", "alsoMackie": true },
+    { "cc": 108, "type": "button", "action": "record", "alsoMackie": true },
+    { "cc": 102, "type": "button", "action": "metronome", "alsoMackie": true },
+    { "cc": 103, "type": "button", "action": "rewind", "alsoMackie": true },
+    { "cc": 104, "type": "button", "action": "fastForward", "alsoMackie": true },
+
+    { "sysex": "F0 00 20 6B 7F 42 02 00 40 63 00 F7", "action": "faderBank", "index": 0 },
+    { "sysex": "F0 00 20 6B 7F 42 02 00 40 63 01 F7", "action": "faderBank", "index": 1 },
+
+    { "cc": 28,  "type": "encoder", "action": "selectTrack" },
+    { "cc": 29,  "type": "encoder", "action": "moveBars" },
+
+    { "cc": 86,  "type": "knob", "action": "soundKnob", "index": 0 },
+    { "cc": 87,  "type": "knob", "action": "soundKnob", "index": 1 },
+    { "cc": 89,  "type": "knob", "action": "soundKnob", "index": 2 },
+    { "cc": 90,  "type": "knob", "action": "soundKnob", "index": 3 },
+    { "cc": 110, "type": "knob", "action": "soundKnob", "index": 4 },
+    { "cc": 111, "type": "knob", "action": "pan" },
+    { "cc": 116, "type": "knob", "action": "reverbSend" },
+    { "cc": 117, "type": "knob", "action": "masterVolume" },
+
+    { "cc": 14,  "type": "knob", "action": "volume", "alsoMackie": true },
+    { "cc": 15,  "type": "knob", "action": "reverbSend", "alsoMackie": true },
+    { "cc": 30,  "type": "knob", "action": "delaySend", "alsoMackie": true },
+    { "cc": 31,  "type": "knob", "action": "masterVolume", "alsoMackie": true }
+  ]
+}

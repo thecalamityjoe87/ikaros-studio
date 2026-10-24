@@ -1,0 +1,18 @@
+{
+  "name": "Nektar Impact LX",
+  "about": "From Ardour's map for this controller (Nektar_Impact_LX.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "Impact LX*"
+  ],
+  "controls": [
+    {"cc": 109, "type": "button", "channel": 16, "action": "previousTrack"},
+    {"cc": 110, "type": "button", "channel": 16, "action": "nextTrack"},
+    {"cc": 20, "type": "knob", "channel": 16, "action": "masterVolume"},
+    {"cc": 102, "type": "button", "channel": 16, "action": "loop"},
+    {"cc": 103, "type": "button", "channel": 16, "action": "rewind"},
+    {"cc": 104, "type": "button", "channel": 16, "action": "fastForward"},
+    {"cc": 106, "type": "button", "channel": 16, "action": "goToStart"},
+    {"cc": 105, "type": "button", "channel": 16, "action": "stop"},
+    {"cc": 107, "type": "button", "channel": 16, "action": "record"}
+  ]
+}

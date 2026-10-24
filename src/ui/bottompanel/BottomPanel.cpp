@@ -156,6 +156,9 @@ public:
             repaint (keyboard.getBounds());
         }
 
+        if (keyboard.isShowing())   // (isVisible() would be true on a hidden tab too)
+            keyboard.setHeldNotes (engine.getTracks().inputs().getHeldControllerNotes());
+
         if (! rangePending)
             return;
 
@@ -945,6 +948,7 @@ void BottomPanel::update()
     else if (tab == Tab::editor && ! editingDrummer)
     {
         pianoRoll.setPlayheadBeat (engine.getTransportState().positionBeats);
+        pianoRoll.setHeldNotes (engine.getTracks().inputs().getHeldControllerNotes());
     }
 }
 

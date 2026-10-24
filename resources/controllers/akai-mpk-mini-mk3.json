@@ -1,0 +1,24 @@
+{
+  "name": "Akai MPK mini mk3",
+  "about": "From Ardour's map for this controller (AKAI_MPKmini_mk3.map, Ardour commit d34a51e, GPL v2 or later). Transport: press PROG CHANGE so the pads send program changes (pads 2-4: play, stop, record; 5 and 8: rewind and forward; in bank B, 12 and 16: previous and next track). Not tried on the hardware yet.",
+  "ports": [
+    "MPK mini 3*"
+  ],
+  "controls": [
+    {"cc": 70, "type": "knob", "action": "soundKnob", "index": 0},
+    {"cc": 71, "type": "knob", "action": "soundKnob", "index": 1},
+    {"cc": 72, "type": "knob", "action": "soundKnob", "index": 2},
+    {"cc": 73, "type": "knob", "action": "soundKnob", "index": 3},
+    {"cc": 74, "type": "knob", "action": "soundKnob", "index": 4},
+    {"cc": 75, "type": "knob", "action": "pan"},
+    {"cc": 76, "type": "knob", "action": "reverbSend"},
+    {"cc": 77, "type": "knob", "action": "masterVolume"},
+    {"pgm": 1, "channel": 10, "action": "play"},
+    {"pgm": 2, "channel": 10, "action": "stop"},
+    {"pgm": 3, "channel": 10, "action": "record"},
+    {"pgm": 4, "channel": 10, "action": "rewind"},
+    {"pgm": 7, "channel": 10, "action": "fastForward"},
+    {"pgm": 11, "channel": 10, "action": "previousTrack"},
+    {"pgm": 15, "channel": 10, "action": "nextTrack"}
+  ]
+}

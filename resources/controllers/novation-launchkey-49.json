@@ -1,0 +1,20 @@
+{
+  "name": "Novation Launchkey 49",
+  "about": "From Ardour's map for this controller (Novation_LaunchKey49.map, Ardour commit d34a51e, GPL v2 or later). The Basic MIDI preset. Not tried on the hardware yet.",
+  "ports": [
+    "Launchkey 49*"
+  ],
+  "controls": [
+    {"cc": 112, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 113, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 114, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 115, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 116, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 117, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 7, "type": "knob", "channel": 1, "action": "masterVolume"},
+    {"cc": 104, "type": "button", "channel": 1, "action": "nextTrack"},
+    {"cc": 105, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 103, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 102, "type": "button", "channel": 1, "action": "nextTrack"}
+  ]
+}

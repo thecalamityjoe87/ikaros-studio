@@ -1,0 +1,17 @@
+{
+  "name": "Korg taktile",
+  "about": "From Ardour's map for this controller (Korg_taktile.map, Ardour commit d34a51e, GPL v2 or later). Mode 9 (generic MIDI). Not tried on the hardware yet.",
+  "ports": [
+    "taktile*"
+  ],
+  "controls": [
+    {"cc": 41, "type": "button", "channel": 1, "action": "play"},
+    {"cc": 42, "type": "button", "channel": 1, "action": "stop"},
+    {"cc": 43, "type": "button", "channel": 1, "action": "rewind"},
+    {"cc": 44, "type": "button", "channel": 1, "action": "fastForward"},
+    {"cc": 45, "type": "button", "channel": 1, "action": "record"},
+    {"cc": 46, "type": "button", "channel": 1, "action": "loop"},
+    {"cc": 58, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 59, "type": "button", "channel": 1, "action": "nextTrack"}
+  ]
+}

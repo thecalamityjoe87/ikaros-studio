@@ -1,0 +1,13 @@
+{
+  "name": "Arturia KeyLab 49",
+  "about": "From Ardour's map for this controller (Arturia_KeyLab49.map, Ardour commit d34a51e, GPL v2 or later). Not tried on the hardware yet.",
+  "ports": [
+    "KeyLab 49*"
+  ],
+  "controls": [
+    {"cc": 85, "type": "knob", "channel": 1, "action": "masterVolume"},
+    {"cc": 31, "type": "button", "channel": 1, "action": "nextTrack"},
+    {"cc": 30, "type": "button", "channel": 1, "action": "previousTrack"},
+    {"cc": 55, "type": "button", "channel": 1, "action": "loop"}
+  ]
+}
