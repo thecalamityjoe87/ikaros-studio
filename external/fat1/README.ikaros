@@ -1,0 +1,26 @@
+The pitch-correction DSP behind Ikaros Studio's Tune effect: the retuner
+from Robin Gareus's fat1.lv2, which is Fons Adriaensen's zita-at1 made into
+an LV2 plug-in. GPL 2 or later (COPYING).
+
+  Repository   https://github.com/x42/fat1.lv2
+  Commit       96b3da42673b8bb270e49acc6727ee7f9d53a20d (2026-09-08)
+  Files        src/retuner.h, src/retuner.cc
+
+Only the retuner is used. fat1's LV2 wrapper (fat1.cc), its GUI and its
+bundled zita-resampler are not; Ikaros's own wrapper is TunePlugin in
+src/engine/TunePlugin.h, which maps the effect's settings onto the
+retuner's and does fat1's MIDI note following.
+
+Changed (each change is marked "Ikaros:"):
+  - FFTW is replaced by juce::dsp::FFT. JUCE's inverse transform divides by
+    the length and FFTW's doesn't, so the result is scaled back up to keep
+    the retuner's numbers (its voicing threshold) the same.
+  - zita-resampler's 2x upsampling at 44.1 and 48 kHz is replaced by
+    juce::dsp::Oversampling (a linear-phase half-band FIR). Its delay is
+    measured once and reported with the effect's latency.
+  - Buffers are std::vectors instead of new[] and fftwf_malloc.
+  - Getters for the readout (voiced, pitch period, target note) and for the
+    latency, which fat1.cc worked out from the buffer sizes itself.
+  - M_PI is defined if <math.h> doesn't (MSVC).
+
+The processing itself is unchanged.

@@ -40,6 +40,26 @@ AudioEditor::AudioEditor (AudioEngine& e) : engine (e)
     };
     addAndMakeVisible (timeZoom);
 
+    // Waveform | Pitch, a segmented switch like the panel's tabs.
+    for (auto* b : { &waveformMode, &pitchMode })
+    {
+        b->setColours (IconButton::segmentColours);
+        b->setFont (fonts::ui (textSize::md));
+        b->setMouseClickGrabsKeyboardFocus (false);
+        b->onClick = [this, b]
+        {
+            if (hasRegion())
+                engine.getTracks().pitch().setPitchMode (region->id, b == &pitchMode);
+
+            refreshPitch();
+            refreshModeSwitch();
+            repaint();
+        };
+        addChildComponent (b);
+    }
+
+    waveformMode.setTooltip ("Show the region's waveform");
+
     timeScroll.setAutoHide (false);
     timeScroll.addListener (this);
     addAndMakeVisible (timeScroll);
@@ -67,6 +87,9 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, Family f, const TempoM
         drag = {};
         selection.reset();
         needsFit = true;
+        pitchDrag = {};
+        pitchSelected.clear();
+        pitchFocus = -1.0;
     }
     else if (drag.mode != Drag::Mode::none
               && (r->startBeat != region->startBeat || r->lengthBeats != region->lengthBeats))
@@ -83,11 +106,17 @@ void AudioEditor::setRegion (std::optional<RegionInfo> r, Family f, const TempoM
     family = f;
     tempo = t;
     refreshFlex();
+    refreshPitch();
+
+    if (! sameRegion)
+        fitPitchRows();
 
     const bool editable = hasRegion();
 
-    for (auto* comp : std::initializer_list<juce::Component*> { &timeZoom, &timeScroll })
+    for (auto* comp : std::initializer_list<juce::Component*> { &timeZoom, &timeScroll, &waveformMode, &pitchMode })
         comp->setVisible (editable);
+
+    refreshModeSwitch();
 
     if (needsFit && ! waveArea.isEmpty())
         fitToRegion();
@@ -180,6 +209,15 @@ void AudioEditor::update()
         repaint();
     }
 
+    // Pitch mode is finding the notes or rendering a correction, in the
+    // background: ask how it's getting on (the session changes only when a
+    // render is ready, and that comes as a change message).
+    if (pitchShown() && (pitch.analysing || pitch.rendering) && isShowing())
+    {
+        refreshPitch();
+        repaint();
+    }
+
     if (notice.isNotEmpty() && juce::Time::getMillisecondCounter() > noticeUntil)
     {
         notice.clear();
@@ -268,6 +306,17 @@ std::optional<AudioEditor::FlexTarget> AudioEditor::flexTargetAt (juce::Point<in
             consider (t.sourceSeconds, t.beat, false);
 
     return best;
+}
+
+void AudioEditor::refreshModeSwitch()
+{
+    waveformMode.setToggleState (! pitchShown(), juce::dontSendNotification);
+    pitchMode.setToggleState (pitchShown(), juce::dontSendNotification);
+
+    // A region that can't use Pitch mode (a loop that follows the song, say) says why.
+    pitchMode.setEnabled (hasRegion() && pitch.available);
+    pitchMode.setTooltip (! hasRegion() || pitch.available ? juce::String ("Show the region's notes, to correct their pitch")
+                                                           : pitch.unavailableReason);
 }
 
 //==============================================================================
@@ -436,6 +485,12 @@ AudioEditor::Drag::Mode AudioEditor::modeAt (juce::Point<int> p) const
 // Mouse and keys
 void AudioEditor::mouseMove (const juce::MouseEvent& e)
 {
+    if (pitchShown() && waveArea.contains (e.getPosition()))
+    {
+        setMouseCursor (pitchNoteAt (e.getPosition()) >= 0 ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+        return;
+    }
+
     switch (modeAt (e.getPosition()))
     {
         case Drag::Mode::trimStart:
@@ -466,6 +521,14 @@ void AudioEditor::mouseDown (const juce::MouseEvent& e)
     }
 
     const auto p = e.getPosition();
+
+    // Pitch mode: the notes take the clicks (the ruler still moves the playhead).
+    if (pitchShown() && waveArea.contains (p))
+    {
+        pitchMouseDown (e);
+        return;
+    }
+
     auto mode = rulerArea.contains (p) ? Drag::Mode::playhead : modeAt (p);
 
     if (mode == Drag::Mode::none)
@@ -505,12 +568,24 @@ void AudioEditor::mouseDown (const juce::MouseEvent& e)
 
 void AudioEditor::mouseDrag (const juce::MouseEvent& e)
 {
+    if (pitchDrag.mode != PitchDrag::Mode::none && hasRegion())
+    {
+        pitchMouseDrag (e);
+        return;
+    }
+
     if (drag.mode != Drag::Mode::none && hasRegion())
         updateDrag (e);
 }
 
 void AudioEditor::mouseUp (const juce::MouseEvent& e)
 {
+    if (pitchDrag.mode != PitchDrag::Mode::none && hasRegion())
+    {
+        pitchMouseUp (e);
+        return;
+    }
+
     if (drag.mode == Drag::Mode::none || ! hasRegion())
         return;
 
@@ -623,6 +698,14 @@ void AudioEditor::finishDrag()
 
 void AudioEditor::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (pitchShown())
+    {
+        if (waveArea.contains (e.getPosition()))
+            pitchDoubleClick (e);
+
+        return;
+    }
+
     // Double-clicking a flex marker takes it away ("Remove Flex Marker").
     if (auto target = flexTargetAt (e.getPosition(), true))
     {
@@ -654,6 +737,20 @@ void AudioEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWh
 
 bool AudioEditor::keyPressed (const juce::KeyPress& key)
 {
+    // Pitch mode: Escape cancels a drag, then drops the selected notes.
+    if (key == juce::KeyPress::escapeKey && pitchDrag.mode != PitchDrag::Mode::none)
+    {
+        pitchDrag = {};
+        repaint();
+        return true;
+    }
+
+    if (key == juce::KeyPress::escapeKey && pitchShown() && ! pitchSelected.empty())
+    {
+        setPitchSelection ({});
+        return true;
+    }
+
     // Escape in the middle of a drag cancels it: nothing has changed yet.
     if (key == juce::KeyPress::escapeKey && drag.mode != Drag::Mode::none)
     {
@@ -686,6 +783,14 @@ void AudioEditor::showMenu()
         return;
 
     juce::PopupMenu menu;
+
+    if (pitchShown())
+    {
+        pitchMenu (menu);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition());
+        return;
+    }
+
     menu.addItem (juce::PopupMenu::Item (selection.has_value() ? "Quantize Selection" : "Quantize All")
                       .setEnabled (flex.available)
                       .setAction ([this] { quantize(); }));
@@ -729,7 +834,11 @@ void AudioEditor::paint (juce::Graphics& g)
 
     paintToolbar (g);
     paintRuler (g);
-    paintWaveform (g);
+
+    if (pitchShown())
+        paintPitch (g);
+    else
+        paintWaveform (g);
 }
 
 void AudioEditor::paintToolbar (juce::Graphics& g)
@@ -752,10 +861,28 @@ void AudioEditor::paintToolbar (juce::Graphics& g)
                                                              "Drag across hits to select \xc2\xb7 Q to quantize");
     }
 
+    // Pitch mode: how to edit the notes, or what it's busy with.
+    if (pitchShown())
+    {
+        const auto status = pitchStatus();
+        hint = status.isNotEmpty() ? status
+                                   : juce::String::fromUTF8 ("Drag a note up or down \xc2\xb7 double-click to center its pitch \xc2\xb7 "
+                                                             "Alt-drag for fine tuning");
+    }
+
     if (notice.isNotEmpty())
         hint = notice;
 
     g.drawFittedText (hint, hintArea, juce::Justification::centredLeft, 1, 1.0f);
+
+    // The Waveform | Pitch switch's well, behind its segments.
+    g.setColour (theme().segmentWell);
+    g.fillRoundedRectangle (modeArea.toFloat(), size::radius);
+    g.setColour (theme().segmentWellBorder);
+    g.drawRoundedRectangle (modeArea.toFloat().reduced (0.5f), size::radius, 1.0f);
+
+    for (auto* segment : { &waveformMode, &pitchMode })
+        IconButton::drawSegmentShadow (g, *segment);
 
     icons::draw (g, Icon::search, timeZoomIcon.toFloat(), theme().textSecondary, 13.0f, 1.6f);
 }
@@ -1004,6 +1131,12 @@ void AudioEditor::resized()
 
     toolbarArea = r.removeFromTop (toolbarHeight);
     auto bar = toolbarArea.reduced (12, 6);
+    modeArea = bar.removeFromLeft (152);
+    auto segments = modeArea.reduced (2);
+    waveformMode.setBounds (segments.removeFromLeft (segments.getWidth() / 2));
+    pitchMode.setBounds (segments);
+    bar.removeFromLeft (12);
+
     timeZoom.setBounds (bar.removeFromRight (90));
     timeZoomIcon = bar.removeFromRight (20).withSizeKeepingCentre (14, 14);
     bar.removeFromRight (10);
@@ -1016,6 +1149,7 @@ void AudioEditor::resized()
     if (needsFit)
         fitToRegion();
 
+    fitPitchRows();
     clampView();
 }
 

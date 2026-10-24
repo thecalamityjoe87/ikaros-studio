@@ -510,6 +510,12 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
         pianoRoll.setQuantizeFeel (strength, swing);
         audioEditor.setQuantizeFeel (strength, swing);
     };
+    // Pitch mode's selected notes: the Region inspector's Pitch sliders work on them.
+    audioEditor.onPitchSelectionChanged = [this] (const std::vector<double>& notes)
+    {
+        regionInspector.setPitchSelection (notes);
+    };
+
     addChildComponent (regionInspector);
 
     // Inspector: a neutral toggle (neutralActive while the column shows).

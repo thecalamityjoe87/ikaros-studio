@@ -11,6 +11,7 @@
 #include "engine/SfzPlugin.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
+#include "engine/TunePlugin.h"
 #include <algorithm>
 #include <array>
 
@@ -54,6 +55,7 @@ namespace
             { JetFlangerPlugin::xmlTypeName,     JetFlangerPlugin::getPluginName(),  "Modulation" },
             { TremoloPlugin::xmlTypeName,        "Tremolo",               "Modulation" },
             { te::PitchShiftPlugin::xmlTypeName, "Pitch Shift",           "Pitch" },
+            { TunePlugin::xmlTypeName,           TunePlugin::getPluginName(),        "Pitch" },
         };
         return effects;
     }
@@ -1192,7 +1194,7 @@ PluginId EffectsController::addEffect (TrackId id, const juce::String& type, int
     auto* edit = owner.getEdit();
     auto* list = findPluginList (edit, id);
 
-    if (list == nullptr || (int) effectsOn (*list).size() >= maxEffectsPerTrack)
+    if (list == nullptr || (int) effectsOn (*list).size() >= maxEffectsPerTrack || ! canAddEffect (id, type))
         return 0;
 
     // At most one Amp per track.
@@ -1221,7 +1223,7 @@ PluginId EffectsController::replaceEffect (TrackId id, PluginId pluginId, const 
     auto* list = findPluginList (edit, id);
     auto* old = list != nullptr ? findEffect (*list, pluginId) : nullptr;
 
-    if (old == nullptr)
+    if (old == nullptr || ! canAddEffect (id, newType))
         return 0;
 
     // At most one Amp per track (replacing the Amp with another is fine).
@@ -1555,6 +1557,183 @@ void EffectsController::setNoiseGateThreshold (TrackId id, float normalised0to1)
     if (auto* t = findTrack (owner.getEdit(), id))
         if (auto* gate = findNoiseGate (t->pluginList))
             setEffectKnob (*gate->getThresholdParameter(), juce::jlimit (0.0f, 1.0f, normalised0to1));
+}
+
+//==============================================================================
+// Presets, and Tune
+bool EffectsController::canAddEffect (TrackId id, const juce::String& type) const
+{
+    // Tune corrects a voice: it goes on audio tracks (not instruments or the master).
+    if (type != TunePlugin::xmlTypeName)
+        return true;
+
+    auto* track = findTrack (owner.getEdit(), id);
+    return track != nullptr && isAudioTrack (*track);
+}
+
+namespace
+{
+    TunePlugin* findTune (te::Edit* edit, TrackId id, PluginId pluginId)
+    {
+        auto* list = findPluginList (edit, id);
+        return list != nullptr ? dynamic_cast<TunePlugin*> (findEffect (*list, pluginId)) : nullptr;
+    }
+}
+
+juce::StringArray EffectsController::getEffectPresets (TrackId id, PluginId pluginId) const
+{
+    return findTune (owner.getEdit(), id, pluginId) != nullptr ? TunePlugin::getPresetNames() : juce::StringArray();
+}
+
+void EffectsController::applyEffectPreset (TrackId id, PluginId pluginId, int index)
+{
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId); tune != nullptr && juce::isPositiveAndBelow (index, TunePlugin::getPresetNames().size()))
+    {
+        owner.beginUndoStep (TunePlugin::getPresetNames()[index] + " Preset");
+        tune->applyPreset (index);
+    }
+}
+
+EffectsController::TuneSettings EffectsController::getTune (TrackId id, PluginId pluginId) const
+{
+    TuneSettings t;
+
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId))
+    {
+        t.exists = true;
+        t.key = tune->getKey();
+        std::tie (t.keyRoot, t.keyMinor) = tune->getEffectiveKey();
+        t.lockToKey = tune->getLockToKey();
+        t.allowedNotes = tune->getAllowedNotes();
+        t.followTrack = (TrackId) tune->getFollowTrack();
+    }
+
+    return t;
+}
+
+void EffectsController::setTuneKey (TrackId id, PluginId pluginId, int key)
+{
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId); tune != nullptr && tune->getKey() != key)
+    {
+        owner.beginUndoStep ("Tune Key");
+        tune->setKey (key);
+    }
+}
+
+void EffectsController::setTuneLockToKey (TrackId id, PluginId pluginId, bool on)
+{
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId))
+    {
+        owner.beginUndoStep (on ? "Lock to Key On" : "Lock to Key Off");
+        tune->setLockToKey (on);
+    }
+}
+
+void EffectsController::toggleTuneNote (TrackId id, PluginId pluginId, int pitchClass)
+{
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId))
+    {
+        owner.beginUndoStep ("Tune Notes");
+        tune->toggleNote (pitchClass);
+    }
+}
+
+void EffectsController::setTuneFollowMidi (TrackId id, PluginId pluginId, TrackId midiTrack)
+{
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId); tune != nullptr && (TrackId) tune->getFollowTrack() != midiTrack)
+    {
+        owner.beginUndoStep ("Follow MIDI");
+        tune->setFollowTrack ((juce::int64) midiTrack);
+    }
+}
+
+PluginId EffectsController::getFirstTune (TrackId id) const
+{
+    if (auto* t = findTrack (owner.getEdit(), id))
+        for (auto* p : effectsOn (t->pluginList))
+            if (dynamic_cast<TunePlugin*> (p) != nullptr)
+                return p->itemID.getRawID();
+
+    return 0;
+}
+
+bool EffectsController::showsTuneSection (TrackId id) const
+{
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr || ! isAudioTrack (*t))
+        return false;
+
+    // A Vocals track (New Track's Vocals card, the templates' Voice track,
+    // or the vocals icon picked by hand), or one that has a Tune already.
+    const auto icon = t->state.getProperty (iconProp).toString();
+
+    if (icon == "vocals" || getFirstTune (id) != 0)
+        return true;
+
+    // Sessions from before Vocals tracks existed: the templates made their
+    // "Voice" track as a plain audio track, with the automatic icon.
+    const auto name = t->getName().trim();
+    return icon.isEmpty() && (name.startsWithIgnoreCase ("Voice") || name.startsWithIgnoreCase ("Vocal"));
+}
+
+bool EffectsController::setTuneOn (TrackId id, bool on)
+{
+    auto* t = findTrack (owner.getEdit(), id);
+
+    if (t == nullptr || ! isAudioTrack (*t))
+        return false;
+
+    if (auto* tune = findEffect (t->pluginList, getFirstTune (id)))
+    {
+        // Turning it off keeps it (and its settings) in the chain, bypassed.
+        if (tune->isEnabled() != on)
+        {
+            owner.beginUndoStep (on ? "Turn Tune On" : "Turn Tune Off");
+            tune->setEnabled (on);
+        }
+
+        return true;
+    }
+
+    if (! on)
+        return true;
+
+    const auto chain = effectsOn (t->pluginList);
+
+    if ((int) chain.size() >= maxEffectsPerTrack)
+        return false;
+
+    auto plugin = createPlugin (t->edit, TunePlugin::xmlTypeName);
+
+    if (plugin == nullptr)
+        return false;
+
+    // Early in the chain, so the effects after it (reverb, echo) hear the
+    // corrected voice; after a Noise Gate at the top, which cleans up first.
+    int position = ! chain.empty() && dynamic_cast<NoiseGatePlugin*> (chain.front()) != nullptr ? 1 : 0;
+
+    if (keepsPedalsFirst (&t->edit, id))
+        position = positionKeepingPedalsFirst (*plugin, chain, position);
+
+    owner.beginUndoStep ("Turn Tune On");
+    t->pluginList.insertPlugin (plugin, pluginListIndexForPosition (t->pluginList, position), nullptr);
+    return true;
+}
+
+EffectsController::TuneReading EffectsController::getTuneReading (TrackId id, PluginId pluginId) const
+{
+    TuneReading r;
+
+    if (auto* tune = findTune (owner.getEdit(), id, pluginId))
+    {
+        const auto reading = tune->getReading();
+        r.voiced = reading.voiced;
+        r.sungNote = reading.sungNote;
+        r.targetNote = reading.targetNote;
+    }
+
+    return r;
 }
 
 } // namespace ikaros

@@ -466,6 +466,7 @@ private:
     friend class AutomationEditor;
     friend class SectionEditor;
     friend class FlexEditor;
+    friend class PitchEditor;
     friend class DrummerEditor;
     friend class PluginLibrary;
     friend class SongExporter;

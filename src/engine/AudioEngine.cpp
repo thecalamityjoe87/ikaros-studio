@@ -23,6 +23,7 @@
 #include "engine/TrackController.h"
 #include "engine/TrackHelpers.h"
 #include "engine/Tuner.h"
+#include "engine/TunePlugin.h"
 #include "engine/ControllerMap.h"
 #include "engine/LiveWaveform.h"
 #include "platform/AppFolders.h"
@@ -283,6 +284,7 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         engine.getPluginManager().createBuiltInType<NoiseGatePlugin>();
         engine.getPluginManager().createBuiltInType<DistortionPlugin>();
         engine.getPluginManager().createBuiltInType<TremoloPlugin>();
+        engine.getPluginManager().createBuiltInType<TunePlugin>();
 
         // The pedals ported from other projects (see PedalStyles.cpp).
         engine.getPluginManager().createBuiltInType<GoldenBoostPlugin>();
@@ -1092,10 +1094,12 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
         return id;
     };
 
-    auto audio = [&tc] (const juce::String& name)
+    // The templates' "Voice" track is a Vocals track (its icon says so, and
+    // its inspector has a Tune section), like New Track's Vocals card makes.
+    auto voice = [&tc]
     {
-        auto id = tc.addAudioTrack();
-        tc.renameTrack (id, name);
+        auto id = tc.addVocalTrack();
+        tc.renameTrack (id, "Voice");
         return id;
     };
 
@@ -1114,7 +1118,7 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
             break;
 
         case SessionTemplate::voice:
-            audio ("Voice");
+            voice();
             instrument (pack + "Soft Piano");
             break;
 
@@ -1129,7 +1133,7 @@ void AudioEngine::newSession (const NewSessionSettings& settings)
             instrument (pack + "Picked Bass");
             instrument (pack + "Nylon Guitar");
             instrument (pack + "Soft Piano");
-            audio ("Voice");
+            voice();
             break;
     }
 
@@ -1530,8 +1534,10 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
 
     // Audio regions, and each of their takes, refer to their files by path.
     // Find every file (while the paths still resolve as they did). `node` is
-    // the clip's state or one of its TAKEs: the tree holding the path.
-    struct Source { juce::ValueTree node; juce::File file; juce::var oldPath; };
+    // the clip's state or one of its TAKEs: the tree holding the path, in
+    // `property` (the source, or the recording a pitch-corrected region was
+    // made from, see PitchEditor).
+    struct Source { juce::ValueTree node; juce::File file; juce::var oldPath; juce::Identifier property = te::IDs::source; };
     std::vector<Source> sources;
 
     for (auto* track : te::getAudioTracks (edit))
@@ -1545,6 +1551,13 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
 
             for (auto take : detail::getTakesTree (*clip))
                 sources.push_back ({ take, te::SourceFileReference (edit, take, te::IDs::source).getFile(), take[te::IDs::source] });
+
+            // A pitch-corrected region plays a render; the recording it came
+            // from goes in the session too, so Reset and Undo can get back to it.
+            if (clip->state.hasProperty (PitchEditor::originalProp))
+                sources.push_back ({ clip->state,
+                                     te::SourceFileReference::findFileFromString (edit, clip->state[PitchEditor::originalProp].toString()),
+                                     clip->state[PitchEditor::originalProp], PitchEditor::originalProp });
         }
 
         // An instrument playing the user's own sound (EffectsController::setOwnSound)
@@ -1599,7 +1612,7 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
         // nullptr = not an undo step: the user shouldn't be able to "undo" a save.
         const auto path = target.isAChildOf (workFolder) ? target.getRelativePathFrom (workFolder).replaceCharacter ('\\', '/')
                                                           : target.getFullPathName();
-        source.node.setProperty (te::IDs::source, path, nullptr);
+        source.node.setProperty (source.property, path, nullptr);
     }
 
     // Writing the file first flushes every plug-in's settings into the state,
@@ -1619,7 +1632,7 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
         // Point everything back at the files it used before. (Copies made in
         // the Audio folder do no harm.)
         for (auto& source : sources)
-            source.node.setProperty (te::IDs::source, source.oldPath, nullptr);
+            source.node.setProperty (source.property, source.oldPath, nullptr);
 
         return nullptr;
     }
@@ -1642,7 +1655,14 @@ std::unique_ptr<AudioEngine::SaveJob> AudioEngine::beginSave (const juce::File& 
     }
 
     for (auto& f : audioFiles)
+    {
         job->entries.push_back ({ juce::String (SessionBundle::audioFolder) + "/" + f.getFileName(), f, false });
+
+        // Its pitch analysis, if Pitch mode has looked at it, so a reopened
+        // session doesn't analyse it again (see PitchEditor).
+        if (auto cache = PitchEditor::cacheFileFor (audioFolder, f); cache.existsAsFile())
+            job->entries.push_back ({ juce::String (SessionBundle::audioFolder) + "/" + cache.getFileName(), cache, true });
+    }
 
     // bundle.json: what saved it, and the sound packs it needs, so a computer
     // without them can say which ones (and later offer to download them).

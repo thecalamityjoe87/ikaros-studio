@@ -2,9 +2,11 @@
 
 #include "engine/EngineTypes.h"
 #include "engine/FlexEditor.h"
+#include "engine/PitchEditor.h"
 #include "engine/WaveformCache.h"
 #include "ui/bottompanel/EditorGrid.h"
 #include "ui/theme/Family.h"
+#include "ui/widgets/IconButton.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <optional>
 
@@ -37,6 +39,17 @@ class AudioEngine;
     in the selection (drag across the waveform to select some), or all of
     them. It turns Flex on for the track if it's off; the hits are found
     first if they haven't been, and the toolbar says so meanwhile.
+
+    With Pitch mode on (the Waveform | Pitch switch at the left of the
+    toolbar, or the Region inspector's Pitch section, see PitchEditor), the
+    editor shows the region's sung notes instead of the
+    waveform, in the same area, with the same ruler, zoom and scroll bar:
+    a column of note names on the left, a row per semitone (the song's key
+    lighter), each note as a blob where it's sung (an out-of-tune note sits
+    off its row) with its measured pitch drawn through it, and a faint
+    waveform along the bottom. Drag a note up or down by semitones (Alt for
+    cents), double-click to center it, click, Shift-click or drag a box to
+    select. The code is in AudioEditorPitch.cpp.
 
     The region's settings (gain, pitch, reverse, the grid) are in the
     Region inspector on the panel's left (see RegionInspector).
@@ -71,6 +84,12 @@ public:
 
     /** Called by the panel's ~30 Hz timer: picks up the waveform once it's been read. */
     void update();
+
+    /** Pitch mode's selected notes changed, or its notes did (e.g. the
+        analysis finished): the selected notes, by their start in the
+        recording (PitchNoteInfo::sourceStart). The panel passes them to
+        the Region inspector. */
+    std::function<void (const std::vector<double>&)> onPitchSelectionChanged;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -144,6 +163,12 @@ private:
     bool waveformDirty = true, waveformPending = false;
 
     juce::Slider timeZoom   { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+
+    // Waveform | Pitch: the region's Pitch mode (an undo step, see PitchEditor::setPitchMode).
+    IconButton waveformMode { "Waveform", std::nullopt, "Waveform" };
+    IconButton pitchMode    { "Pitch", std::nullopt, "Pitch" };
+    juce::Rectangle<int> modeArea;
+    void refreshModeSwitch();
     juce::ScrollBar timeScroll { false };
 
     juce::Rectangle<int> toolbarArea, hintArea, timeZoomIcon, rulerArea, waveArea;
@@ -185,6 +210,47 @@ private:
     void finishDrag();
     void showMenu();
     void showNotice (const juce::String&);
+
+    //==============================================================================
+    // Pitch mode (AudioEditorPitch.cpp)
+    struct PitchDrag
+    {
+        enum class Mode { none, move, box };
+
+        Mode mode = Mode::none;
+        juce::Point<int> start;
+        float semitones = 0.0f;              // move: how far the selected notes are going
+        bool fine = false;                   // move: Alt held, so in cents
+        juce::Rectangle<int> box;            // box: the selection box
+        std::vector<double> selectedBefore;  // box with Shift: what was selected already
+    };
+
+    PitchInfo pitch;                         // the region's pitch state (re-read while it's busy)
+    std::vector<double> pitchSelected;       // selected notes, by their start in the recording
+    double pitchFocus = -1.0;                // the note the bubble's on (the last one clicked)
+    PitchDrag pitchDrag;
+    int pitchLow = 48, pitchHigh = 72;       // the rows shown (MIDI notes)
+    float pitchRowHeight = 15.0f;
+    bool pitchWasReady = false;              // the analysis was ready when last looked at
+
+    bool pitchShown() const noexcept        { return hasRegion() && pitch.on; }
+    void refreshPitch();
+    void fitPitchRows();
+    juce::String pitchStatus() const;
+    juce::Rectangle<int> pitchColumn() const;
+    float noteToY (float note) const;
+    bool isPitchSelected (double sourceStart) const;
+    void setPitchSelection (std::vector<double>);
+    int pitchNoteAt (juce::Point<int>) const;
+    juce::Rectangle<float> pitchNoteBounds (const PitchNoteInfo&, float centre) const;
+    float shownCentre (const PitchNoteInfo&) const;   // where a note is drawn (a drag's preview included)
+
+    void pitchMouseDown (const juce::MouseEvent&);
+    void pitchMouseDrag (const juce::MouseEvent&);
+    void pitchMouseUp (const juce::MouseEvent&);
+    void pitchDoubleClick (const juce::MouseEvent&);
+    void pitchMenu (juce::PopupMenu&);
+    void paintPitch (juce::Graphics&);
 
     // Painting
     void paintToolbar (juce::Graphics&);

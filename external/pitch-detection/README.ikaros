@@ -1,0 +1,33 @@
+Probabilistic YIN from Sevag Hanssian's pitch-detection library, used by
+Ikaros Studio's pitch analysis (Pitch mode in the audio editor). MIT
+License (LICENSE).
+
+  Repository   https://github.com/sevagh/pitch-detection
+  Commit       8055f50bd94ffcc9fec4b63ca9a6a087eec9d892 (2025-01-07)
+  Files        include/pitch_detection.h, src/yin.cpp, and the parts of
+               src/autocorrelation.cpp and src/parabolic_interpolation.cpp
+               that YIN uses
+
+Only YIN and its probabilistic version are kept; MPM, the HMM (hmm.cpp) and
+the tests are not. The analysis built on it (frames, notes, the cache) is
+Ikaros's own: src/engine/PitchAnalysis.h.
+
+Changed (each change is marked "Ikaros:"):
+  - FFTS is replaced by juce::dsp::FFT.
+  - The YIN difference function is computed exactly (the correlation of
+    the frame's first half with the whole frame, zero-padded, and the
+    energy of each window), where the original used a circular
+    autocorrelation and an approximation of the energy terms.
+  - The pitch range is fixed per instance, and periods outside it aren't
+    looked at.
+  - The probabilistic thresholds find their candidates with a running
+    minimum and a binary search (the same candidates, much faster). Where
+    no dip is below a threshold, the lowest point gets that threshold's
+    weight times PYIN_PA, as pYIN describes; the original read past the end
+    of its buffer there.
+  - mlpack's HMM (which would bring in mlpack and Armadillo) is replaced by
+    picking the most probable candidate, and the frame's voicing
+    probability is the weight of the thresholds where a dip was found. The
+    analysis smooths across frames itself.
+  - One class for float frames instead of templates; the beta distribution
+    table and the constants are unchanged.

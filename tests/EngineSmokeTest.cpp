@@ -25,6 +25,9 @@
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
+#include "engine/TunePlugin.h"                    // the Tune effect, driven directly
+#include "engine/PitchAnalysis.h"                 // Pitch mode's analysis, and re-analysing renders
+#include "engine/PitchRender.h"
 #include "platform/AppFolders.h"
 #include "engine/SongExporter.h"
 #include "ui/state/Selection.h"                    // plain logic, no components
@@ -6449,6 +6452,725 @@ static void runControllersSection()
            "a profile's unknown actions, types and numbers are skipped; one without a name or port isn't read");
 }
 
+//==============================================================================
+// Pitch correction: the Tune effect and the audio editor's Pitch mode.
+
+namespace pitchtest
+{
+    // A part of a test phrase: a note (gliding from one pitch to another
+    // over its length, with vibrato if asked), or a burst of noise.
+    struct Part
+    {
+        double start = 0.0, length = 0.0;
+        float fromNote = 69.0f, toNote = 69.0f;
+        float vibratoCents = 0.0f;
+        bool saw = false, noise = false;
+        float level = 0.3f;
+    };
+
+    // One channel. The phase carries on from part to part, so notes that
+    // touch (a glide into the next note) join without a click; parts with
+    // nothing right before or after them fade in and out over 5 ms.
+    juce::AudioBuffer<float> synth (double rate, double seconds, const std::vector<Part>& parts)
+    {
+        juce::AudioBuffer<float> b (1, (int) (seconds * rate));
+        b.clear();
+        juce::Random random (42);
+        double phase = 0.0;
+
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            const auto& part = parts[i];
+            const bool joinedBefore = i > 0 && std::abs (parts[i - 1].start + parts[i - 1].length - part.start) < 1.0e-9;
+            const bool joinedAfter = i + 1 < parts.size() && std::abs (part.start + part.length - parts[i + 1].start) < 1.0e-9;
+            const int first = (int) (part.start * rate), count = (int) (part.length * rate);
+            const int fade = (int) (0.005 * rate);
+
+            for (int s = 0; s < count && first + s < b.getNumSamples(); ++s)
+            {
+                const double t = s / rate;
+                float v;
+
+                if (part.noise)
+                {
+                    v = random.nextFloat() * 2.0f - 1.0f;
+                }
+                else
+                {
+                    const double note = part.fromNote + (part.toNote - part.fromNote) * (t / part.length)
+                                         + part.vibratoCents / 100.0 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.5 * t);
+                    const double hz = 440.0 * std::pow (2.0, (note - 69.0) / 12.0);
+                    phase += hz / rate;
+
+                    if (part.saw)
+                    {
+                        // Band-limited: the harmonics up to 8 kHz.
+                        double sum = 0.0;
+
+                        for (int h = 1; h * hz < 8000.0 && h <= 24; ++h)
+                            sum += std::sin (2.0 * juce::MathConstants<double>::pi * h * phase) / h;
+
+                        v = (float) (sum * 0.6);
+                    }
+                    else
+                    {
+                        v = (float) std::sin (2.0 * juce::MathConstants<double>::pi * phase);
+                    }
+                }
+
+                float gain = part.level;
+
+                if (! joinedBefore && s < fade)          gain *= (float) s / (float) fade;
+                if (! joinedAfter && count - s < fade)   gain *= (float) (count - s) / (float) fade;
+
+                b.setSample (0, first + s, v * gain);
+            }
+        }
+
+        return b;
+    }
+
+    bool writeWav (const juce::File& f, const juce::AudioBuffer<float>& b, double rate)
+    {
+        f.deleteFile();
+        std::unique_ptr<juce::OutputStream> out = f.createOutputStream();
+
+        if (out == nullptr)
+            return false;
+
+        auto writer = juce::WavAudioFormat().createWriterFor (out, juce::AudioFormatWriterOptions()
+                                                                       .withSampleRate (rate)
+                                                                       .withNumChannels (b.getNumChannels())
+                                                                       .withBitsPerSample (24));
+        return writer != nullptr && writer->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+    }
+
+    // The median pitch (fractional MIDI note) of one channel between two
+    // times, from the pitch analysis's frames. 0 if nothing's pitched there.
+    float medianPitch (const float* samples, int num, double rate, double from, double to)
+    {
+        auto a = pitchanalysis::analyse (samples, num, rate);
+
+        if (! a.has_value())
+            return 0.0f;
+
+        std::vector<float> found;
+
+        for (int i = 0; i < (int) a->pitch.size(); ++i)
+            if (a->frameTime (i) >= from && a->frameTime (i) <= to && a->pitch[(size_t) i] > 0.0f)
+                found.push_back (a->pitch[(size_t) i]);
+
+        if (found.empty())
+            return 0.0f;
+
+        std::nth_element (found.begin(), found.begin() + (std::ptrdiff_t) (found.size() / 2), found.end());
+        return found[found.size() / 2];
+    }
+
+    // The test phrase: A3 (sine), a 100 ms glide up into C4 (sawtooth),
+    // silence and a burst of noise, E4 30 cents flat with vibrato (sine),
+    // G4 15 cents sharp (sawtooth), more silence and noise. Four notes.
+    std::vector<Part> phrase()
+    {
+        return {
+            { 0.3, 0.7, 57.0f, 57.0f, 0.0f, false },
+            { 1.0, 0.1, 57.0f, 60.0f, 0.0f, false },
+            { 1.1, 0.8, 60.0f, 60.0f, 0.0f, true },
+            { 2.2, 0.2, 0, 0, 0, false, true, 0.25f },
+            { 2.5, 1.1, 63.7f, 63.7f, 40.0f, false },
+            { 3.9, 0.8, 67.15f, 67.15f, 0.0f, true },
+            { 5.0, 0.2, 0, 0, 0, false, true, 0.25f },
+        };
+    }
+
+    constexpr double phraseSeconds = 5.6;
+    const float expectedCentres[] { 57.0f, 60.0f, 63.7f, 67.15f };
+}
+
+static void runTuneSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    using namespace pitchtest;
+    std::cout << "Tune\n";
+
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice device { engine, {} };
+    auto& tracks = engine.getTracks();
+    auto& effects = tracks.effects();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+
+    const auto voice = tracks.addAudioTrack();
+    const auto keys = tracks.addInstrumentTrack();
+    pumpMessages();
+
+    const auto available = effects.getAvailableEffects();
+    check (std::any_of (available.begin(), available.end(), [] (const EffectType& e) { return e.name == "Tune" && e.category == "Pitch"; }),
+           "Tune is in the effects menu, with the pitch effects");
+    check (effects.addEffect (keys, TunePlugin::xmlTypeName) == 0 && ! effects.canAddEffect (keys, TunePlugin::xmlTypeName),
+           "it can't go on an instrument track");
+
+    // The track inspector's Tune section, on Vocal tracks.
+    {
+        const auto vocals = tracks.addVocalTrack();
+        pumpMessages();
+        check (effects.showsTuneSection (vocals) && ! effects.showsTuneSection (voice) && ! effects.showsTuneSection (keys),
+               "Vocal tracks show the Tune section in their inspector");
+        tracks.renameTrack (voice, "Voice");
+        check (effects.showsTuneSection (voice), "so does an older session's \"Voice\" audio track");
+        tracks.renameTrack (voice, "Audio 1");
+        checkUndoRoundTrip (engine, "Turn Tune On", [&] { effects.setTuneOn (vocals, true); });
+        const auto added = effects.getFirstTune (vocals);
+        auto chain = effects.getEffectChain (vocals);
+        check (added != 0 && chain.size() == 1 && chain[0].enabled, "turning it on adds a Tune to the track");
+        checkUndoRoundTrip (engine, "Turn Tune Off", [&] { effects.setTuneOn (vocals, false); });
+        chain = effects.getEffectChain (vocals);
+        check (effects.getFirstTune (vocals) == added && chain.size() == 1 && ! chain[0].enabled,
+               "turning it off keeps it, bypassed");
+    }
+
+    const auto tuneId = effects.addEffect (voice, TunePlugin::xmlTypeName);
+    pumpMessages();
+    check (tuneId != 0, "it can be added to an audio track");
+
+    const auto params = effects.getEffectParameters (voice, tuneId);
+    check (params.size() == 3 && params[0].name == "Correction" && params[1].name == "Speed" && params[2].name == "Fine Tune",
+           "its knobs are Correction, Speed and Fine Tune");
+    check (TunePlugin::speedText (0.0f) == "Natural" && TunePlugin::speedText (1.0f) == "Robotic" && TunePlugin::speedText (0.5f) == "50%",
+           "Speed reads Natural at the bottom, Robotic at the top and a percentage between");
+
+    auto* list = detail::findPluginList (TestAudioDevice::getEditOf (engine), voice);
+    auto tunes = list != nullptr ? list->getPluginsOfType<TunePlugin>() : juce::Array<TunePlugin*>();
+    auto* tune = tunes.isEmpty() ? nullptr : tunes.getFirst();
+    check (tune != nullptr, "(the effect is a TunePlugin)");
+
+    if (tune == nullptr)
+        return;
+
+    // Settings: a new session is in C major.
+    auto settings = effects.getTune (voice, tuneId);
+    check (settings.exists && settings.key == -1 && settings.lockToKey && settings.allowedNotes == TunePlugin::scaleNotes (0, false),
+           "a new Tune follows the song's key, locked to its scale");
+
+    checkUndoRoundTrip (engine, "Hard Tune Preset", [&] { effects.applyEffectPreset (voice, tuneId, 1); });
+    check (effects.getEffectParameters (voice, tuneId)[0].value > 0.99f && effects.getEffectParameters (voice, tuneId)[1].value > 0.99f,
+           "Hard Tune is 100% correction at the fastest speed");
+    effects.applyEffectPreset (voice, tuneId, 0);
+    check (std::abs (effects.getEffectParameters (voice, tuneId)[0].value - 0.6f) < 0.01f
+             && std::abs (effects.getEffectParameters (voice, tuneId)[1].value - 0.3f) < 0.01f,
+           "Natural is 60% correction at 30% speed");
+
+    checkUndoRoundTrip (engine, "Tune Key", [&] { effects.setTuneKey (voice, tuneId, 9 + 12); });
+    settings = effects.getTune (voice, tuneId);
+    check (settings.keyRoot == 9 && settings.keyMinor && settings.allowedNotes == TunePlugin::scaleNotes (9, true),
+           "a key of its own (A minor) sets the notes from its scale");
+    checkUndoRoundTrip (engine, "Tune Notes", [&] { effects.toggleTuneNote (voice, tuneId, 1); });
+    check ((effects.getTune (voice, tuneId).allowedNotes & 0x2) != 0, "a note can be let in by hand");
+    checkUndoRoundTrip (engine, "Lock to Key Off", [&] { effects.setTuneLockToKey (voice, tuneId, false); });
+    check (effects.getTune (voice, tuneId).allowedNotes == 0xfff, "with Lock to Key off, all 12 notes are allowed");
+    checkUndoRoundTrip (engine, "Follow MIDI", [&] { effects.setTuneFollowMidi (voice, tuneId, keys); });
+    check (effects.getTune (voice, tuneId).followTrack == keys, "Follow MIDI follows a MIDI track");
+    effects.setTuneFollowMidi (voice, tuneId, 0);
+    effects.setTuneKey (voice, tuneId, -1);
+    effects.setTuneLockToKey (voice, tuneId, true);
+    pumpMessages();
+
+    {
+        const auto file = dir.getChildFile ("Tune.iksession");
+        check (engine.saveSessionAs (file), "(save)");
+        engine.beginUndoStep ("Tune Key");
+        effects.setTuneKey (voice, tuneId, 2);
+        check (engine.openSession (AudioEngine::getSessionFileFor (file)), "(reopen)");
+        pumpMessages();
+        settings = effects.getTune (voice, tuneId);
+        check (settings.exists && settings.key == -1 && settings.lockToKey && effects.getEffectParameters (voice, tuneId)[0].value < 0.65f,
+               "Tune's settings are saved with the session");
+
+        list = detail::findPluginList (TestAudioDevice::getEditOf (engine), voice);
+        tunes = list != nullptr ? list->getPluginsOfType<TunePlugin>() : juce::Array<TunePlugin*>();
+        tune = tunes.isEmpty() ? nullptr : tunes.getFirst();
+
+        if (tune == nullptr)
+            return;
+    }
+
+    // From here the effect is driven directly, block by block, with a
+    // sung-like tone: four harmonics, a little vibrato, 30 cents flat of A4.
+    auto sing = [] (double rate, double seconds, float note)
+    {
+        juce::AudioBuffer<float> b (2, (int) (seconds * rate));
+        double phase = 0.0;
+
+        for (int s = 0; s < b.getNumSamples(); ++s)
+        {
+            const double t = s / rate;
+            const double n = note + 0.15 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.0 * t);
+            phase += 440.0 * std::pow (2.0, (n - 69.0) / 12.0) / rate;
+            float v = 0.0f;
+
+            for (int h = 1; h <= 4; ++h)
+                v += (float) (std::sin (2.0 * juce::MathConstants<double>::pi * h * phase) / h);
+
+            b.setSample (0, s, 0.25f * v);
+            b.setSample (1, s, 0.25f * v);
+        }
+
+        return b;
+    };
+
+    auto run = [&] (double rate, juce::AudioBuffer<float> b)
+    {
+        tune->initialise ({ te::TimePosition(), rate, 512 });
+        tune->reset();
+
+        for (int pos = 0; pos < b.getNumSamples(); pos += 512)
+        {
+            const int num = juce::jmin (512, b.getNumSamples() - pos);
+            te::PluginRenderContext rc (&b, pos, num, nullptr, 0.0,
+                                        te::TimeRange (te::TimePosition::fromSeconds (pos / rate), te::TimeDuration::fromSeconds (num / rate)),
+                                        false, false, true, false);
+            tune->applyToBuffer (rc);
+        }
+
+        return b;
+    };
+
+    auto knobs = [&] (float correction, float speed, float fineCents)
+    {
+        effects.setEffectParameter (voice, tuneId, 0, correction);
+        effects.setEffectParameter (voice, tuneId, 1, speed);
+        effects.setEffectParameter (voice, tuneId, 2, (fineCents + 50.0f) / 100.0f);
+    };
+
+    constexpr double rate = 48000.0;
+    const float sungNote = 68.7f;   // 30 cents flat of A4
+
+    knobs (1.0f, 0.9f, 0.0f);
+    auto out = run (rate, sing (rate, 2.5, sungNote));
+    const auto tuned = medianPitch (out.getReadPointer (0), out.getNumSamples(), rate, 0.8, 2.3);
+    std::cout << "  (30 cents flat, at 100%: comes out at " << (tuned - 69.0f) * 100.0f << " cents from A4)\n";
+    check (std::abs (tuned - 69.0f) < 0.05f, "at 100% correction a note sung 30 cents flat comes out within a few cents of A4");
+
+    const auto reading = tune->getReading();
+    check (reading.voiced && reading.targetNote == 69 && std::abs (reading.sungNote - sungNote) < 0.25f,
+           "the readout shows what's sung (about A4 -30) and the target (A4)");
+    check (std::abs (out.getSample (0, 40000) - out.getSample (1, 40000)) < 1.0e-9f, "it plays the same on both channels");
+
+    knobs (0.0f, 0.9f, 0.0f);
+    out = run (rate, sing (rate, 2.5, sungNote));
+    const auto untouched = medianPitch (out.getReadPointer (0), out.getNumSamples(), rate, 0.8, 2.3);
+    check (std::abs (untouched - sungNote) < 0.05f, "at 0% correction the note stays as sung");
+
+    knobs (1.0f, 0.9f, 20.0f);
+    out = run (rate, sing (rate, 2.5, sungNote));
+    const auto fine = medianPitch (out.getReadPointer (0), out.getNumSamples(), rate, 0.8, 2.3);
+    std::cout << "  (with Fine Tune +20 cents: " << (fine - 69.0f) * 100.0f << " cents from A4)\n";
+    check (std::abs (fine - 69.2f) < 0.05f, "Fine Tune moves the target (+20 cents)");
+
+    // Leave A out: the nearest allowed note is then Ab (70 cents down), not A.
+    knobs (1.0f, 0.9f, 0.0f);
+    effects.setTuneLockToKey (voice, tuneId, false);
+    effects.toggleTuneNote (voice, tuneId, 9);
+    check ((effects.getTune (voice, tuneId).allowedNotes & (1 << 9)) == 0, "(A is left out)");
+    out = run (rate, sing (rate, 2.5, sungNote));
+    const auto excluded = medianPitch (out.getReadPointer (0), out.getNumSamples(), rate, 0.8, 2.3);
+    std::cout << "  (with A left out: comes out at " << excluded << ")\n";
+    check (std::abs (excluded - 68.0f) < 0.08f && tune->getReading().targetNote != 69,
+           "a note that's left out is never the target (it goes to Ab instead)");
+    effects.setTuneLockToKey (voice, tuneId, true);
+
+    // Every sample rate, and fast mode (Robotic): finite, and the latency reported.
+    for (double r : { 44100.0, 48000.0, 96000.0 })
+    {
+        for (float speed : { 0.3f, 1.0f })
+        {
+            knobs (1.0f, speed, 0.0f);
+            out = run (r, sing (r, 1.5, sungNote));
+            bool finite = true;
+            float peak = 0.0f;
+
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                {
+                    finite = finite && std::isfinite (out.getSample (ch, i));
+                    peak = juce::jmax (peak, std::abs (out.getSample (ch, i)));
+                }
+
+            const auto latency = tune->getLatencySeconds() * r;
+            const auto expected = r < 64000.0 ? 1024.0 : 2048.0;
+            const auto text = "at " + juce::String (r / 1000.0, 1) + " kHz" + (speed >= 1.0f ? " (Robotic)" : "")
+                              + ": the output is finite and sounds, and the latency is reported ("
+                              + juce::String (latency, 1) + " samples)";
+            check (finite && peak > 0.05f && latency >= expected && latency < expected + 200.0, text.toRawUTF8());
+        }
+    }
+
+}
+
+static void runPitchSection (const juce::File& dir)
+{
+    namespace te = tracktion;
+    using namespace pitchtest;
+    std::cout << "Pitch analysis\n";
+
+    constexpr double rate = 48000.0;
+    const auto phraseFile = dir.getChildFile ("Phrase.wav");
+    const auto phraseAudio = synth (rate, phraseSeconds, phrase());
+    check (writeWav (phraseFile, phraseAudio, rate), "(write the test phrase)");
+
+    {
+        auto a = pitchanalysis::analyse (phraseAudio.getReadPointer (0), phraseAudio.getNumSamples(), rate);
+        check (a.has_value() && a->singleVoice, "a sung phrase is a single voice");
+        check (a.has_value() && a->notes.size() == 4, "the phrase's four notes are found (a glide joins the next note)");
+
+        if (a.has_value())
+        {
+            bool centres = a->notes.size() == 4, noNoise = true;
+
+            for (size_t i = 0; i < a->notes.size(); ++i)
+            {
+                std::cout << "         note at " << a->notes[i].start << "-" << a->notes[i].end << " s: "
+                          << a->notes[i].centre << " (vibrato " << a->notes[i].vibratoCents << " cents)\n";
+
+                if (i < 4)
+                    centres = centres && std::abs (a->notes[i].centre - expectedCentres[i]) < 0.1f;
+
+                // The noise bursts are at 2.2-2.4 s and 5.0-5.2 s.
+                for (double t : { 2.3, 5.1 })
+                    noNoise = noNoise && ! (a->notes[i].start <= t && a->notes[i].end >= t);
+            }
+
+            check (centres, "each note's centre is within 10 cents (vibrato and glides included)");
+            check (noNoise, "noise isn't marked as notes");
+            check (a->notes.size() > 2 && a->notes[2].vibratoCents > 25.0f && a->notes[0].vibratoCents < 10.0f,
+                   "the vibrato's depth is measured");
+        }
+
+        auto chord = synth (rate, 2.0, { { 0.0, 2.0, 60.0f, 60.0f, 0.0f, true, false, 0.2f } });
+        const auto e = synth (rate, 2.0, { { 0.0, 2.0, 64.0f, 64.0f, 0.0f, true, false, 0.2f } });
+        const auto gNote = synth (rate, 2.0, { { 0.0, 2.0, 67.0f, 67.0f, 0.0f, true, false, 0.2f } });
+        chord.addFrom (0, 0, e, 0, 0, chord.getNumSamples());
+        chord.addFrom (0, 0, gNote, 0, 0, chord.getNumSamples());
+        auto c = pitchanalysis::analyse (chord.getReadPointer (0), chord.getNumSamples(), rate);
+        check (c.has_value() && ! c->singleVoice && c->notes.empty(),
+               "a chord isn't a single voice (Pitch mode says so instead of showing notes)");
+
+        juce::AudioBuffer<float> noise (1, (int) rate);
+        juce::Random random (7);
+
+        for (int i = 0; i < noise.getNumSamples(); ++i)
+            noise.setSample (0, i, (random.nextFloat() * 2.0f - 1.0f) * 0.3f);
+
+        auto n = pitchanalysis::analyse (noise.getReadPointer (0), noise.getNumSamples(), rate);
+        check (n.has_value() && n->notes.empty() && ! n->singleVoice, "noise alone has no notes");
+
+        if (a.has_value())
+        {
+            const auto cache = dir.getChildFile ("Phrase.ikpitch");
+            const auto fingerprint = pitchanalysis::fingerprintOf (phraseFile);
+            check (pitchanalysis::writeCache (cache, *a, fingerprint), "(write a cache)");
+            auto back = pitchanalysis::readCache (cache, fingerprint);
+            check (back.has_value() && back->notes.size() == a->notes.size() && back->pitch.size() == a->pitch.size()
+                     && ! pitchanalysis::readCache (cache, fingerprint + 1).has_value(),
+                   "the cache reads back, and only for the same audio");
+        }
+    }
+
+    std::cout << "Pitch mode\n";
+    AudioEngine engine { testSettings, false };
+    TestAudioDevice device { engine, {} };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& pitch = tracks.pitch();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);
+
+    const auto vocal = tracks.addAudioTrack();
+    const auto region = regions.importAudioFiles (vocal, { phraseFile.getFullPathName() }, 0.0).front();
+    pumpMessages();
+
+    auto clipOf = [&] (RegionId id) { return dynamic_cast<te::WaveAudioClip*> (detail::findClip (TestAudioDevice::getEditOf (engine), id)); };
+    auto pitchTree = [&] { auto* c = clipOf (region); return c != nullptr ? c->state.getChildWithName (PitchEditor::pitchStateType).toXmlString() : juce::String(); };
+    auto playingFile = [&] { auto* c = clipOf (region); return c != nullptr ? c->getSourceFileReference().getFile() : juce::File(); };
+
+    check (! pitch.getPitch (region).on && pitch.getPitch (region).available, "Pitch mode is off for a new region, and available");
+
+    auto waitForAnalysis = [&]
+    {
+        for (int i = 0; i < 600 && pitch.getPitch (region).analysing; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (25);
+
+        return pitch.getPitch (region);
+    };
+
+    checkUndoRoundTrip (engine, "Pitch On", [&] { pitch.setPitchMode (region, true); });
+    auto info = waitForAnalysis();
+    check (info.on && info.analysed && info.singleVoice && info.notes.size() == 4, "Pitch On shows the region's four notes");
+    check (! info.fromCache, "(the first time, it's analysed)");
+
+    if (info.notes.size() != 4)
+        return;
+
+    const auto original = playingFile();
+
+    // Each edit is one undo step that changes only what it says; checked on
+    // the corrections (the file the region plays is housekeeping, see PitchEditor).
+    auto pitchUndo = [&] (const juce::String& name, const std::function<void()>& edit)
+    {
+        pumpMessages();
+        const auto before = pitchTree();
+        edit();
+        pumpMessages();
+        const auto after = pitchTree();
+        check (after != before && engine.getUndoDescription() == name, (name + ": one undo step").toRawUTF8());
+        engine.undo();
+        pumpMessages();
+        check (pitchTree() == before, (name + ": undo puts it back").toRawUTF8());
+        engine.redo();
+        pumpMessages();
+        check (pitchTree() == after, (name + ": redo does it again").toRawUTF8());
+    };
+
+    auto noteStarts = [&] (std::initializer_list<int> indices)
+    {
+        std::vector<double> starts;
+
+        for (int i : indices)
+            starts.push_back (info.notes[(size_t) i].sourceStart);
+
+        return starts;
+    };
+
+    auto correctionOf = [&] (int i) { return pitch.getPitch (region).notes[(size_t) i].correction; };
+    auto onlyChanged = [&] (int index)
+    {
+        for (int i = 0; i < 4; ++i)
+            if (i != index && ! correctionOf (i).isUntouched())
+                return false;
+
+        return true;
+    };
+
+    pitchUndo ("Move Note", [&] { pitch.moveNotes (region, noteStarts ({ 1 }), 1.0f); });
+    check (correctionOf (1).shift == 1.0f && onlyChanged (1), "moving a note changes only that note");
+    check (std::abs (pitch.getPitch (region).notes[1].corrected - 61.0f) < 0.1f, "...a semitone up");
+    engine.undo();
+    pumpMessages();
+
+    pitchUndo ("Center Pitch", [&] { pitch.centreNotes (region, noteStarts ({ 2 })); });
+    info = pitch.getPitch (region);
+    check (std::abs (info.notes[2].corrected - 64.0f) < 0.02f && onlyChanged (2), "centring puts only that note on its semitone");
+
+    // Rendering: the region plays the corrected audio once it's ready.
+    check (pitch.finishRendering (120000), "(the render finishes)");
+    pumpMessages();
+    const auto rendered = playingFile();
+    check (rendered != original && rendered.existsAsFile(), "the region plays the rendered file");
+    check (clipOf (region)->state[PitchEditor::originalProp].toString().isNotEmpty(), "...and keeps the recording it came from");
+
+    const auto renderAudio = readAudioFile (rendered);
+    const auto originalAudio = readAudioFile (original);
+    check (renderAudio.getNumSamples() == originalAudio.getNumSamples(), "the render is the recording's length");
+
+    if (renderAudio.getNumSamples() == originalAudio.getNumSamples() && renderAudio.getNumSamples() > 0)
+    {
+        const auto centred = medianPitch (renderAudio.getReadPointer (0), renderAudio.getNumSamples(), rate, 2.8, 3.4);
+        std::cout << "  (the centred note, re-analysed: " << (centred - 64.0f) * 100.0f << " cents from E4)\n";
+        check (std::abs (centred - 64.0f) < 0.1f, "re-analysing the render puts the centred note within 10 cents of E4");
+
+        auto worst = [&] (double from, double to)
+        {
+            float w = 0.0f;
+
+            for (int i = (int) (from * rate); i < (int) (to * rate); ++i)
+                w = juce::jmax (w, std::abs (renderAudio.getSample (0, i) - originalAudio.getSample (0, i)));
+
+            return w;
+        };
+
+        std::cout << "  (largest difference: untouched notes " << worst (0.0, 2.0) << ", noise " << worst (2.15, 2.42)
+                  << ", after " << worst (3.75, phraseSeconds) << ")\n";
+        check (worst (0.0, 2.0) < 1.0e-4f && worst (3.75, phraseSeconds) < 1.0e-4f, "untouched notes are left as they were");
+        check (worst (2.15, 2.42) < 1.0e-4f, "unpitched sounds (the noise) are left as they were");
+    }
+
+    // Snap to Key and Vibrato (the inspector starts the undo step for a drag).
+    pitchUndo ("Snap to Key", [&]
+    {
+        engine.beginUndoStep ("Snap to Key");
+        pitch.setSnap (region, noteStarts ({ 3 }), 1.0f);
+    });
+    check (correctionOf (3).snap == 1.0f && correctionOf (0).snap == 0.0f && correctionOf (1).snap == 0.0f,
+           "Snap to Key changes only the selected note");
+    check (std::abs (pitch.getPitch (region).notes[3].corrected - 67.0f) < 0.02f, "...and moves it onto the key's note (G4)");
+
+    pitchUndo ("Vibrato", [&]
+    {
+        engine.beginUndoStep ("Vibrato");
+        pitch.setFlatten (region, noteStarts ({ 2 }), 0.8f);
+    });
+    check (std::abs (correctionOf (2).flatten - 0.8f) < 1.0e-4f && correctionOf (3).flatten == 0.0f, "Vibrato changes only the selected note");
+
+    pitchUndo ("Correct All", [&] { pitch.correctAll (region, 0.5f, 0.25f); });
+    bool all = true;
+
+    for (int i = 0; i < 4; ++i)
+        all = all && std::abs (correctionOf (i).snap - 0.5f) < 1.0e-4f && std::abs (correctionOf (i).flatten - 0.25f) < 1.0e-4f;
+
+    check (all, "Correct All gives every note the same Snap to Key and Vibrato");
+
+    pitchUndo ("Note Transitions", [&] { pitch.setTransitions (region, NoteTransitions::instant); });
+    check (pitch.getPitch (region).transitions == NoteTransitions::instant, "Note transitions are saved per region");
+
+    // Save and reopen: the corrections, the render and the analysis come back.
+    check (pitch.finishRendering (120000), "(the renders finish)");
+    pumpMessages();
+    const auto treeBefore = pitchTree();
+    const auto sessionFile = dir.getChildFile ("Pitch.iksession");
+    check (engine.saveSessionAs (sessionFile), "(save)");
+    check (engine.openSession (AudioEngine::getSessionFileFor (sessionFile)), "(reopen)");
+    pumpMessages();
+    check (pitchTree() == treeBefore, "the corrections survive a save and reopen");
+    info = waitForAnalysis();
+    check (info.analysed && info.fromCache && info.notes.size() == 4, "reopening uses the cached analysis (no new analysis)");
+    check (playingFile().getFileName().contains (" pitch ") && playingFile().existsAsFile(), "the session brings its render along");
+    check (! pitch.isBusy(), "(nothing has to be rendered again)");
+
+    // Export is what plays.
+    {
+        ExportSettings settings;
+        settings.destination = dir.getChildFile ("Pitch Export.wav");
+        bool done = false;
+        check (! engine.getExporter().start (settings, [&] (const ExportResult&) { done = true; }).failed(), "(export)");
+
+        for (int i = 0; i < 1200 && ! done; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        // The export is at its own sample rate, so compare what's in it: its
+        // notes, re-analysed, are where the corrections put them.
+        double exportRate = 0.0;
+        const auto exported = readAudioFile (settings.destination, &exportRate);
+        const auto corrected = pitch.getPitch (region);
+        auto heard = exportRate > 0.0 ? pitchanalysis::analyse (exported.getReadPointer (0), exported.getNumSamples(), exportRate)
+                                      : std::nullopt;
+        bool matches = heard.has_value() && heard->notes.size() == corrected.notes.size();
+
+        for (size_t i = 0; matches && i < heard->notes.size(); ++i)
+        {
+            std::cout << "  (exported note " << i + 1 << ": " << heard->notes[i].centre << ", corrected to "
+                      << corrected.notes[i].corrected << ")\n";
+            matches = std::abs (heard->notes[i].centre - corrected.notes[i].corrected) < 0.1f;
+        }
+
+        check (matches, "the export plays the corrected notes, as the region does");
+    }
+
+    // Reset: the recording exactly as it was.
+    const auto recording = te::SourceFileReference::findFileFromString (*TestAudioDevice::getEditOf (engine),
+                                                                         clipOf (region)->state[PitchEditor::originalProp].toString());
+    check (pitch.resetPitch (region) && engine.getUndoDescription() == "Reset Pitch", "Reset Pitch is one undo step");
+    pumpMessages();
+    check (playingFile() == recording, "Reset plays the original recording again, exactly");
+    engine.undo();
+    pumpMessages();
+    check (pitch.finishRendering (120000) && playingFile().getFileName().contains (" pitch "), "undoing Reset brings the render back");
+
+    // A loop that follows the song can't use Pitch mode.
+    {
+        auto* clip = clipOf (region);
+        clip->setAutoTempo (true);
+        auto p = pitch.getPitch (region);
+        check (! p.available && p.unavailableReason.contains ("loop"), "a loop that follows the tempo can't use Pitch mode, and says why");
+        clip->setAutoTempo (false);
+    }
+
+    // Sessions from before this milestone open unchanged.
+    std::cout << "Sessions from before Pitch mode\n";
+    {
+        const auto fixtures = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("sessions");
+        const auto session = dir.getChildFile ("Before Amp.iksession");
+        fixtures.getChildFile ("Before Amp.iksession").copyFileTo (session);
+        check (engine.openSession (session), "(open)");
+        pumpMessages();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (1500);
+        const auto snapshot = engine.getStateSnapshot();
+        check (! snapshot.contains ("IKAROSPITCH") && ! snapshot.contains ("ikarosPitchOriginal") && ! snapshot.contains ("ikarosTune")
+                 && ! pitch.isBusy(), "an older session opens without any pitch state, and nothing is analysed or rendered");
+
+        ExportSettings settings;
+        settings.quality = 24;
+        settings.destination = dir.getChildFile ("Before Pitch, now.wav");
+        bool done = false;
+        check (! engine.getExporter().start (settings, [&] (const ExportResult&) { done = true; }).failed(), "(export)");
+
+        for (int i = 0; i < 1200 && ! done; ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        const auto now = readAudioFile (settings.destination);
+        const auto before = readAudioFile (fixtures.getChildFile ("Before Amp.wav"));
+        bool identical = now.getNumChannels() == before.getNumChannels() && now.getNumSamples() == before.getNumSamples()
+                           && now.getNumSamples() > 0;
+
+        for (int ch = 0; identical && ch < now.getNumChannels(); ++ch)
+            identical = std::memcmp (now.getReadPointer (ch), before.getReadPointer (ch), sizeof (float) * (size_t) now.getNumSamples()) == 0;
+
+        check (identical, "and it sounds exactly as it did");
+    }
+
+
+    // How long a 3-minute vocal takes: analysis, then rendering a correction
+    // to every note (the slowest case). Notes about a second long, with
+    // vibrato, a breath of silence between.
+    std::cout << "Pitch speed (3 minutes, mono, 48 kHz)\n";
+    {
+        std::vector<Part> parts;
+        juce::Random random (3);
+
+        for (double t = 0.2; t < 179.0; t += 1.25)
+        {
+            const float note = 55.0f + (float) random.nextInt (14) + (random.nextFloat() - 0.5f) * 0.6f;
+            parts.push_back ({ t, 1.0, note, note, 30.0f, random.nextBool() });
+        }
+
+        const auto vocalAudio = synth (rate, 180.0, parts);
+        const auto vocalFile = dir.getChildFile ("Long Vocal.wav");
+        writeWav (vocalFile, vocalAudio, rate);
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (vocalFile));
+        const auto started = juce::Time::getMillisecondCounterHiRes();
+        auto a = reader != nullptr ? pitchanalysis::analyse (*reader) : std::nullopt;
+        const auto analysed = juce::Time::getMillisecondCounterHiRes();
+        check (a.has_value() && a->notes.size() > 100, "(the long vocal's notes are found)");
+
+        if (a.has_value())
+        {
+            std::vector<NoteCorrection> corrections (a->notes.size());
+
+            for (auto& c : corrections)
+                c.snap = 1.0f;
+
+            PitchRenderRequest request;
+            request.original = vocalFile;
+            request.output = dir.getChildFile ("Long Vocal pitch.wav");
+            request.analysis = *a;
+            request.curve = pitchcurve::offsets (*a, corrections, TunePlugin::scaleNotes (0, false), 0, NoteTransitions::natural);
+            request.openReader = [&formats] (const juce::File& f) { return std::unique_ptr<juce::AudioFormatReader> (formats.createReaderFor (f)); };
+
+            const auto renderStart = juce::Time::getMillisecondCounterHiRes();
+            check (pitchrender::render (request), "(the long vocal renders)");
+            const auto renderEnd = juce::Time::getMillisecondCounterHiRes();
+
+            std::cout << "  analysis: " << juce::String ((analysed - started) / 1000.0, 1) << " s, render: "
+                      << juce::String ((renderEnd - renderStart) / 1000.0, 1) << " s (" << a->notes.size() << " notes)\n";
+        }
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // Tracktion needs a running MessageManager; this sets one up for a console app.
@@ -6936,6 +7658,8 @@ int main (int argc, char* argv[])
             check (songwriter[0].name == "Lo-fi Kit" && songwriter[3].name == "Soft Piano",
                    "instrument tracks are named after their sounds");
             check (songwriter[4].kind == TrackKind::audio && songwriter[4].name == "Voice", "and there's a vocal track");
+            check (songwriter[4].icon == "vocals" && engine.getTracks().effects().showsTuneSection (songwriter[4].id),
+                   "...a Vocals track, with Tune in its inspector");
         }
 
         check (std::abs (engine.getTransportState().bpm - 92.0) < 0.01, "the template takes the chosen tempo");
@@ -9440,6 +10164,12 @@ int main (int argc, char* argv[])
 
     if (runs ("controllers"))
         runControllersSection();
+
+    if (runs ("tune"))
+        runTuneSection (dir);
+
+    if (runs ("pitch"))
+        runPitchSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");
