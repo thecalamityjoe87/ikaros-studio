@@ -109,6 +109,25 @@ foreach(patch IN LISTS IKAROS_TRACKTION_PATCHES)
     endif()
 endforeach()
 
+# And sfizz's.
+file(GLOB IKAROS_SFIZZ_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/sfizz-*.patch")
+
+foreach(patch IN LISTS IKAROS_SFIZZ_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to sfizz")
+        endif()
+    endif()
+endforeach()
+
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)

@@ -206,7 +206,12 @@ bool getSIMDOpStatus<float>(SIMDOps op)
 
 void initializeSIMDDispatchers()
 {
-    simdDispatch<float>().resetStatus();
+    // Ikaros: only the first time. Every Synth calls this when it's made,
+    // which rewrote the dispatch table while other synths were reading it
+    // on the audio thread (a data race, even with the same values). A
+    // function-local static is initialized once, thread-safely.
+    static const bool initialized = (simdDispatch<float>().resetStatus(), true);
+    (void)initialized;
 }
 
 ///

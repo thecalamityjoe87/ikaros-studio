@@ -8,7 +8,9 @@
 
 namespace sfz {
 
-void initializeInterpolators()
+// Ikaros: only the first time (see initializeSIMDDispatchers): every Synth
+// calls this, and each call rewrote the table pointers the audio thread reads.
+static bool initializeInterpolatorsOnce()
 {
     SincInterpolatorTraits<8>::initialize();
     SincInterpolatorTraits<12>::initialize();
@@ -18,6 +20,13 @@ void initializeInterpolators()
     SincInterpolatorTraits<48>::initialize();
     SincInterpolatorTraits<60>::initialize();
     SincInterpolatorTraits<72>::initialize();
+    return true;
+}
+
+void initializeInterpolators()
+{
+    static const bool initialized = initializeInterpolatorsOnce();
+    (void)initialized;
 }
 
 } // namespace sfz

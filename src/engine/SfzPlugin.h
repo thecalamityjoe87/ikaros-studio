@@ -38,6 +38,10 @@ public:
     static const char* xmlTypeName;               // "ikarosSfz", the type stored in sessions
     static const juce::Identifier sfzFileProp;    // the state property holding the .sfz file's path
 
+    /** Sets up sfizz's shared tables. Call once on the message thread before
+        any SfzPlugin is made (the engine does, when it registers the type). */
+    static void prepareSfizz();
+
     /** The state property holding a MIDI controller's value (0..1), e.g.
         "cc72". A controller without one is left at the SFZ file's default. */
     static juce::Identifier ccProperty (int controllerNumber);

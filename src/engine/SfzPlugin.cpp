@@ -14,6 +14,17 @@ juce::Identifier SfzPlugin::ccProperty (int controllerNumber)
     return juce::Identifier ("cc" + juce::String (controllerNumber));
 }
 
+void SfzPlugin::prepareSfizz()
+{
+    // sfizz keeps some tables in globals that the first synth made fills in
+    // (the SIMD dispatch table, the sinc interpolators, the silent wavetable;
+    // some behind a plain bool flag). Making that first synth here, before
+    // there's any loader thread or audio, means those are only ever written
+    // on this thread, and every other thread only reads them.
+    // (external/patches/sfizz-init-once.patch stops later synths rewriting them.)
+    sfz::Sfizz warmUp;
+}
+
 //==============================================================================
 namespace
 {
