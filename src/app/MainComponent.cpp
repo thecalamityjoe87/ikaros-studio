@@ -57,6 +57,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     bottomPanel.onViewStateChanged = [this] { commands.commandStatusChanged(); };
     bottomPanel.onCollapseRequested = [this] (bool collapse) { setBottomPanelVisible (! collapse); };
     bottomPanel.onDownloadPackRequested = [this] (const juce::String& packId) { ManageSoundsDialog::show (*this, engine, packId); };
+    arrangement.onDownloadPackRequested = [this] (const juce::String& packId) { ManageSoundsDialog::show (*this, engine, packId); };
     library.onManageSoundsRequested = [this] { ManageSoundsDialog::show (*this, engine); };
     library.onFreesoundSetupRequested = [this] { FreesoundSetupDialog::show (*this, engine); };
     setUpResizers();
@@ -472,6 +473,18 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
     bottomPanel.refresh();
     library.refresh();
     commands.commandStatusChanged();
+
+    // Picking a Drummer region opens the Drummer editor, like GarageBand.
+    if (selection.getRegion() != lastSelectedRegion)
+    {
+        lastSelectedRegion = selection.getRegion();
+
+        if (engine.getTracks().drummer().isDrummerRegion (lastSelectedRegion))
+        {
+            setBottomPanelVisible (true);
+            bottomPanel.setTab (BottomPanel::Tab::editor);
+        }
+    }
 }
 
 void MainComponent::updateSessionStatus()
@@ -535,7 +548,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::renameTrack, CommandIDs::moveTrackUp, CommandIDs::moveTrackDown,
                                    CommandIDs::newRegion, CommandIDs::splitRegion, CommandIDs::duplicateRegion,
                                    CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions,
-                                   CommandIDs::renameRegion, CommandIDs::deleteRegion,
+                                   CommandIDs::renameRegion, CommandIDs::deleteRegion, CommandIDs::convertToMidiRegion,
+                                   CommandIDs::makeInstrumentFromRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
                                    CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
@@ -671,7 +685,12 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
 
         case CommandIDs::newRegion:
-            info.setInfo ("New Chord Region at Playhead", "Add a 4-bar MIDI region with a chord pattern", "Region", 0);
+            // On a Drummer track it adds a Drummer region instead.
+            if (hasTrack && track->drummer)
+                info.setInfo ("New Drummer Region at Playhead", "Add an 8-bar Drummer region", "Region", 0);
+            else
+                info.setInfo ("New Chord Region at Playhead", "Add a 4-bar MIDI region with a chord pattern", "Region", 0);
+
             info.setActive (hasTrack);
             break;
         case CommandIDs::splitRegion:
@@ -704,6 +723,19 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setActive (selection.getRegion() != 0);
             info.addDefaultKeypress (juce::KeyPress::F2Key, 0);
             break;
+        case CommandIDs::convertToMidiRegion:
+            info.setInfo ("Convert to MIDI Region", "Turn the Drummer region into a MIDI region whose notes you can edit",
+                          "Region", 0);
+            info.setActive (engine.getTracks().drummer().isDrummerRegion (selection.getRegion()));
+            break;
+        case CommandIDs::makeInstrumentFromRegion:
+        {
+            info.setInfo ("Make Instrument from Region", "Play the selected audio region's sound on the keyboard, on a new instrument track",
+                          "Region", 0);
+            const auto region = engine.getTracks().regions().getRegion (selection.getRegion());
+            info.setActive (selection.getRegions().size() == 1 && region.has_value() && ! region->isMidi);
+            break;
+        }
         case CommandIDs::deleteRegion:
             info.setInfo (selection.getRegions().size() > 1 ? "Delete Regions" : "Delete Region",
                           "Delete the selected regions", "Region", 0);
@@ -962,9 +994,15 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::moveTrackDown:   tracks.moveTrack (trackId, 1); break;
 
         case CommandIDs::newRegion:
-            if (auto rid = tracks.regions().createChordRegion (trackId, engine.getTransportState().positionBeats))
+        {
+            const auto beat = engine.getTransportState().positionBeats;
+            const auto rid = tracks.drummer().isDrummerTrack (trackId) ? tracks.drummer().addDrummerRegionAt (trackId, beat)
+                                                                       : tracks.regions().createChordRegion (trackId, beat);
+
+            if (rid != 0)
                 selection.selectRegion (trackId, rid);
             break;
+        }
 
         case CommandIDs::splitRegion:
         {
@@ -1002,6 +1040,25 @@ bool MainComponent::perform (const InvocationInfo& info)
         }
 
         case CommandIDs::renameRegion:    arrangement.startRenaming (selection.getRegion()); break;
+
+        case CommandIDs::convertToMidiRegion:
+            // The region stays selected and is now a MIDI region: the
+            // Editor shows it in the piano roll.
+            tracks.drummer().convertToMidiRegion (selection.getRegion());
+            setBottomPanelVisible (true);
+            bottomPanel.setTab (BottomPanel::Tab::editor);
+            break;
+
+        case CommandIDs::makeInstrumentFromRegion:
+            // The new track is selected, with its Sound tab showing: its
+            // keyboard plays the sound straight away.
+            if (const auto id = tracks.makeInstrumentFromRegion (selection.getRegion()); id != 0)
+            {
+                selection.selectTrack (id);
+                setBottomPanelVisible (true);
+                bottomPanel.setTab (BottomPanel::Tab::sound);
+            }
+            break;
         case CommandIDs::deleteRegion:    tracks.regions().deleteRegions (selection.getRegions()); break;
 
         case CommandIDs::togglePlay:      engine.togglePlay(); break;
@@ -1106,7 +1163,17 @@ bool MainComponent::canSplitAtPlayhead() const
 void MainComponent::showNewTrackDialog()
 {
     // Like GarageBand: choose Software Instrument, Audio or Guitar or Bass first.
-    NewTrackDialog::show (*this, engine, [this] (TrackId id) { selection.selectTrack (id); });
+    NewTrackDialog::show (*this, engine, [this] (TrackId id)
+    {
+        // A new Drummer track comes with a region: pick it, so its editor opens.
+        auto& tracks = engine.getTracks();
+        const auto regions = tracks.drummer().isDrummerTrack (id) ? tracks.regions().getRegions (id) : std::vector<RegionInfo>();
+
+        if (! regions.empty())
+            selection.selectRegion (id, regions.front().id);
+        else
+            selection.selectTrack (id);
+    });
 }
 
 //==============================================================================

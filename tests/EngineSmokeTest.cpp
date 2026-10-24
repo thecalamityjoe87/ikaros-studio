@@ -18,6 +18,7 @@
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
 #include "engine/AmpPlugin.h"
 #include "engine/LiveWaveform.h"
+#include "engine/DrumKitMap.h"                   // the Drummer's kit maps
 #include "engine/TrackHelpers.h"                  // findClip, for looking at regions' stretchers
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
@@ -27,6 +28,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>   // to write test WAV files
 #include <juce_graphics/juce_graphics.h>             // a test preview picture
 #include <miniz.h>                                   // a deliberately broken bundle
+#include <cmath>
 #include <cstdlib>                                    // setenv
 #include <functional>                                  // std::function
 #include <map>
@@ -1649,6 +1651,138 @@ static void runEffectsSection (const juce::File& dir)
         master = effects.getEffectChain (masterTrackId);
         check (master.size() == 1 && master[0].name == "Limiter", "every new session (from any template) starts with one");
         check (! engine.canUndo(), "(and it's not an undo step there either)");
+    }
+
+    std::cout << "Your own sound\n";
+    {
+        namespace te = tracktion;
+
+        // A held note (A3, 220 Hz), and a noise burst with no clear note.
+        auto writeWav = [rate] (const juce::File& f, double seconds, double hz)
+        {
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream (f.createOutputStream().release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate)
+                                                                                        .withNumChannels (1)
+                                                                                        .withBitsPerSample (24));
+            juce::AudioBuffer<float> buffer (1, (int) (seconds * rate));
+            juce::Random random (7);
+
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                buffer.setSample (0, i, hz > 0.0 ? 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * hz * i / rate)
+                                                 : 0.5f * (random.nextFloat() * 2.0f - 1.0f));
+
+            return writer != nullptr && writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+        };
+
+        const auto sung = dir.getChildFile ("Sung Note.wav"), noise = dir.getChildFile ("Noise.wav"), longFile = dir.getChildFile ("Long.wav");
+        check (writeWav (sung, 2.0, 220.0) && writeWav (noise, 0.5, 0.0) && writeWav (longFile, 40.0, 220.0), "(wrote the test WAVs)");
+
+        // The sampler's one sound, as the session stores it.
+        auto soundOf = [&] (TrackId id)
+        {
+            if (auto* t = detail::findTrack (TestAudioDevice::getEditOf (engine), id))
+                if (auto* sampler = t->pluginList.findFirstPluginOfType<te::SamplerPlugin>(); sampler != nullptr && sampler->getNumSounds() == 1)
+                    return sampler->state.getChildWithName (te::IDs::SOUND);
+
+            return juce::ValueTree();
+        };
+
+        const auto inst = tracks.addInstrumentTrack();
+        checkUndoRoundTrip (engine, "Use Own Sound", [&] { check (effects.setOwnSound (inst, sung), "(own sound)"); });
+        auto info = tracks.getTrack (inst);
+        check (info.has_value() && effects.usesOwnSound (inst) && info->soundId == EffectsController::ownSoundId
+                 && info->name == "Sung Note" && info->category == "Sampler",
+               "an instrument track can play an audio file, named after it");
+        check ((int) soundOf (inst)[te::IDs::keyNote] == 57, "a 220 Hz note is on A3, so that key plays it as recorded");
+        check ((int) soundOf (inst)[te::IDs::minNote] == 0 && (int) soundOf (inst)[te::IDs::maxNote] == 127, "and every key plays it");
+        check (effects.getSoundControls (inst).size() == 5, "it has the Sound tab's five knobs");
+
+        check (effects.setOwnSound (inst, noise) && (int) soundOf (inst)[te::IDs::keyNote] == 60
+                 && tracks.getTrack (inst)->name == "Noise",
+               "a sound without a clear note is on middle C");
+
+        check (! effects.getOwnSoundPlaysToEnd (inst), "notes stop when their key is let go, at first");
+        checkUndoRoundTrip (engine, "Play to the End On", [&] { effects.setOwnSoundPlaysToEnd (inst, true); });
+        check (effects.getOwnSoundPlaysToEnd (inst) && (bool) soundOf (inst)[te::IDs::openEnded], "and can play to the end");
+
+        check (effects.setOwnSound (inst, longFile) && std::abs ((double) soundOf (inst)[te::IDs::length] - EffectsController::maxOwnSoundSeconds) < 0.001,
+               "a long file is cut to 30 seconds");
+
+        const auto audio = tracks.addAudioTrack();
+        const auto drummer = tracks.addDrummerTrack();
+        const auto soundBefore = tracks.getTrack (inst)->soundName;
+        check (! effects.setOwnSound (inst, dir.getChildFile ("Not There.wav")) && ! effects.setOwnSound (audio, sung)
+                 && ! effects.setOwnSound (drummer, sung) && tracks.getTrack (inst)->soundName == soundBefore,
+               "a file that can't be read, an audio track and a Drummer track are refused");
+
+        check (effects.setSound (inst, SoundLibrary::defaultSoundId) && ! effects.usesOwnSound (inst)
+                 && soundOf (inst) == juce::ValueTree(),
+               "picking a library sound replaces it");
+
+        // Make Instrument from Region: the part of the recording the region plays.
+        const auto imported = tracks.regions().importAudioFiles (audio, { sung.getFullPathName() }, 0.0);
+        check (imported.size() == 1, "(imported a region)");
+        const auto region = imported.empty() ? RegionId (0) : imported.front();
+        const auto bps = engine.getTransportState().bpm / 60.0;
+        tracks.regions().trimRegion (region, 0.5 * bps, 1.5 * bps);   // 0.5 s to 1.5 s
+        const auto regionName = tracks.regions().getRegion (region)->name;
+
+        TrackId made = 0;
+        checkUndoRoundTrip (engine, "Make Instrument from Region", [&] { made = tracks.makeInstrumentFromRegion (region); });
+        made = tracks.getTracks().back().id;
+        check (effects.usesOwnSound (made) && tracks.getTrack (made)->name == regionName
+                 && tracks.getTrack (made)->kind == TrackKind::instrument,
+               "an audio region can become a new instrument track, named after it");
+        check (std::abs ((double) soundOf (made)[te::IDs::startTime] - 0.5) < 0.01
+                 && std::abs ((double) soundOf (made)[te::IDs::length] - 1.0) < 0.01,
+               "playing just the part of the recording the region plays");
+
+        const auto midiTrack = tracks.addInstrumentTrack();
+        const auto midiRegion = tracks.regions().createChordRegion (midiTrack, 0.0);
+        check (tracks.makeInstrumentFromRegion (midiRegion) == 0, "a MIDI region can't");
+
+        // New Track's Sampler.
+        TrackId sampler = 0;
+        checkUndoRoundTrip (engine, "Add Sampler Track", [&] { sampler = tracks.addSamplerTrack (sung); });
+        sampler = tracks.getTracks().back().id;
+        check (effects.usesOwnSound (sampler) && tracks.getTrack (sampler)->name.startsWith ("Sung Note")
+                 && (int) soundOf (sampler)[te::IDs::keyNote] == 57,
+               "New Track's Sampler makes a track that plays the chosen file");
+
+        const auto trackCount = tracks.getTracks().size();
+        check (tracks.addSamplerTrack (dir.getChildFile ("Not There.wav")) == 0 && tracks.getTracks().size() == trackCount,
+               "and makes nothing from a file it can't read");
+
+        // The sound goes into the session: a copy of the file, found by a relative path.
+        effects.setOwnSound (inst, noise);
+        auto session = dir.getChildFile ("Own Sound");
+        check (engine.saveSessionAs (session), "(save)");
+        check (soundOf (inst)[te::IDs::source].toString().startsWith (juce::String (SessionBundle::audioFolder) + "/"),
+               "saving copies an own sound into the session");
+        check (engine.openSession (AudioEngine::getSessionFileFor (session)), "(reopen)");
+        pumpMessages();
+
+        bool allLoaded = true;
+
+        for (auto& t : tracks.getTracks())
+        {
+            if (t.soundId != EffectsController::ownSoundId)
+                continue;
+
+            auto* track = detail::findTrack (TestAudioDevice::getEditOf (engine), t.id);
+            auto* sampler = track != nullptr ? track->pluginList.findFirstPluginOfType<te::SamplerPlugin>() : nullptr;
+            const auto file = te::SourceFileReference::findFileFromString (*TestAudioDevice::getEditOf (engine),
+                                                                           soundOf (t.id)[te::IDs::source].toString());
+            allLoaded = allLoaded && sampler != nullptr && file.existsAsFile()
+                          && file.isAChildOf (engine.getWorkingCopyFolder()) && sampler->getSoundLength (0) > 0.0;
+        }
+
+        const auto reopened = tracks.getTracks();
+        check (allLoaded && std::count_if (reopened.begin(), reopened.end(),
+                                           [] (const TrackInfo& t) { return t.soundId == EffectsController::ownSoundId; }) == 3,
+               "and after reopening, every own sound plays from the session's own copy");
     }
 
     device.reset();
@@ -4895,6 +5029,15 @@ static void runAmpSection (const juce::File& dir)
                "but one can be added (Clean), and then it has a pedalboard");
         tracks.deleteTrack (vocal);
         pumpMessages();
+
+        TrackId vocals = 0;
+        checkUndoRoundTrip (engine, "Add Vocals Track", [&] { vocals = tracks.addVocalTrack(); });
+        const auto vocalsInfo = tracks.getTrack (vocals);
+        check (vocalsInfo.has_value() && vocalsInfo->name == "Vocals 1" && vocalsInfo->icon == "vocals"
+                 && vocalsInfo->kind == TrackKind::audio && ! effects.getAmp (vocals).exists && ! effects.hasPedalboard (vocals),
+               "a vocals track is an audio track called Vocals 1, with the vocals icon and no Amp");
+        tracks.deleteTrack (vocals);
+        pumpMessages();
     }
 
     std::cout << "Where the Amp sits\n";
@@ -5263,6 +5406,770 @@ static void runAmpSection (const juce::File& dir)
     }
 
     device.reset();
+}
+
+//==============================================================================
+// The Drummer (see src/engine/DrummerEditor.h and DrummerEngine.h)
+
+namespace drummertest
+{
+    // A note as the tests compare them: key, position (in millionths of a
+    // beat from the region's start) and velocity, sorted.
+    using NoteKey = std::tuple<int, long long, int>;
+
+    std::vector<NoteKey> sorted (std::vector<NoteKey> v)
+    {
+        std::sort (v.begin(), v.end());
+        return v;
+    }
+
+    std::vector<NoteKey> notesOf (const RegionInfo& r)
+    {
+        std::vector<NoteKey> v;
+
+        for (auto& n : r.notes)
+            v.push_back ({ n.pitch, std::llround (n.startBeat * 1.0e6), n.velocity });
+
+        return sorted (v);
+    }
+
+    std::vector<NoteKey> notesOf (const DrumPart& part, const std::array<int, numDrumPieces>& keys, double regionStart)
+    {
+        std::vector<NoteKey> v;
+
+        for (auto& h : part.hits)
+            v.push_back ({ keys[(size_t) h.piece], std::llround ((h.beat - regionStart) * 1.0e6), h.velocity });
+
+        return sorted (v);
+    }
+
+    // A song of `bars` bars of 4/4 at 120 (bar `threeFour` is in 3/4), its
+    // sections changing at `boundaries`, and a region over all of it.
+    DrumContext songContext (int bars, std::vector<int> boundaries = {}, int threeFour = -1)
+    {
+        DrumContext c;
+        double beat = 0.0;
+
+        for (int b = 0; b <= bars; ++b)   // the bar after the region too
+        {
+            DrumBar bar;
+            bar.bar = b;
+            bar.startBeat = beat;
+
+            if (b == threeFour)
+                bar.numerator = 3;
+
+            c.bars.push_back (bar);
+            beat += bar.numerator;
+        }
+
+        c.boundaries = std::move (boundaries);
+        c.toBeat = c.bars.back().startBeat;
+        return c;
+    }
+
+    bool contains (const std::vector<int>& v, int x)    { return std::find (v.begin(), v.end(), x) != v.end(); }
+    bool isUnit (float x)                                { return x >= 0.0f && x <= 1.0f; }
+}
+
+static void runDrummerSection (const juce::File& dir)
+{
+    using namespace drummertest;
+
+    std::cout << "The groove library\n";
+    const auto loadStart = juce::Time::getMillisecondCounterHiRes();
+    const auto& library = GrooveLibrary::get();
+    std::cout << "         reading it takes " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - loadStart) << " ms (once)\n";
+    check (library.isValid(), "the groove library is compiled in, and reads");
+    {
+        juce::StringArray names;
+        bool everyoneHasEnough = true, scoresInRange = true, notesValid = true;
+
+        for (auto& d : library.getDrummers())
+        {
+            names.add (d.info.name);
+            int bars = 0, wholeFills = 0, halfFills = 0;
+
+            for (auto& perf : d.beats)
+            {
+                for (auto& bar : perf.bars)
+                {
+                    ++bars;
+                    scoresInRange = scoresInRange && isUnit (bar.complexity) && isUnit (bar.loudness);
+
+                    for (auto& n : bar.notes)
+                        notesValid = notesValid && n.velocity >= 1 && n.velocity <= 127;
+                }
+            }
+
+            for (auto& f : d.fills)
+            {
+                ++(f.beats == 2 ? halfFills : wholeFills);
+                scoresInRange = scoresInRange && isUnit (f.complexity) && isUnit (f.loudness);
+            }
+
+            everyoneHasEnough = everyoneHasEnough && bars > 0 && wholeFills > 0 && halfFills > 0
+                                  && d.info.description.isNotEmpty() && d.info.kit.isNotEmpty();
+            std::cout << "         " << d.info.name << ": " << bars << " beat bars in " << d.beats.size() << " performances, "
+                      << wholeFills << " one-bar and " << halfFills << " half-bar fills\n";
+        }
+
+        check (names.joinIntoString ("|") == "Rock|Pop|Funk & Soul|Hip-Hop|Songwriter", "it has the five drummers");
+        check (everyoneHasEnough, "every drummer has beats, one-bar and half-bar fills, a description and a kit");
+        check (scoresInRange, "every complexity and loudness score is between 0 and 1");
+        check (notesValid, "every note has a velocity from 1 to 127");
+
+        bool allMapped = ! library.getSourceNotes().empty();
+
+        for (auto note : library.getSourceNotes())
+        {
+            const auto found = library.getTd11Map().find (note);
+            allMapped = allMapped && found != library.getTd11Map().end() && drumPieceFromKey (found->second).has_value();
+        }
+
+        check (allMapped, "every TD-11 note in the dataset maps to one of the Drummer's pieces");
+    }
+
+    std::cout << "Finding the drums on a kit\n";
+    {
+        // Small SFZ programs named the way real kits are (see DrumKitMap.h).
+        const auto kits = dir.getChildFile ("Drum Kit Maps");
+        kits.createDirectory();
+
+        auto keysOf = [&] (const juce::String& fileName, const juce::String& text)
+        {
+            auto file = kits.getChildFile (fileName);
+            file.replaceWithText (text);
+            return drumkit::guessKeys (drumkit::readSfzKeyNames (file));
+        };
+
+        auto is = [] (const std::array<int, numDrumPieces>& keys, std::initializer_list<std::pair<DrumPiece, int>> expected)
+        {
+            bool all = true;
+
+            for (auto [piece, key] : expected)
+            {
+                if (keys[(size_t) piece] != key)
+                {
+                    std::cout << "         " << getDrumPieceKey (piece) << " is on " << keys[(size_t) piece] << ", not " << key << "\n";
+                    all = false;
+                }
+            }
+
+            return all;
+        };
+
+        // A drum machine laid out in its samples' order (as a Nota pack's kit.sfz is).
+        const auto machine = keysOf ("808.sfz",
+            "<group> loop_mode=one_shot\n"
+            "<region> key=36 sample=bd8/BD0000.wav\n<region> key=37 sample=cb8/CB.wav\n<region> key=38 sample=ch8/CH.wav\n"
+            "<region> key=41 sample=cy8/CY0000.wav\n<region> key=43 sample=ht8/HT00.wav\n<region> key=44 sample=lc8/LC00.wav\n"
+            "<region> key=45 sample=lt8/LT00.wav\n<region> key=48 sample=mt8/MT00.wav\n<region> key=49 sample=oh8/OH00.wav\n"
+            "<region> key=51 sample=sd8/SD0000.wav\n");
+        check (is (machine, { { DrumPiece::kick, 36 }, { DrumPiece::snare, 51 }, { DrumPiece::hihatClosed, 38 },
+                              { DrumPiece::hihatOpen, 49 }, { DrumPiece::hihatPedal, 38 }, { DrumPiece::crash, 41 },
+                              { DrumPiece::ride, 38 }, { DrumPiece::tomHigh, 43 }, { DrumPiece::tomMid, 48 }, { DrumPiece::tomFloor, 45 } }),
+               "an 808 kit in its own order: snare on 51, toms ht, mt and lt, and the hat standing in for the ride");
+
+        // An acoustic kit whose keys are $defines, with brush samples on the same keys and a choke on 50.
+        kits.getChildFile ("keymap.txt").replaceWithText ("#define $key_kd 36\n#define $key_sn_hit 38\n#define $key_sn_rim 37\n"
+                                                         "#define $key_t1 47\n#define $key_t2 43\n#define $key_t3 41\n"
+                                                         "#define $key_hh_cl 42\n#define $key_hh_ft 44\n#define $key_hh_op 46\n"
+                                                         "#define $key_cr 49\n#define $chk_cr 50\n#define $key_rd_tip 51\n#define $key_rd_bel 53\n");
+        kits.getChildFile ("toms.txt").replaceWithText ("<group> key=$key_t1\n<region> sample=Tom1/hit-1.wav\n<region> sample=Tom1/whiskers-1.wav\n"
+                                                       "<group> key=$key_t2\n<region> sample=Tom2/hit-1.wav\n<region> sample=Tom2/whiskers-1.wav\n"
+                                                       "<group> key=$key_t3\n<region> sample=Tom3/hit-1.wav\n");
+        const auto acoustic = keysOf ("acoustic.sfz",
+            "/* An acoustic kit */\n#include \"keymap.txt\" #include \"toms.txt\"\n"
+            "<group> key=$key_kd\n<region> sample=Kdrum/hit.wav\n<group> key=$key_sn_hit\n<region> sample=Snare/hit.wav\n"
+            "<group> key=$key_sn_rim\n<region> sample=Snare/rim.wav\n<group> key=$key_hh_cl\n<region> sample=Hihat/closed.wav\n"
+            "<group> key=$key_hh_ft\n<region> sample=Hihat/foot.wav\n<group> key=$key_hh_op\n<region> sample=Hihat/open.wav\n"
+            "<group> key=$key_cr\n<region> sample=Crash/hit.wav\n<group> key=$chk_cr\n<region> sample=Crash/choke.wav\n"
+            "<group> key=$key_rd_tip\n<region> sample=Ride/tip.wav\n<region> sample=Ride/whiskers.wav\n"
+            "<group> key=$key_rd_bel\n<region> sample=Ride/bell.wav\n");
+        check (is (acoustic, { { DrumPiece::kick, 36 }, { DrumPiece::snare, 38 }, { DrumPiece::hihatClosed, 42 },
+                               { DrumPiece::hihatPedal, 44 }, { DrumPiece::hihatOpen, 46 }, { DrumPiece::crash, 49 },
+                               { DrumPiece::ride, 51 }, { DrumPiece::rideBell, 53 },
+                               { DrumPiece::tomHigh, 47 }, { DrumPiece::tomMid, 43 }, { DrumPiece::tomFloor, 41 } }),
+               "a kit named by $defines across #includes: toms t1 to t3 high to low, the crash not its choke");
+
+        // Toms by size, as on a big acoustic kit: the 14" is the high one.
+        const auto sizes = keysOf ("sizes.sfz",
+            "<region> key=36 sample=kick/k_vl1.wav\n<region> key=38 sample=snare/sn_center_vl1.wav\n"
+            "<region> key=43 sample=toms/t18_vl1.wav\n<region> key=45 sample=toms/t15_vl1.wav\n<region> key=47 sample=toms/t14_vl1.wav\n"
+            "<region> key=49 sample=cymbals/cr_vl1.wav\n<region> key=50 sample=cymbals/cr_choke.wav\n<region> key=51 sample=cymbals/rd_vl1.wav\n");
+        check (is (sizes, { { DrumPiece::tomHigh, 47 }, { DrumPiece::tomMid, 45 }, { DrumPiece::tomFloor, 43 }, { DrumPiece::crash, 49 } }),
+               "toms by size: 14 inch high, 18 inch floor (and nothing plays the crash choke)");
+
+        // A kit of key zones, by its files' names.
+        drumkit::KeyNames zones { { 35, { "35 Kick" } }, { 40, { "40 Snare" } }, { 42, { "42 Closed Hat" } }, { 46, { "46 Open Hat" } },
+                                  { 47, { "47 High Tom" } }, { 45, { "45 Low Tom" } } };
+        check (is (drumkit::guessKeys (zones), { { DrumPiece::kick, 35 }, { DrumPiece::snare, 40 }, { DrumPiece::tomHigh, 47 },
+                                                 { DrumPiece::tomFloor, 45 }, { DrumPiece::hihatOpen, 46 } }),
+               "a kit of sample files, by their names");
+
+        check (drumkit::guessKeys ({}) == std::array<int, numDrumPieces> { 36, 38, 42, 44, 46, 49, 51, 53, 50, 47, 43 },
+               "with no names to go by, General MIDI");
+    }
+
+    std::cout << "The same notes every time\n";
+    const DrummerSettings rock;   // the defaults: the Rock drummer
+    const auto song = songContext (32, { 8, 16, 24 });
+    const auto all = drummer::generate (library, rock, song);
+    {
+        check (all.hits.size() > 200, "a Drummer plays");
+        check (drummer::generate (library, rock, song).hits == all.hits, "the same settings and seed give exactly the same notes");
+
+        auto other = rock;
+        other.seed = 2;
+        check (drummer::generate (library, other, song).hits != all.hits, "a different seed gives different notes");
+
+        bool everyonePlays = true;
+
+        for (auto& d : library.getDrummers())
+        {
+            auto s = rock;
+            s.drummer = d.info.id;
+            everyonePlays = everyonePlays && drummer::generate (library, s, song).hits.size() > 200;
+        }
+
+        check (everyonePlays, "every drummer plays");
+    }
+
+    std::cout << "Settings\n";
+    {
+        // Averaged over many variations, so one groove's quirks don't decide it.
+        auto average = [&] (const juce::String& drummerId, auto&& change, auto&& measure)
+        {
+            double total = 0.0;
+
+            for (int seed = 1; seed <= 24; ++seed)
+            {
+                auto s = rock;
+                s.drummer = drummerId;
+                s.seed = seed;
+                change (s);
+                total += measure (drummer::generate (library, s, songContext (16)));
+            }
+
+            return total / 24.0;
+        };
+
+        auto noteCount = [] (const DrumPart& p) { return (double) p.hits.size(); };
+        auto velocity = [] (const DrumPart& p)
+        {
+            double total = 0.0;
+
+            for (auto& h : p.hits)
+                total += h.velocity;
+
+            return p.hits.empty() ? 0.0 : total / (double) p.hits.size();
+        };
+
+        bool busier = true, louder = true;
+
+        for (auto& d : library.getDrummers())
+        {
+            const auto simple = average (d.info.id, [] (DrummerSettings& s) { s.complexity = 0.1f; }, noteCount);
+            const auto complex = average (d.info.id, [] (DrummerSettings& s) { s.complexity = 0.9f; }, noteCount);
+            const auto soft = average (d.info.id, [] (DrummerSettings& s) { s.loudness = 0.1f; }, velocity);
+            const auto loud = average (d.info.id, [] (DrummerSettings& s) { s.loudness = 0.9f; }, velocity);
+            std::cout << "         " << d.info.name << ": " << juce::roundToInt (simple) << " notes simple, "
+                      << juce::roundToInt (complex) << " complex; velocity " << juce::roundToInt (soft) << " soft, "
+                      << juce::roundToInt (loud) << " loud\n";
+            busier = busier && complex > simple * 1.15;
+            louder = louder && loud > soft + 15.0;
+        }
+
+        check (busier, "higher complexity plays more notes on average, for every drummer");
+        check (louder, "higher loudness plays harder on average, for every drummer");
+
+        // Each toggle leaves out exactly its pieces; everything else is as it was.
+        bool exact = true, keptTheRest = true;
+
+        for (auto group : { DrumGroup::kickSnare, DrumGroup::hihat, DrumGroup::cymbals, DrumGroup::toms })
+        {
+            auto s = rock;
+            s.kickSnare = group != DrumGroup::kickSnare;
+            s.hihat = group != DrumGroup::hihat;
+            s.cymbals = group != DrumGroup::cymbals;
+            s.toms = group != DrumGroup::toms;
+
+            std::vector<DrumHit> expected;
+
+            for (auto& h : all.hits)
+                if (getDrumGroup (h.piece) != group)
+                    expected.push_back (h);
+
+            const auto without = drummer::generate (library, s, song).hits;
+            exact = exact && without == expected;
+            keptTheRest = keptTheRest && ! without.empty();
+        }
+
+        check (exact, "each piece toggle removes exactly those pieces, and nothing else changes");
+        check (keptTheRest, "with Kick & Snare off (or any other group) the rest still plays");
+
+        // Swing: the off-beats (8ths for Rock) move later, by a triplet's
+        // worth at 1; nothing else moves.
+        auto swung = rock;
+        swung.swing = 1.0f;
+        const auto swungHits = drummer::generate (library, swung, song).hits;
+        const int subdivision = library.findDrummer ("rock")->swingSubdivision == 16 ? 120 : 240;
+        std::vector<DrumHit> expected;
+        int moved = 0;
+
+        for (auto h : all.hits)
+        {
+            const auto tick = std::fmod (h.beat, 4.0) * GrooveLibrary::ticksPerBeat;
+            const bool offBeat = (int) std::floor ((tick + subdivision / 2.0) / subdivision) % 2 == 1;
+
+            if (offBeat)
+            {
+                h.beat += std::lround (subdivision / 3.0) / (double) GrooveLibrary::ticksPerBeat;
+                ++moved;
+            }
+
+            expected.push_back (h);
+        }
+
+        auto byTime = [] (std::vector<DrumHit> v)
+        {
+            std::sort (v.begin(), v.end(), [] (const DrumHit& a, const DrumHit& b)
+                       { return std::tie (a.beat, a.piece, a.velocity) < std::tie (b.beat, b.piece, b.velocity); });
+            return v;
+        };
+
+        const auto want = byTime (expected), got = byTime (swungHits);
+        bool same = want.size() == got.size() && moved > 0;
+
+        for (size_t i = 0; same && i < want.size(); ++i)
+            same = want[i].piece == got[i].piece && want[i].velocity == got[i].velocity && std::abs (want[i].beat - got[i].beat) < 1.0e-9;
+
+        check (same, "swing moves only the off-beat notes, later, by up to a triplet feel");
+    }
+
+    std::cout << "Fills\n";
+    {
+        auto s = rock;
+        s.fills = 0.0f;
+        const auto part = drummer::generate (library, s, song);   // sections change at bars 8, 16 and 24
+        check (part.fillBars == std::vector<int> ({ 7, 15, 23 }),
+               "with Fills at 0, a fill plays in the bar before each section change, and nowhere else");
+
+        auto crashAt = [] (const std::vector<DrumHit>& hits, double beat)
+        {
+            return std::any_of (hits.begin(), hits.end(), [beat] (const DrumHit& h)
+                                { return h.piece == DrumPiece::crash && std::abs (h.beat - beat) < 0.01; });
+        };
+
+        check (contains (part.crashBars, 8) && crashAt (part.hits, 32.0) && crashAt (part.hits, 64.0) && crashAt (part.hits, 96.0),
+               "after each fill, the next section starts with a crash");
+
+        auto noCymbals = s;
+        noCymbals.cymbals = false;
+        const auto quiet = drummer::generate (library, noCymbals, song);
+        check (quiet.fillBars == part.fillBars
+                 && std::none_of (quiet.hits.begin(), quiet.hits.end(), [] (const DrumHit& h) { return h.piece == DrumPiece::crash; }),
+               "with Cymbals off, the fills still play but there's no crash");
+
+        // The fill's own notes: toms or a run of snare in the bar before bar 8.
+        int fillHits = 0;
+
+        for (auto& h : part.hits)
+            if (h.beat >= 28.0 && h.beat < 31.95 && (getDrumGroup (h.piece) == DrumGroup::toms || h.piece == DrumPiece::snare))
+                ++fillHits;
+
+        check (fillHits >= 3, "the fill bar plays a fill (toms or snare)");
+
+        auto busy = s;
+        busy.fills = 1.0f;
+        const auto many = drummer::generate (library, busy, song);
+        check (many.fillBars.size() >= 7, "with Fills at 1, extra fills play about every four bars");
+    }
+
+    std::cout << "4/4 only\n";
+    {
+        const auto mixed = songContext (8, {}, 4);   // bar 4 is in 3/4 (beats 16 to 19)
+        const auto part = drummer::generate (library, rock, mixed);
+        const bool silent = std::none_of (part.hits.begin(), part.hits.end(), [] (const DrumHit& h) { return h.beat >= 16.0 && h.beat < 18.9; });
+        const bool after = std::any_of (part.hits.begin(), part.hits.end(), [] (const DrumHit& h) { return h.beat >= 19.0; });
+        check (part.silentBars == std::vector<int> ({ 4 }) && silent && after, "a bar that isn't in 4/4 is silent, and the drummer carries on after it");
+    }
+
+    std::cout << "Speed\n";
+    {
+        const auto hundred = songContext (100, { 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96 });
+        constexpr int runs = 20;
+        size_t notes = 0;
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+
+        for (int i = 0; i < runs; ++i)
+        {
+            auto s = rock;
+            s.seed = i + 1;
+            notes += drummer::generate (library, s, hundred).hits.size();
+        }
+
+        const auto ms = (juce::Time::getMillisecondCounterHiRes() - start) / runs;
+        std::cout << "         making a 100-bar part takes " << juce::String (ms, 2) << " ms (" << notes / runs << " notes)\n";
+        check (ms < 50.0, "making a 100-bar part takes well under 50 ms");
+    }
+
+    //==========================================================================
+    AudioEngine engine { testSettings };
+    auto& tracks = engine.getTracks();
+    auto& regions = tracks.regions();
+    auto& drummerEditor = tracks.drummer();
+    auto& sections = tracks.sections();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+    engine.newSession();
+    pumpMessages();
+    engine.setBpm (120.0);
+    pumpMessages();
+
+    const auto piano = tracks.getTracks().front().id;
+
+    // A region's notes are what its settings play there, on its kit's keys.
+    auto upToDate = [&] (RegionId id)
+    {
+        auto r = regions.getRegion (id);
+        return r.has_value() && r->isDrummer && ! r->notes.empty()
+                 && notesOf (*r) == notesOf (drummerEditor.makePart (id), drummerEditor.getDrumKeys (r->trackId), r->startBeat);
+    };
+
+    std::cout << "A Drummer track\n";
+    TrackId drums = 0;
+    checkUndoRoundTrip (engine, "Add Drummer Track", [&] { drums = tracks.addDrummerTrack(); });
+
+    const auto info = tracks.getTrack (drums);
+    check (info && info->drummer && info->kind == TrackKind::instrument && info->name == "Drummer" && info->icon == "drummer"
+             && info->category == "Drums", "it's a Drummer track called Drummer, with the drummer icon, in the drums color");
+
+    auto list = regions.getRegions (drums);
+    const auto region = list.empty() ? RegionId (0) : list.front().id;
+    check (list.size() == 1 && list.front().isDrummer && list.front().startBeat == 0.0 && list.front().lengthBeats == 32.0,
+           "it comes with one 8-bar Drummer region (the song has no sections)");
+    check (upToDate (region), "the region holds the notes its settings play");
+    check (drummerEditor.getSettings (region).has_value() && drummerEditor.getSettings (region)->drummer == "rock"
+             && list.front().name == "Rock", "it's the Rock drummer");
+    check (info && info->soundId == DrummerEditor::fallbackKit && drummerEditor.getMissingKitPack (drums) == "ikaros-studio.avl-red-zeppelin",
+           "until its kit is downloaded it plays the Ikaros Basics kit, and offers the download");
+
+    SectionId firstSection = 0;
+    checkUndoRoundTrip (engine, "Add Section", [&] { firstSection = sections.addSection (2); });   // bars 2 to 10
+    check (upToDate (region) && contains (drummerEditor.makePart (region).fillBars, 1),
+           "a marker added inside the region brings a fill in the bar before it");
+    {
+        const auto withSections = tracks.addDrummerTrack();
+        pumpMessages();
+        const auto r = regions.getRegions (withSections);
+        check (r.size() == 1 && r.front().startBeat == 8.0 && r.front().getEndBeat() == 40.0,
+               "a new Drummer track's region covers the song's sections");
+        tracks.deleteTrack (withSections);
+        pumpMessages();
+    }
+
+    std::cout << "Changing the settings\n";
+    {
+        auto s = *drummerEditor.getSettings (region);
+        s.fills = 0.9f;
+        checkUndoRoundTrip (engine, "Drummer Fills", [&] { drummerEditor.setSettings (region, s, "Drummer Fills"); });
+        check (upToDate (region) && drummerEditor.getSettings (region)->fills == 0.9f, "a setting changes the notes, as one undo step");
+
+        // The XY pad: a drag plays at once, and is one undo step when it ends.
+        const auto before = engine.getStateSnapshot();
+        auto dragged = s;
+        dragged.complexity = 0.2f;
+        drummerEditor.previewSettings (region, dragged);
+        dragged.complexity = 0.8f;
+        dragged.loudness = 0.85f;
+        drummerEditor.previewSettings (region, dragged);
+        pumpMessages();
+        check (upToDate (region) && engine.getUndoDescription() == "Drummer Fills",
+               "dragging the XY pad plays the new settings straight away, without undo steps");
+        drummerEditor.finishPreview ("Complexity and Loudness");
+        pumpMessages();
+        check (engine.getUndoDescription() == "Complexity and Loudness" && drummerEditor.getSettings (region)->loudness == 0.85f
+                 && upToDate (region), "letting go makes the whole drag one undo step");
+        const auto after = engine.getStateSnapshot();
+        engine.undo();
+        pumpMessages();
+        checkSameState (before, engine.getStateSnapshot(), "undoing it puts the region back as it was before the drag", after);
+        engine.redo();
+        pumpMessages();
+        checkSameState (after, engine.getStateSnapshot(), "and redo brings the drag's result back");
+
+        // Kick & Snare off: exactly the kick and snare notes go.
+        const auto keys = drummerEditor.getDrumKeys (drums);
+        const auto withThem = notesOf (*regions.getRegion (region));
+        auto withoutThem = withThem;
+        withoutThem.erase (std::remove_if (withoutThem.begin(), withoutThem.end(), [&] (const NoteKey& n)
+        {
+            return std::get<0> (n) == keys[(size_t) DrumPiece::kick] || std::get<0> (n) == keys[(size_t) DrumPiece::snare];
+        }), withoutThem.end());
+
+        auto noKick = *drummerEditor.getSettings (region);
+        noKick.kickSnare = false;
+        checkUndoRoundTrip (engine, "Drummer Pieces", [&] { drummerEditor.setSettings (region, noKick, "Drummer Pieces"); });
+        check (notesOf (*regions.getRegion (region)) == withoutThem && withoutThem.size() < withThem.size(),
+               "turning Kick & Snare off removes exactly the kick and snare notes");
+        noKick.kickSnare = true;
+        drummerEditor.setSettings (region, noKick, "Drummer Pieces");
+        pumpMessages();
+
+        const auto seed = drummerEditor.getSettings (region)->seed;
+        const auto notesBefore = notesOf (*regions.getRegion (region));
+        drummerEditor.newVariation (region);
+        pumpMessages();
+        check (engine.getUndoDescription() == "New Variation" && drummerEditor.getSettings (region)->seed != seed
+                 && notesOf (*regions.getRegion (region)) != notesBefore && upToDate (region),
+               "New Variation picks a new seed, and the drummer plays it differently");
+    }
+
+    std::cout << "Editing Drummer regions\n";
+    {
+        const auto notesBefore = notesOf (*regions.getRegion (region));
+        checkUndoRoundTrip (engine, "Move Region", [&] { regions.moveRegions ({ { region, drums, 16.0 } }); });
+        check (upToDate (region) && notesOf (*regions.getRegion (region)) != notesBefore, "a moved Drummer region plays for its new bars");
+
+        checkUndoRoundTrip (engine, "Trim Region", [&] { regions.trimRegion (region, 16.0, 32.0); });
+        check (upToDate (region) && regions.getRegion (region)->lengthBeats == 16.0, "a resized one plays for its new length");
+
+        checkUndoRoundTrip (engine, "Loop Region", [&] { regions.loopRegion (region, 48.0); });
+        check (upToDate (region) && ! regions.getRegion (region)->isLooped() && regions.getRegion (region)->getEndBeat() == 48.0,
+               "looping a Drummer region makes it longer, and the drummer plays on into the new bars");
+
+        std::vector<RegionId> halves;
+        checkUndoRoundTrip (engine, "Split Region", [&] { halves = regions.splitRegions ({ region }, 32.0); });
+        check (halves.size() == 1 && upToDate (region) && upToDate (halves.front()), "each half of a split Drummer region plays its own bars");
+
+        std::vector<RegionId> copies;
+        checkUndoRoundTrip (engine, "Duplicate Region", [&] { copies = regions.duplicateRegions ({ halves.front() }); });
+        check (copies.size() == 1 && upToDate (copies.front()) && regions.getRegion (copies.front())->startBeat == 48.0,
+               "a copy plays for the bars it's copied to");
+
+        regions.moveRegions ({ { copies.front(), piano, 80.0 } });
+        pumpMessages();
+        check (regions.getRegion (copies.front())->trackId == drums && regions.getRegion (copies.front())->startBeat == 48.0,
+               "a Drummer region can't be moved onto another instrument track");
+
+        regions.copyRegions ({ copies.front() });
+        const auto pasted = regions.pasteRegions (piano, 96.0);
+        pumpMessages();
+        check (pasted.size() == 1 && regions.getRegion (pasted.front())->trackId == drums && upToDate (pasted.front()),
+               "pasted on another kind of track, it goes back to its Drummer track, playing its new bars");
+        regions.deleteRegions (pasted);
+        pumpMessages();
+    }
+
+    std::cout << "Markers, tempo and time signatures\n";
+    {
+        // The region: bars 4 to 8 (beats 16 to 32). Instead of the section
+        // from bar 2 to 10, one from bar 6.
+        sections.removeSectionMarker (firstSection);
+        pumpMessages();
+        checkUndoRoundTrip (engine, "Add Section", [&] { sections.addSection (6); });
+        const auto part = drummerEditor.makePart (region);
+        const auto keys = drummerEditor.getDrumKeys (drums);
+        const auto notes = regions.getRegion (region)->notes;
+        const bool crash = std::any_of (notes.begin(), notes.end(), [&] (const NoteInfo& n)
+                                        { return n.pitch == keys[(size_t) DrumPiece::crash] && std::abs (n.startBeat - 8.0) < 0.01; });
+        check (upToDate (region) && contains (part.fillBars, 5) && contains (part.crashBars, 6) && crash,
+               "a marker in the region brings a fill in the bar before it and a crash on it");
+
+        auto s = *drummerEditor.getSettings (region);
+        s.cymbals = false;
+        drummerEditor.setSettings (region, s, "Drummer Pieces");
+        pumpMessages();
+        const auto quiet = regions.getRegion (region)->notes;
+        check (contains (drummerEditor.makePart (region).fillBars, 5)
+                 && std::none_of (quiet.begin(), quiet.end(), [&] (const NoteInfo& n) { return n.pitch == keys[(size_t) DrumPiece::crash]; }),
+               "with Cymbals off there's still the fill, but no crash");
+        s.cymbals = true;
+        drummerEditor.setSettings (region, s, "Drummer Pieces");
+        pumpMessages();
+
+        // The tempo: same notes, later or earlier in seconds.
+        const auto beforeTempo = regions.getRegion (region)->notes;
+        engine.setBpm (90.0);
+        pumpMessages();
+        check (regions.getRegion (region)->notes == beforeTempo && regions.getRegion (region)->startBeat == 16.0,
+               "a tempo change doesn't change the notes, only their timing");
+        engine.undo();
+        pumpMessages();
+
+        // Bar 5 in 3/4, and bar 6 back in 4/4.
+        engine.addTimeSignatureChange (5, 3, 4);
+        pumpMessages();
+        engine.addTimeSignatureChange (6, 4, 4);
+        pumpMessages();
+        const auto r = regions.getRegion (region);
+        const bool silent = std::none_of (r->notes.begin(), r->notes.end(), [] (const NoteInfo& n) { return n.startBeat >= 4.0 && n.startBeat < 6.9; });
+        check (drummerEditor.getSilentBars (region) == std::vector<int> ({ 5 }) && silent && upToDate (region),
+               "a bar in 3/4 inside the region is silent");
+        engine.undo();
+        engine.undo();
+        pumpMessages();
+        check (drummerEditor.getSilentBars (region).empty() && upToDate (region), "(and plays again once it's 4/4)");
+    }
+
+    std::cout << "Convert to MIDI Region\n";
+    {
+        const auto id = regions.getRegions (drums).back().id;
+        const auto before = regions.getRegion (id)->notes;
+        checkUndoRoundTrip (engine, "Convert to MIDI Region", [&] { drummerEditor.convertToMidiRegion (id); });
+        const auto converted = regions.getRegion (id);
+        check (converted && converted->isMidi && ! converted->isDrummer && converted->notes == before,
+               "it becomes an ordinary MIDI region with exactly the Drummer's notes");
+        regions.moveRegions ({ { id, drums, 120.0 } });
+        pumpMessages();
+        check (regions.getRegion (id)->notes == before && ! drummerEditor.isDrummerRegion (id),
+               "and like any MIDI region its notes stay as they are when it moves");
+        regions.deleteRegion (id);
+        pumpMessages();
+    }
+
+    std::cout << "Saving\n";
+    {
+        // Mark one note (no one can do this in the app, but it shows whether
+        // the notes are ever made again).
+        auto marked = regions.getRegion (region)->notes.front();
+        marked.velocity = 7;
+        tracks.notes().changeNotes (region, { marked }, "Velocity");
+        pumpMessages();
+        const auto settings = *drummerEditor.getSettings (region);
+
+        checkSaveAndReopen (engine, dir.getChildFile ("Drummer"));
+
+        auto hasMark = [&]
+        {
+            auto r = regions.getRegion (region);
+            return r.has_value() && std::any_of (r->notes.begin(), r->notes.end(), [&] (const NoteInfo& n)
+                                                 { return n.id == marked.id && n.velocity == 7; });
+        };
+
+        check (regions.getRegion (region).has_value() && regions.getRegion (region)->isDrummer
+                 && drummerEditor.getSettings (region) == settings, "the region and its settings survive saving and reopening");
+        check (hasMark(), "reopening never makes the notes again");
+        drummerEditor.refreshAll();
+        tracks.addInstrumentTrack();
+        pumpMessages();
+        check (hasMark(), "nor does an unrelated edit afterwards");
+    }
+
+    std::cout << "The drum kit\n";
+    {
+        // A stand-in for the AVL pack, with its own drum map.
+        const auto packs = dir.getChildFile ("Drummer Packs");
+        const auto pack = packs.getChildFile ("Red Zeppelin Kit");
+        const auto kit = pack.getChildFile ("Instruments").getChildFile ("Red Zeppelin Kit");
+        kit.createDirectory();
+        pack.getChildFile ("pack.json").replaceWithText (R"({ "format": 2, "id": "ikaros-studio.avl-red-zeppelin", "name": "Red Zeppelin Kit", "version": "1.0.0" })");
+        SoundLibrary::getBundledSoundsFolder().getChildFile ("Ikaros Basics/Instruments/Electronic Kit/36 Kick.flac")
+            .copyFileTo (kit.getChildFile ("Kick.flac"));
+        kit.getChildFile ("instrument.json").replaceWithText (R"({ "name": "Red Zeppelin Kit", "category": "Drums", "oneShot": true,
+            "samples": [ { "file": "Kick.flac", "root": 35, "low": 0, "high": 127 } ],
+            "drumMap": { "kick": 35, "snare": 40 } })");
+
+        engine.getSounds().addPackFolder (packs);
+        const auto undoBefore = engine.getUndoDescription();
+        engine.getPackStore().onPacksChanged ("ikaros-studio.avl-red-zeppelin");
+        pumpMessages();
+
+        auto pitches = [&]
+        {
+            std::set<int> found;
+
+            for (auto& r : regions.getRegions (drums))
+                for (auto& n : r.notes)
+                    found.insert (n.pitch);
+
+            return found;
+        };
+
+        // (`region` has the note marked above; the others are as the Drummer made them.)
+        RegionId other = 0;
+
+        for (auto& r : regions.getRegions (drums))
+            if (r.isDrummer && r.id != region)
+                other = r.id;
+
+        auto played = pitches();
+        const auto kitSound = juce::String ("sampler:ikaros-studio.avl-red-zeppelin/Red Zeppelin Kit");
+        check (tracks.getTrack (drums)->soundId == kitSound && drummerEditor.getMissingKitPack (drums).isEmpty(),
+               "once its kit is installed, the Drummer track plays it");
+        check (engine.getUndoDescription() == "Use Red Zeppelin Kit" && undoBefore != engine.getUndoDescription(),
+               "switching to it is one undo step");
+        check (played.count (35) > 0 && played.count (40) > 0 && played.count (36) == 0 && played.count (38) == 0
+                 && other != 0 && upToDate (other), "the notes move to the kit's own keys");
+
+        engine.undo();
+        pumpMessages();
+        check (tracks.getTrack (drums)->soundId == DrummerEditor::fallbackKit && pitches().count (36) > 0 && upToDate (other),
+               "undoing it goes back to the Basics kit and its keys");
+        engine.redo();
+        pumpMessages();
+        check (tracks.getTrack (drums)->soundId == kitSound && pitches().count (35) > 0, "(and redo to the downloaded kit)");
+
+        // Opened on a computer without it.
+        pack.deleteRecursively();
+        engine.getPackStore().onPacksChanged ("ikaros-studio.avl-red-zeppelin");
+        pumpMessages();
+        played = pitches();
+        check (tracks.getTrack (drums)->soundId == DrummerEditor::fallbackKit && played.count (36) > 0 && played.count (35) == 0
+                 && drummerEditor.getMissingKitPack (drums) == "ikaros-studio.avl-red-zeppelin" && upToDate (other),
+               "without it, the track goes back to the Basics kit and offers the download again");
+    }
+
+    std::cout << "Speed in a session\n";
+    {
+        regions.trimRegion (region, 16.0, 16.0 + 400.0);   // 100 bars
+        pumpMessages();
+        check (upToDate (region), "(a 100-bar Drummer region)");
+
+        auto s = *drummerEditor.getSettings (region);
+        s.complexity = s.complexity < 0.5f ? 0.75f : 0.25f;   // a real change
+        auto start = juce::Time::getMillisecondCounterHiRes();
+        drummerEditor.setSettings (region, s, "Complexity and Loudness");
+        const auto setMs = juce::Time::getMillisecondCounterHiRes() - start;
+
+        s.complexity = 0.5f;
+        start = juce::Time::getMillisecondCounterHiRes();
+        drummerEditor.previewSettings (region, s);
+        const auto previewMs = juce::Time::getMillisecondCounterHiRes() - start;
+        drummerEditor.cancelPreview();
+        pumpMessages();
+
+        std::cout << "         a new setting on a 100-bar region takes " << juce::String (setMs, 1) << " ms (notes made and written, "
+                  << regions.getRegion (region)->notes.size() << " notes), an XY pad step " << juce::String (previewMs, 1) << " ms\n";
+        check (setMs < 500.0 && previewMs < 500.0, "changing a 100-bar region's settings feels instant (well under half a second, even in Debug)");
+    }
+
+    std::cout << "Sessions from before the Drummer\n";
+    {
+        const auto fixtures = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("sessions");
+        const auto session = dir.getChildFile ("Before Drummer.iksession");
+        fixtures.getChildFile ("Before Amp.iksession").copyFileTo (session);   // saved before milestone 9, so before the Drummer too
+        check (engine.openSession (session), "(open)");
+        pumpMessages();
+
+        const auto opened = engine.getStateSnapshot();
+        bool noDrummer = true;
+
+        for (auto& t : tracks.getTracks())
+        {
+            noDrummer = noDrummer && ! t.drummer;
+
+            for (auto& r : regions.getRegions (t.id))
+                noDrummer = noDrummer && ! r.isDrummer;
+        }
+
+        check (noDrummer && ! opened.contains ("IKAROSDRUMMER") && ! opened.contains ("ikarosDrumPiece") && ! opened.contains ("ikarosDrummerKit"),
+               "an older session opens with no Drummer in it");
+        drummerEditor.refreshAll();
+        pumpMessages();
+        checkSameState (opened, engine.getStateSnapshot(), "and the Drummer changes nothing in it");
+    }
 }
 
 int main (int argc, char* argv[])
@@ -8250,6 +9157,9 @@ int main (int argc, char* argv[])
 
     if (runs ("amp"))
         runAmpSection (dir);
+
+    if (runs ("drummer"))
+        runDrummerSection (dir);
 
     dir.deleteRecursively();
     std::cout << (failures == 0 ? "\nAll checks passed\n" : "\nSome checks FAILED\n");

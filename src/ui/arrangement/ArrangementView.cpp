@@ -809,6 +809,20 @@ void ArrangementView::showRegionMenu()
     for (auto id : { CommandIDs::cutRegions, CommandIDs::copyRegions, CommandIDs::pasteRegions })
         menu.addCommandItem (&commands, id);
 
+    // A Drummer region can become an ordinary MIDI region, to edit its notes.
+    if (engine.getTracks().drummer().isDrummerRegion (selection.getRegion()))
+    {
+        menu.addSeparator();
+        menu.addCommandItem (&commands, CommandIDs::convertToMidiRegion);
+    }
+
+    // An audio region's sound can become an instrument.
+    if (auto region = engine.getTracks().regions().getRegion (selection.getRegion()); region.has_value() && ! region->isMidi)
+    {
+        menu.addSeparator();
+        menu.addCommandItem (&commands, CommandIDs::makeInstrumentFromRegion);
+    }
+
     menu.addSeparator();
     menu.addCommandItem (&commands, CommandIDs::renameRegion);
     menu.addCommandItem (&commands, CommandIDs::deleteRegion);
@@ -916,7 +930,15 @@ void ArrangementView::showLaneMenu (TrackId track, double beat)
     const auto regions = tc.regions().getRegions (track);
     juce::PopupMenu menu;
 
-    if (info->kind == TrackKind::instrument)
+    if (info->drummer)
+    {
+        menu.addItem (juce::PopupMenu::Item ("Add Drummer Region Here").setAction ([this, track, at]
+        {
+            if (auto rid = engine.getTracks().drummer().addDrummerRegionAt (track, at))
+                selection.selectRegion (track, rid);
+        }));
+    }
+    else if (info->kind == TrackKind::instrument)
     {
         menu.addItem (juce::PopupMenu::Item ("Add Chord Region Here").setAction ([this, track, at]
         {

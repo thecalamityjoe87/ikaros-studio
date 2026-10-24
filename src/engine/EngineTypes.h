@@ -57,6 +57,7 @@ struct RegionInfo
     double startBeat = 0.0;    // position on the timeline, in beats (quarter notes)
     double lengthBeats = 0.0;
     bool isMidi = true;
+    bool isDrummer = false;        // a Drummer region: a MIDI region whose notes a Drummer plays (see DrummerEditor)
     std::vector<NoteInfo> notes;   // MIDI regions only
     std::vector<float> peaks;      // audio regions only: waveform, 0..1 per column across the region
 
@@ -119,6 +120,7 @@ struct TrackInfo
     TrackId id = 0;
     int index = 0;
     TrackKind kind = TrackKind::instrument;
+    bool drummer = false;          // a Drummer track (an instrument track with a virtual drummer, see DrummerEditor)
     juce::String name;
     juce::String soundName;        // e.g. "Soft Piano" (the sound shown in the library)
     juce::String soundId;          // the library sound (SoundInfo::id), empty for audio tracks

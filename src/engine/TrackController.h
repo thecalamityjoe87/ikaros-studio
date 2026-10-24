@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/AutomationEditor.h"
+#include "engine/DrummerEditor.h"
 #include "engine/EffectsController.h"
 #include "engine/EqController.h"
 #include "engine/FlexEditor.h"
@@ -34,6 +35,7 @@ class AudioEngine;
         automation() - automation curves and the lanes that show them
         sections() - the arrangement markers (song sections) above the tracks
         flex()     - Flex Time: moving the hits in audio recordings
+        drummer()  - Drummer tracks and regions: a virtual drummer
 
     Every method runs on the message thread. Mutating methods record into the
     session's UndoManager.
@@ -63,6 +65,8 @@ public:
     const SectionEditor& sections() const noexcept          { return *sectionEditor; }
     FlexEditor& flex() noexcept                             { return *flexEditor; }
     const FlexEditor& flex() const noexcept                 { return *flexEditor; }
+    DrummerEditor& drummer() noexcept                       { return *drummerEditor; }
+    const DrummerEditor& drummer() const noexcept           { return *drummerEditor; }
 
     //==============================================================================
     // Tracks
@@ -81,6 +85,32 @@ public:
         EffectsController::hasPedalboard). It starts with an Amp on the
         Clean voice (a bass track: the Bass voice). One undo step. */
     TrackId addGuitarTrack (bool bass = false);
+
+    /** Adds an audio track for singing (New Track's "Vocals"): named "Vocals
+        N" with the vocals icon. For now it's a plain audio track; the icon
+        marks it so it can get vocal effects later. One undo step. */
+    TrackId addVocalTrack();
+
+    /** Adds a Drummer track (New Track's "Drummer"), named "Drummer" with
+        the drummer icon, playing the Rock drummer and kit, with one Drummer
+        region over the song's sections (or eight bars). One undo step. See
+        DrummerEditor. */
+    TrackId addDrummerTrack();
+
+    /** Region > Make Instrument from Region: a new instrument track, after
+        the last one, that plays an audio region's sound across the keys (see
+        EffectsController::setOwnSound), named after the region. One undo
+        step. Returns the new track, or 0 for a MIDI region or one whose
+        recording can't be read. */
+    TrackId makeInstrumentFromRegion (RegionId);
+
+    /** New Track's "Sampler": a new instrument track, after the last one,
+        that plays an audio file across the keys (see
+        EffectsController::setOwnSound), named after the file. One undo step.
+        Returns the new track, or 0 (and nothing changes) if the file can't
+        be read. */
+    TrackId addSamplerTrack (const juce::File&);
+
     void deleteTrack (TrackId);
 
     /** Adds a copy of a track just below it: same kind, sound, effects, mixer
@@ -150,8 +180,11 @@ private:
     std::unique_ptr<AutomationEditor> automationEditor;   // after sendBuses: it uses them
     std::unique_ptr<SectionEditor> sectionEditor;
     std::unique_ptr<FlexEditor> flexEditor;
+    std::unique_ptr<DrummerEditor> drummerEditor;   // after effectsController and sectionEditor: it uses them
 
     TrackId createAudioTrack (const juce::String& name);
+    TrackId createInstrumentTrack();   // addInstrumentTrack without its undo step
+    TrackId createSamplerTrack (const juce::File&, double startSeconds, double lengthSeconds, const juce::String& name);   // likewise
 };
 
 } // namespace ikaros

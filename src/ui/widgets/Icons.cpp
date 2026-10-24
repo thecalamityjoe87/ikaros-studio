@@ -2,7 +2,7 @@
 #include <map>
 
 /*
-    The keyboard (piano), drums, bass (bass clef), guitar, package, flag, reset (rotate-ccw), zoom-in and zoom-out icons are from
+    The keyboard (piano), drums, bass (bass clef), guitar, vocals (mic-vocal), package, flag, reset (rotate-ccw), zoom-in and zoom-out icons are from
     Lucide 1.55.0 (https://lucide.dev), converted to plain SVG paths:
 
     ISC License
@@ -75,6 +75,10 @@ namespace
             case Icon::brass:     return "M3 9h5l11-5v16L8 15H3z M8 15v5h3";   // a horn with a flared bell
             case Icon::loops:     return "M17 2l3 3-3 3 M4 11V9a4 4 0 0 1 4-4h12 M7 22l-3-3 3-3 M20 13v2a4 4 0 0 1-4 4H4";
             case Icon::mic:       return "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M6 11a6 6 0 0 0 12 0 M12 17v4";
+            // Lucide "mic-vocal": a handheld singer's mic, so Vocals and Audio look different.
+            case Icon::vocals:    return "M11 7.601L5.006 15.791a1 1 0 0 0 .1 1.298l.817.818a1 1 0 0 0 1.314.087L15.09 12 "
+                                         "M16.5 21.174C15.5 20.5 14.372 20 13 20c-2.058 0-3.928 2.356-6 2-2.072-.356-2.775-3.369-1.5-4.5 "
+                                         "M11 7a5 5 0 1 0 10 0a5 5 0 1 0-10 0z";
 
             // Window controls: drawn thin and small, like typical title-bar glyphs.
             case Icon::windowMinimise: return "M6 12h12";
@@ -106,6 +110,16 @@ namespace
             case Icon::trim:           return "M3 12h18 M7 8l-4 4 4 4 M17 8l4 4-4 4";   // left-right arrow, like the resize cursor
             case Icon::tuningFork:     return "M8 3v7a4 4 0 0 0 8 0V3 M12 14v7";   // two prongs on a stem (the tuner)
             case Icon::trash:          return "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v6 M14 11v6";   // a bin with a lid
+
+            // The Drummer's: a drummer behind a drum, sticks raised; a pair
+            // of hi-hat cymbals on their stand; a cymbal on a stand; a tom.
+            case Icon::drummer:        return "M12 2a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z M8.5 12.5V11a3.5 3 0 0 1 7 0v1.5 "
+                                              "M4 6.5l5 6 M20 6.5l-5 6 "
+                                              "M5 16a7 2.5 0 1 0 14 0a7 2.5 0 1 0-14 0z M5 16v3.5a7 2.5 0 0 0 14 0V16";
+            case Icon::hihat:          return "M4 7.5c2.5-2 13.5-2 16 0z M4 10.5c2.5 2 13.5 2 16 0z M12 3v4.5 M12 11v10 M8 22l4-3 4 3";
+            case Icon::cymbal:         return "M3 9c3-3 15-3 18 0c-3 1.5-15 1.5-18 0z M10.5 7.4a1.5 1 0 0 1 3 0 "
+                                              "M12 10v11 M8 22l4-3 4 3";
+            case Icon::tom:            return "M4 8a8 3 0 1 0 16 0a8 3 0 1 0-16 0z M4 8v8a8 3 0 0 0 16 0V8 M8 10.8v7.5 M16 10.8v7.5";
         }
 
         return "";
@@ -161,6 +175,7 @@ Icon forCategory (const juce::String& c)
     if (c == "Loops")       return Icon::loops;
     if (c == "Audio Files") return Icon::mic;
     if (c == "Plug-ins")    return Icon::plugin;
+    if (c == "Sampler")     return Icon::waveform;   // an instrument playing the user's own sound
     return Icon::synths;
 }
 
@@ -172,9 +187,11 @@ const std::vector<TrackIconChoice>& getTrackIconChoices()
         { "bass",     "Bass",       Icon::bass },
         { "guitar",   "Guitar",     Icon::guitar },
         { "drums",    "Drums",      Icon::drums },
+        { "drummer",  "Drummer",    Icon::drummer },
         { "strings",  "Strings",    Icon::strings },
         { "loops",    "Loops",      Icon::loops },
         { "mic",      "Microphone", Icon::mic },
+        { "vocals",   "Vocals",     Icon::vocals },
     };
 
     return choices;

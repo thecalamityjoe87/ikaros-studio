@@ -382,6 +382,12 @@ void SoundLibrary::readPack (const juce::File& pack, bool bundled)
 
         instrument.knobs = readKnobs (json["knobs"], instrument.sfzFile != juce::File());
 
+        // A drum kit's drum map: piece name -> key (see the header).
+        if (auto* drumMap = json["drumMap"].getDynamicObject())
+            for (auto& entry : drumMap->getProperties())
+                if (juce::isPositiveAndBelow ((int) entry.value, 128))
+                    instrument.drumMap.push_back ({ entry.name.toString(), (int) entry.value });
+
         if (auto* samples = json["samples"].getArray())
         {
             for (auto& s : *samples)

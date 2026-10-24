@@ -422,6 +422,9 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     addChildComponent (pedalboard);
     addChildComponent (pianoRoll);
     addChildComponent (audioEditor);
+    drummerViewport.setViewedComponent (&drummerPanel, false);   // false: the panel is ours, not the viewport's
+    drummerViewport.setScrollBarsShown (true, true);             // scrollbars only when it doesn't fit
+    addChildComponent (drummerViewport);
     addChildComponent (mixer);
 
     // Segmented controls (Sound | Editor | EQ | Pedals | Mixer, and the inspector's
@@ -532,6 +535,19 @@ BottomPanel::BottomPanel (AudioEngine& e, Selection& s)
     tunerButton.onClick = [this] { engine.getTuner().setActive (! engine.getTuner().isActive()); };
     addPedalButton.onClick = [this] { pedalboard.showAddPedal (addPedalButton); };
 
+    // The Sound tab's Play to End, on a track playing its own sound (Region >
+    // Make Instrument from Region). Lit while it's on.
+    playToEndButton.setColours (IconButton::raisedColours);
+    playToEndButton.setFont (fonts::ui (textSize::md));
+    addChildComponent (playToEndButton);
+    playToEndButton.setTooltip ("On: every note plays the whole sound. Off: a note stops when you let go of its key.");
+    playToEndButton.onClick = [this]
+    {
+        auto& effects = engine.getTracks().effects();
+        const auto id = selection.getTrack();
+        effects.setOwnSoundPlaysToEnd (id, ! effects.getOwnSoundPlaysToEnd (id));
+    };
+
     // An ordinary button, like the rest of the header's.
     collapseButton.setColours (IconButton::raisedColours);
     collapseButton.setTooltip ("Hide panel");
@@ -630,8 +646,9 @@ void BottomPanel::showTabPage()
     eqView.setVisible (tabPage && tab == Tab::eq);
     pedalboard.setVisible (tabPage && tab == Tab::pedals);
     // The Editor is about a track's regions: a MIDI region's notes, or an audio region's waveform.
-    pianoRoll.setVisible (tabPage && tab == Tab::editor && ! editingAudio);
+    pianoRoll.setVisible (tabPage && tab == Tab::editor && ! editingAudio && ! editingDrummer);
     audioEditor.setVisible (tabPage && tab == Tab::editor && editingAudio);
+    drummerViewport.setVisible (tabPage && tab == Tab::editor && editingDrummer);
     effectViewport.setVisible (open && ! mixerShown && effect);
     mixer.setVisible (open && mixerShown);
 
@@ -657,6 +674,7 @@ void BottomPanel::showTabPage()
     pedalsTab.setVisible (open && pedalsShown);
     tunerButton.setVisible (tabPage && tab == Tab::pedals);
     addPedalButton.setVisible (tabPage && tab == Tab::pedals);
+    updateSoundButtons();
 
     trackModeButton.setVisible (column);
     masterModeButton.setVisible (column && tab != Tab::editor);
@@ -783,6 +801,22 @@ void BottomPanel::refresh (const ModelChanges& changes)
         refreshEditor();
 }
 
+void BottomPanel::updateSoundButtons()
+{
+    // Only shown while the Sound tab's page is (not the master's).
+    const bool page = soundPage->isVisible() && ! collapsed && ! mixerShown && ! isShowingEffect();
+    const bool own = page && track.has_value() && track->soundId == EffectsController::ownSoundId;
+    const bool changed = playToEndButton.isVisible() != own;
+
+    playToEndButton.setVisible (own);
+
+    if (own)
+        playToEndButton.setToggleState (engine.getTracks().effects().getOwnSoundPlaysToEnd (track->id), juce::dontSendNotification);
+
+    if (changed)
+        resized();
+}
+
 void BottomPanel::refreshTrack()
 {
     track = engine.getTracks().getTrack (selection.getTrack());
@@ -810,6 +844,7 @@ void BottomPanel::refreshTrack()
 
     inspector.refresh();
     soundPage->refresh (track);
+    updateSoundButtons();
     pedalboard.refresh();
     addPedalButton.setEnabled (pedalboard.canAddPedal());
     addPedalButton.setTooltip (pedalboard.canAddPedal() ? juce::String ("Add a pedal at the end of the board")
@@ -854,16 +889,21 @@ void BottomPanel::refreshEditor()
     const bool audio = region.has_value() ? ! region->isMidi : audioTrack;
     const auto family = track.has_value() ? colour::familyOf (*track) : Family::master;
 
-    // Only one of them has the region, so the other forgets its drag and view.
+    // A Drummer region gets the Drummer editor instead of the piano roll.
+    const bool drummer = region.has_value() && region->isDrummer;
+
+    // Only one of them has the region, so the others forget its drag and view.
     const auto tempo = engine.getTempoMap();
-    pianoRoll.setRegion (audio ? std::nullopt : region, family, tempo);
+    pianoRoll.setRegion (audio || drummer ? std::nullopt : region, family, tempo);
     audioEditor.setRegion (audio ? region : std::nullopt, family, tempo);
+    drummerPanel.setRegion (drummer ? region : std::nullopt, family);
     regionInspector.setRegion (region, family);
     editorRegion = region;
 
     // Picking a region (in the arrangement) shows its settings, like GarageBand.
-    bool layoutChanged = audio != editingAudio;
+    bool layoutChanged = audio != editingAudio || drummer != editingDrummer;
     editingAudio = audio;
+    editingDrummer = drummer;
 
     if (selection.getRegion() != lastSelectedRegion)
     {
@@ -902,7 +942,7 @@ void BottomPanel::update()
         audioEditor.setPlayheadBeat (engine.getTransportState().positionBeats);
         audioEditor.update();
     }
-    else if (tab == Tab::editor)
+    else if (tab == Tab::editor && ! editingDrummer)
     {
         pianoRoll.setPlayheadBeat (engine.getTransportState().positionBeats);
     }
@@ -1065,6 +1105,13 @@ void BottomPanel::resized()
         header.removeFromRight (14);
     }
 
+    // On the Sound tab, a track playing its own sound: Play to End, left of Inspector.
+    if (playToEndButton.isVisible())
+    {
+        playToEndButton.setBounds (header.removeFromRight (104).withSizeKeepingCentre (104, 30));
+        header.removeFromRight (14);
+    }
+
     titleArea = header;
 
     r.removeFromTop (1);   // the line under the header
@@ -1092,8 +1139,17 @@ void BottomPanel::resized()
 
     contentArea = r;
 
-    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pedalboard, &pianoRoll, &audioEditor, &mixer })
+    for (auto* page : std::initializer_list<juce::Component*> { soundPage.get(), masterPage.get(), &eqView, &pedalboard, &pianoRoll, &audioEditor, &drummerViewport, &mixer })
         page->setBounds (r);
+
+    // At least as big as its layout needs. A scrollbar takes its room from
+    // the other direction when it shows (so one can bring in the other).
+    const int bar = drummerViewport.getScrollBarThickness();
+    bool across = r.getWidth() < DrummerPanel::minimumWidth;
+    const bool down = r.getHeight() - (across ? bar : 0) < DrummerPanel::minimumHeight;
+    across = across || r.getWidth() - (down ? bar : 0) < DrummerPanel::minimumWidth;
+    drummerPanel.setSize (juce::jmax (r.getWidth() - (down ? bar : 0), DrummerPanel::minimumWidth),
+                          juce::jmax (r.getHeight() - (across ? bar : 0), DrummerPanel::minimumHeight));
 
     layoutEffectEditor();
 }

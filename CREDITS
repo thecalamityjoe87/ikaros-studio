@@ -170,6 +170,20 @@ Icons
   The notice is in src/ui/widgets/Icons.cpp.
 
 
+The Drummer's grooves: the Groove MIDI Dataset
+  https://magenta.tensorflow.org/datasets/groove
+  Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Copyright Google LLC. Groove MIDI Dataset v1.0.0, by Jon Gillick, Adam
+  Roberts, Jesse Engel, Douglas Eck and David Bamman, recorded by Google's
+  Magenta team with ten drummers.
+  The license is at https://creativecommons.org/licenses/by/4.0/
+  resources/drummer/grooves.json is made from the dataset's MIDI files by
+  tools/build_grooves.py: the 4/4 performances of ten styles, their drum
+  notes grouped into the Drummer's eleven pieces, cut into bars and fills,
+  and scored for complexity and loudness. The notes' timing and velocities
+  are the drummers' own. The dataset itself isn't part of Ikaros Studio.
+
+
 Sounds
   Ikaros Basics, the sound pack that comes with the app, is made from scratch
   by tools/generate_sounds.py. It contains no third-party samples, and it's
@@ -197,3 +211,8 @@ Downloadable sound packs
                    CC0 1.0. https://github.com/sfzinstruments/karoryfer.shinyguitar
   Strings          VSCO 2 Community Edition, by Versilian Studios (Sam Gossner)
                    CC0 1.0. https://github.com/sgossner/VSCO-2-CE
+  Red Zeppelin Kit The Red Zeppelin kit from AVL Drumkits, by Glen MacArthur (AV Linux)
+                   CC BY-SA 3.0 (credit required; changes to the samples are shared
+                   under the same license). https://www.bandshed.net/avldrumkits/
+                   Drummer tracks play it. The pack's instrument.json says which key
+                   plays each drum piece (its drumMap).

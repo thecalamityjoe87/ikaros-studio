@@ -36,11 +36,47 @@ public:
         step. If the track still has the name the app gave it, it takes the
         sound's name; a name the user typed is kept. Returns false if the
         sound couldn't be loaded (nothing changes then).
-        With newUndoStep false, it's added to the current undo step. */
-    bool setSound (TrackId, const juce::String& soundId, bool newUndoStep = true);
+        With newUndoStep false, it's added to the current undo step; with
+        recordUndo false, it isn't undoable at all (for a Drummer track
+        changing to its downloaded kit, which isn't an edit).
+        A Drummer track keeps its name, and its notes move to the new kit's
+        keys (see DrummerEditor). */
+    bool setSound (TrackId, const juce::String& soundId, bool newUndoStep = true, bool recordUndo = true);
 
-    /** The library sound the track uses (SoundInfo::id), or empty if unknown. */
+    /** The library sound the track uses (SoundInfo::id), or empty if unknown.
+        A track playing its own sound (setOwnSound) has ownSoundId. */
     juce::String getSoundId (TrackId) const;
+
+    //==============================================================================
+    // Own sounds: an instrument track that plays an audio file (New Track's
+    // "Sampler") or part of a recording (Region > Make Instrument from
+    // Region) across the keys, with Tracktion's sampler. Its recorded pitch is on the key it sounds like (found with
+    // the tuner's PitchDetector; middle C for claps and other sounds without
+    // a clear note), and higher and lower keys play it faster and slower.
+    // The Sound tab has the general knobs (see SoundLibrary::getDefaultKnobs).
+    // Saving copies the file into the session (see AudioEngine::beginSave).
+
+    static constexpr const char* ownSoundId = "own";
+    static constexpr double maxOwnSoundSeconds = 30.0;   // longer files are cut short: the sampler holds the sound in memory
+
+    /** Makes an instrument track play `lengthSeconds` of an audio file from
+        `startSeconds` (0 = to the end), in one undo step ("Use Own Sound"),
+        or with newUndoStep false, in the current one. The sound is named
+        `name`, or after the file. Like setSound, a track with the app's
+        name takes the sound's. Returns false (nothing changes) if the file
+        can't be read, or the track isn't an instrument track (Drummer
+        tracks play drum kits only). */
+    bool setOwnSound (TrackId, const juce::File&, double startSeconds = 0.0, double lengthSeconds = 0.0,
+                      const juce::String& name = {}, bool newUndoStep = true);
+
+    /** True if the track plays its own sound (see setOwnSound). */
+    bool usesOwnSound (TrackId) const;
+
+    /** Off (the default), a note stops when its key is let go, like a held
+        sung note; on, every note plays the whole sound, like a clap or a
+        word. One undo step ("Play to the End On"/"Play to the End Off"). */
+    void setOwnSoundPlaysToEnd (TrackId, bool);
+    bool getOwnSoundPlaysToEnd (TrackId) const;
 
     /** False while the track's instrument is still loading its samples in
         the background (big SFZ instruments take a moment); true otherwise. */

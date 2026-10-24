@@ -44,17 +44,18 @@ ArrangementView::AddTrackButton::AddTrackButton() : juce::Button ("Add track")
 
 void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
 {
-    auto r = getLocalBounds().toFloat().reduced (0.5f);   // half a pixel in, so the 1px outline is crisp
+    // The same inset and corners as the drop zone beside it.
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
 
     // A faint fill on hover, a little more while pressed.
     if (isMouseOver || isButtonDown)
     {
         g.setColour (theme().tintLight.withAlpha (isButtonDown ? 0.07f : 0.04f));
-        g.fillRoundedRectangle (r, size::radiusMedium);
+        g.fillRoundedRectangle (r, size::radiusCard);
     }
 
     juce::Path outline, dashed;
-    outline.addRoundedRectangle (r, size::radiusMedium);
+    outline.addRoundedRectangle (r, size::radiusCard);
     const float dashes[] = { 4.0f, 3.0f };
     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
     g.setColour (isMouseOver ? theme().textSecondary : theme().outline);
@@ -74,7 +75,7 @@ void ArrangementView::AddTrackButton::paintButton (juce::Graphics& g, bool isMou
     g.drawText (text, group, juce::Justification::centredLeft, false);
 
     if (hasKeyboardFocus (false))
-        IkarosLookAndFeel::drawFocusRing (g, r, size::radiusMedium);
+        IkarosLookAndFeel::drawFocusRing (g, r, size::radiusCard);
 }
 
 //==============================================================================

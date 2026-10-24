@@ -10,11 +10,12 @@ namespace ikaros
 enum class Icon
 {
     library, plus, undo, redo, toStart, play, pause, record, loop, metronome, search,
-    keyboards, drums, bass, synths, guitar, strings, woodwinds, brass, loops, mic,
+    keyboards, drums, bass, synths, guitar, strings, woodwinds, brass, loops, mic, vocals,
     windowMinimise, windowMaximise, windowRestore, windowClose,
     power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
     plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash,
-    speaker, timer, package, flag, reset, zoomIn, zoomOut, tuningFork
+    speaker, timer, package, flag, reset, zoomIn, zoomOut, tuningFork,
+    drummer, hihat, cymbal, tom   // the Drummer: its track icon and its piece buttons
 };
 
 namespace icons

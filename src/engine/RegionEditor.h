@@ -48,8 +48,8 @@ public:
     // onto another one wins: the part of the other region it covers is cut away.
 
     /** Moves regions in one undo step. MIDI regions only go on instrument
-        tracks and audio regions only on audio tracks; if any placement breaks
-        that rule, nothing moves. */
+        tracks, audio regions only on audio tracks, and Drummer regions only
+        on Drummer tracks; if any placement breaks that rule, nothing moves. */
     void moveRegions (const std::vector<RegionPlacement>&);
 
     /** The shortest a region can be trimmed to, in beats. */
@@ -61,7 +61,8 @@ public:
     /** Repeats a region's content up to newEndBeat, as one "Loop Region"
         undo step. The first time, whatever the region shows now becomes the
         part that repeats. A looped region stays looped when it's made shorter
-        again. Returns false if nothing changed. */
+        again. A Drummer region is made longer instead, and the drummer plays
+        on into the new bars. Returns false if nothing changed. */
     bool loopRegion (RegionId, double newEndBeat);
 
     /** Splits each region that crosses `beat` in two. Returns the new right-hand halves. */
@@ -127,6 +128,19 @@ public:
     /** True for files Tracktion can read (WAV, AIFF, FLAC, Ogg...). */
     bool isSupportedAudioFile (const juce::File&) const;
 
+    /** The part of its recording an audio region plays: the file, and from
+        where in it for how long, in seconds (through Flex markers; a looped
+        region's first time round). A reversed region gives the part it
+        plays, the right way round. Nothing for MIDI regions, or if the file
+        can't be read. (For TrackController::makeInstrumentFromRegion.) */
+    struct SourceExcerpt
+    {
+        juce::File file;
+        double startSeconds = 0.0, lengthSeconds = 0.0;
+    };
+
+    std::optional<SourceExcerpt> getSourceExcerpt (RegionId) const;
+
     /** Adds audio files as regions, one after another from `beat`, in one
         undo step. Pass 0 (or an instrument track) to put them on a new audio
         track named after the first file. Returns the new regions. */
@@ -150,6 +164,7 @@ private:
         int trackOffset = 0;       // how many tracks below the topmost copied region
         double beatOffset = 0.0;   // how many beats after the earliest copied region
         bool isAudio = false;
+        bool isDrummer = false;    // a Drummer region: it only goes on a Drummer track
     };
 
     std::vector<CopiedRegion> clipboard;

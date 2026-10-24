@@ -1,5 +1,6 @@
 #include "engine/TrackController.h"
 #include "engine/AudioEngine.h"
+#include "engine/DrummerHelpers.h"
 #include "engine/SoundLibrary.h"
 #include "engine/TrackHelpers.h"
 #include <map>
@@ -56,7 +57,8 @@ TrackController::TrackController (AudioEngine& o)
       eqController (std::make_unique<EqController> (o)),
       automationEditor (std::make_unique<AutomationEditor> (o, *sendBuses)),
       sectionEditor (std::make_unique<SectionEditor> (o)),
-      flexEditor (std::make_unique<FlexEditor> (o))
+      flexEditor (std::make_unique<FlexEditor> (o)),
+      drummerEditor (std::make_unique<DrummerEditor> (o, *effectsController, *sectionEditor))
 {
 }
 
@@ -69,6 +71,7 @@ void TrackController::sessionChanged()
     inputRouter->sessionChanged();    // held notes, armed and selected track
     regionEditor->sessionChanged();   // clipboard, waveform cache
     flexEditor->sessionChanged();     // which files the hits were found in
+    drummerEditor->sessionChanged();  // an XY pad drag in progress
 }
 
 //==============================================================================
@@ -95,6 +98,7 @@ std::vector<TrackInfo> TrackController::getTracks() const
         info.index = index++;
         info.name = t->getName();
         info.kind = isAudioTrack (*t) ? TrackKind::audio : TrackKind::instrument;
+        info.drummer = isDrummerTrack (*t);
         info.soundName = t->state.getProperty (soundNameProp, "Basic Synth").toString();
         info.category = t->state.getProperty (categoryProp, "Synths").toString();
         info.icon = t->state.getProperty (iconProp).toString();
@@ -147,9 +151,46 @@ std::optional<TrackInfo> TrackController::getTrack (TrackId id) const
 
 TrackId TrackController::addInstrumentTrack()
 {
-    auto* edit = owner.getEdit();
     owner.beginUndoStep ("Add Track");
+    return createInstrumentTrack();
+}
 
+TrackId TrackController::makeInstrumentFromRegion (RegionId regionId)
+{
+    const auto region = regionEditor->getRegion (regionId);
+    const auto excerpt = regionEditor->getSourceExcerpt (regionId);
+
+    if (! region.has_value() || ! excerpt.has_value())
+        return 0;
+
+    owner.beginUndoStep ("Make Instrument from Region");
+    return createSamplerTrack (excerpt->file, excerpt->startSeconds, excerpt->lengthSeconds, region->name);
+}
+
+TrackId TrackController::addSamplerTrack (const juce::File& file)
+{
+    owner.beginUndoStep ("Add Sampler Track");
+    return createSamplerTrack (file, 0.0, 0.0, {});
+}
+
+TrackId TrackController::createSamplerTrack (const juce::File& file, double startSeconds, double lengthSeconds,
+                                             const juce::String& name)
+{
+    const auto id = createInstrumentTrack();
+
+    if (id == 0 || ! effectsController->setOwnSound (id, file, startSeconds, lengthSeconds, name, false))
+    {
+        // The file can't be read: take the new track back out.
+        owner.getEdit()->getUndoManager().undoCurrentTransactionOnly();
+        return 0;
+    }
+
+    return id;
+}
+
+TrackId TrackController::createInstrumentTrack()
+{
+    auto* edit = owner.getEdit();
     auto existing = getUserTracks (*edit);
     te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
 
@@ -197,6 +238,47 @@ TrackId TrackController::addGuitarTrack (bool bass)
 
     // The Amp, as part of this undo step, on the voice for the icon set above.
     effectsController->addAmp (id, -1, false);
+    return id;
+}
+
+TrackId TrackController::addVocalTrack()
+{
+    int count = 1;
+
+    for (auto* t : getUserTracks (*owner.getEdit()))
+        if (isAudioTrack (*t) && t->state.getProperty (iconProp).toString() == "vocals")
+            ++count;
+
+    owner.beginUndoStep ("Add Vocals Track");
+    const auto id = createAudioTrack ("Vocals " + juce::String (count));
+
+    if (auto* t = findTrack (owner.getEdit(), id))
+        t->state.setProperty (iconProp, "vocals", &owner.getEdit()->getUndoManager());
+
+    return id;
+}
+
+TrackId TrackController::addDrummerTrack()
+{
+    auto* edit = owner.getEdit();
+    owner.beginUndoStep ("Add Drummer Track");
+
+    auto existing = getUserTracks (*edit);
+    te::Track* last = existing.isEmpty() ? nullptr : existing.getLast();
+    auto track = edit->insertNewAudioTrack (te::TrackInsertPoint (nullptr, last), nullptr);
+
+    if (track == nullptr)
+        return 0;
+
+    const auto id = track->itemID.getRawID();
+    auto& um = edit->getUndoManager();
+    const auto name = uniqueTrackName (*edit, "Drummer");
+    track->setName (name);
+    track->state.setProperty (autoNameProp, name, &um);
+    track->state.setProperty (iconProp, "drummer", &um);
+
+    // The kind, the kit and the first region (all in this undo step).
+    drummerEditor->setUpDrummerTrack (id);
     return id;
 }
 

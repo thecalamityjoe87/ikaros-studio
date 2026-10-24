@@ -33,6 +33,7 @@ inline Family familyOf (const juce::String& category)
         { "Brass",       Family::brass },
         { "Loops",       Family::loops },
         { "Plug-ins",    Family::plugins },
+        { "Sampler",     Family::synths },   // the user's own sound (EffectsController::setOwnSound)
         { "Audio Files", Family::audio },
     };
 

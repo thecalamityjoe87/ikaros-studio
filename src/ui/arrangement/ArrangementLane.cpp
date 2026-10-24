@@ -287,8 +287,13 @@ void ArrangementView::Lane::mouseDown (const juce::MouseEvent& e)
 void ArrangementView::Lane::mouseDoubleClick (const juce::MouseEvent& e)
 {
     auto beat = owner.geometry.xToBeat ((float) e.x);
+    auto& tracks = owner.engine.getTracks();
 
-    if (auto rid = owner.engine.getTracks().regions().createChordRegion (trackId, beat))
+    // On a Drummer track, a new Drummer region; on other instrument tracks, chords.
+    const auto rid = tracks.drummer().isDrummerTrack (trackId) ? tracks.drummer().addDrummerRegionAt (trackId, beat)
+                                                               : tracks.regions().createChordRegion (trackId, beat);
+
+    if (rid != 0)
         owner.selection.selectRegion (trackId, rid);
 }
 

@@ -84,6 +84,8 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::pasteRegions);
         m.addSeparator();
         add (CommandIDs::renameRegion);
+        add (CommandIDs::convertToMidiRegion);
+        add (CommandIDs::makeInstrumentFromRegion);
         add (CommandIDs::deleteRegion);
     }
     else if (name == "Mix")

@@ -28,7 +28,6 @@ inline constexpr int sectionStripHeight = 24;  // the marker strip with the song
 // edges, so their edges line up.
 inline constexpr int columnPadding = tokens::size::panelPadding;
 inline constexpr int columnRight = headerWidth - 1 - columnPadding;   // the right edge (the column's last pixel is a divider)
-inline constexpr int addTrackGap = 8;                                  // above and below the "Add track" button
 
 // The "TRACKS" and "SECTIONS" labels.
 inline juce::Font columnLabelFont()

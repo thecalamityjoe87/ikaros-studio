@@ -101,6 +101,7 @@ private:
     };
 
     std::optional<SessionStatus> shownSessionStatus;
+    RegionId lastSelectedRegion = 0;   // to notice a Drummer region being picked (see changeListenerCallback)
 
     // How the window looks for this session: panels, tabs, the LCD, zoom and
     // scroll, the playhead and the selected track. The engine saves it with
