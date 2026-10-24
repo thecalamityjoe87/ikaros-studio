@@ -1,5 +1,6 @@
 #include "engine/SfzPlugin.h"
 #include <sfizz.hpp>
+#include <cstring>
 
 namespace te = tracktion;
 
@@ -144,33 +145,8 @@ public:
                 const bool ok = file.existsAsFile() && synth->loadSfzFile (file.getFullPathName().toStdString());
                 shared->numRegions = ok ? synth->getNumRegions() : 0;
 
-                // Which keys make a sound: the on-screen keyboard shows that range. (Each key is played
-                // for one block on this new synth, which the audio thread doesn't have yet.)
-                int lowest = -1, highest = -1;
-
-                if (ok)
-                {
-                    juce::AudioBuffer<float> probe (2, 256);
-                    float* channels[2] { probe.getWritePointer (0), probe.getWritePointer (1) };
-
-                    for (int key = 0; key < 128; ++key)
-                    {
-                        synth->noteOn (0, key, 100);
-                        synth->renderBlock (channels, 256, 1);
-
-                        if (synth->getNumActiveVoices() > 0)
-                        {
-                            if (lowest < 0)
-                                lowest = key;
-
-                            highest = key;
-                        }
-
-                        synth->allSoundOff();
-                        synth->renderBlock (channels, 256, 1);
-                    }
-                }
-
+                // Which keys make a sound: the on-screen keyboard shows that range.
+                const auto [lowest, highest] = ok ? findKeyRange (*synth) : std::pair (-1, -1);
                 shared->lowestKey = lowest;
                 shared->highestKey = highest;
 
@@ -190,6 +166,44 @@ public:
 private:
     std::shared_ptr<Shared> shared;
     juce::CriticalSection lock;   // guards the request (the message thread writes it, this thread reads it)
+
+    // The lowest and highest keys the loaded file has regions on (after its
+    // note and octave offsets; regions whose sample is missing are already
+    // gone), or -1s if none. sfizz answers its "/key/slots" query on the spot,
+    // with a 128-bit set, key k in bit k % 8 of byte k / 8.
+    // Asking plays nothing. (This used to play each key for a block, which
+    // was slow and raced the audio thread for sfizz's random generator; see
+    // external/patches/sfizz-thread-local-random.patch.)
+    static std::pair<int, int> findKeyRange (sfz::Sfizz& synth)
+    {
+        std::array<uint8_t, 16> keys {};
+
+        auto client = sfz::Sfizz::createClient (&keys);
+        sfz::Sfizz::setReceiveCallback (*client, [] (void* data, int, const char* path, const char* sig, const sfizz_arg_t* args)
+        {
+            if (std::strcmp (path, "/key/slots") == 0 && std::strcmp (sig, "b") == 0)
+            {
+                auto& out = *static_cast<std::array<uint8_t, 16>*> (data);
+                std::memcpy (out.data(), args[0].b->data, std::min ((size_t) args[0].b->size, out.size()));
+            }
+        });
+        synth.sendMessage (*client, 0, "/key/slots", "", nullptr);
+
+        int lowest = -1, highest = -1;
+
+        for (int key = 0; key < 128; ++key)
+        {
+            if ((keys[(size_t) key / 8] & (1u << (key % 8))) != 0)
+            {
+                if (lowest < 0)
+                    lowest = key;
+
+                highest = key;
+            }
+        }
+
+        return { lowest, highest };
+    }
     juce::File requestedFile;
     int requestedId = 0;
 };

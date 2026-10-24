@@ -26,6 +26,7 @@
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
 #include "engine/TunePlugin.h"                    // the Tune effect, driven directly
+#include "engine/SfzPlugin.h"                     // to point an SFZ instrument at a test file
 #include "engine/PitchAnalysis.h"                 // Pitch mode's analysis, and re-analysing renders
 #include "engine/PitchRender.h"
 #include "platform/AppFolders.h"
@@ -8562,6 +8563,31 @@ int main (int argc, char* argv[])
 
             check (tracks.effects().getSoundId (st) == sfzSound && engine.renderPeak (0.0, 1.5) > 0.05f,
                    "an SFZ instrument survives save and reopen, and still plays");
+
+            // The key range comes from the file's regions, not from playing
+            // each key: soft-only regions (which a loud test note would miss),
+            // moved up an octave by note_offset, cover 52 to 62.
+            auto keys = tracks.effects().getInstrumentKeyRange (st);
+            check (keys && keys->first == 0 && keys->second == 127, "(the test instrument covers every key)");
+
+            const auto softOnly = dir.getChildFile ("Soft Only.sfz");
+            softOnly.replaceWithText ("<control> default_path=" + juce::File (IKAROS_TEST_FIXTURES)
+                                          .getChildFile ("Test Pack/Instruments/Test Keys").getFullPathName() + "/\n"
+                                      "note_offset=12\n"
+                                      "<region> lokey=40 hikey=45 hivel=50 sample=soft.wav\n"
+                                      "<region> lokey=46 hikey=50 hivel=50 sample=soft.wav\n");
+
+            if (auto* t = detail::findTrack (TestAudioDevice::getEditOf (engine), st))
+                for (auto* p : t->pluginList)
+                    if (auto* sfz = dynamic_cast<SfzPlugin*> (p))
+                        sfz->state.setProperty (SfzPlugin::sfzFileProp, softOnly.getFullPathName(), nullptr);
+
+            for (int i = 0; i < 100 && ! tracks.effects().isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            keys = tracks.effects().getInstrumentKeyRange (st);
+            check (keys && keys->first == 52 && keys->second == 62,
+                   "an SFZ instrument's key range is read from its regions, whatever their velocities");
         }
 
         std::cout << "Sound knobs for sampled instruments\n";
