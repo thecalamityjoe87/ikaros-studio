@@ -13,6 +13,7 @@
 #include "engine/SessionViews.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
+#include "engine/AudioPreview.h"
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
@@ -2242,6 +2243,29 @@ static void runPreferencesSection (const juce::File& dir)
             check (record (1.0) && regionCount() == before + 2 && tracks.inputs().getArmedTrack() == 0,
                    "with it on again, Record arms the selected track for its take, as before");
             engine.takeRecordingReport();
+        }
+
+        std::cout << "Previewing library files\n";
+        {
+            auto& preview = engine.getPreview();
+            const auto clip = folder.getChildFile ("Preview Click.wav");
+            writeClickWav (clip, 44100.0, 0.5, { 0.1 }, 0.5f);
+
+            check (! preview.isAttached(), "with nothing previewing, the preview player isn't on the audio device");
+            check (preview.play (clip) && preview.isAttached() && preview.getPlayingFile() == clip,
+                   "playing a file puts it on the device");
+            check (peakOf (device->process (24000)) > 0.2f, "and it's heard (resampled to the device's rate)");
+            runAudio (*device, 0.5);
+            pumpMessages();
+            check (preview.getPlayingFile() == juce::File() && ! preview.isAttached(),
+                   "when the file ends, the player leaves the device again");
+
+            preview.play (clip);
+            preview.stop();
+            device->close();
+            device->reopen();       // reorders the device's callbacks (see AudioEngine::reattachAudioCallbacks)
+            check (! preview.isAttached() && peakOf (device->process (24000)) == 0.0f,
+                   "stopping it does too, and it stays off (silent) when the device reopens");
         }
 
         prefs.resetAll();
