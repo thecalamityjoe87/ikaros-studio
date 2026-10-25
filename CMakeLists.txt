@@ -14,7 +14,7 @@ project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
 # The version people see (About, splash, saved sessions): the release number
 # plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
 # Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 12)
+set(IKAROS_MILESTONE 13)
 set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
 
 # Sanitizer builds for the stress tests (docs/perf-report.md), each in its own
