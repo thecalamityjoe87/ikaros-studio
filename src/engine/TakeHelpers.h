@@ -17,6 +17,9 @@ namespace te = tracktion;
     not, as the clip's offset was set for the recording it was made from. */
 inline const juce::Identifier takeAlignProp ("ikarosAlign");
 
+/** On a track: the number of its last recording ("<track> Recording <n>"). */
+inline const juce::Identifier recordingCountProp ("ikarosRecordingCount");
+
 /** A clip's TAKES list: TAKE children (one per file) on an audio clip,
     SEQUENCE children (MidiLists) on a MIDI clip. Invalid if it has none. */
 inline juce::ValueTree getTakesTree (const te::Clip& clip)    { return clip.state.getChildWithName (te::IDs::TAKES); }
