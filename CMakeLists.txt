@@ -9,13 +9,14 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
-
-# The version people see (About, splash, saved sessions): the release number
-# plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
-# Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
+# The version is 0.<milestone>.<patch>: bump IKAROS_MILESTONE when a new
+# milestone starts, IKAROS_PATCH for fix builds within one. IKAROS_STAGE is the
+# label shown beside the version (About, splash) until 1.0.
 set(IKAROS_MILESTONE 13)
-set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
+set(IKAROS_PATCH 0)
+set(IKAROS_STAGE "alpha")
+
+project(IkarosStudio VERSION 0.${IKAROS_MILESTONE}.${IKAROS_PATCH} LANGUAGES C CXX)
 
 # Sanitizer builds for the stress tests (docs/perf-report.md), each in its own
 # build folder: -DIKAROS_SANITIZE=address, thread, or realtime (Clang 20+
@@ -263,7 +264,10 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-ExtraBold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
         resources/fonts/JetBrainsMono-Bold.ttf
-        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
+        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png    # the About window
+        resources/about/tracktion_engine_powered.png                   # its Built With page
+        resources/about/juce_icon.png
+        LICENSE)                                                       # the About page's View License
 
 # The Drummer's grooves (made from the Groove MIDI Dataset by
 # tools/build_grooves.py), compiled in like the fonts. A target of its own,
@@ -427,6 +431,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
     src/ui/dialogs/AddPedalDialog.h         src/ui/dialogs/AddPedalDialog.cpp
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
+    src/ui/dialogs/AboutTechnology.h        src/ui/dialogs/AboutTechnology.cpp
     src/ui/dialogs/StartupSplash.h          src/ui/dialogs/StartupSplash.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
@@ -510,7 +515,8 @@ target_include_directories(IkarosStudio PRIVATE src)
 
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="${IKAROS_VERSION_STRING}"
+    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    IKAROS_STAGE="${IKAROS_STAGE}"
     JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -519,7 +525,7 @@ target_compile_definitions(IkarosStudio PRIVATE
     ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
 # The version, as the engine records it in saved sessions.
-target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${IKAROS_VERSION_STRING}")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
 
 # Performance tools (docs/perf-report.md): the monitor, overlay and stress
 # harness are built in but do nothing unless the app runs with IKAROS_PERF=1.
@@ -637,7 +643,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
     install(DIRECTORY resources/sounds/
             DESTINATION ${CMAKE_INSTALL_DATADIR}/ikaros-studio/Sounds)
-    install(FILES CREDITS
+    install(FILES LICENSE CREDITS
             DESTINATION ${CMAKE_INSTALL_DOCDIR})
 endif()
 
@@ -664,7 +670,7 @@ if(IKAROS_BUILD_TESTS)
 
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
-        IKAROS_VERSION="${IKAROS_VERSION_STRING}"
+        IKAROS_VERSION="${PROJECT_VERSION}"
         IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
         IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
         IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")
