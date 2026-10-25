@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/Preferences.h"
+#include "platform/SystemAppearance.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace ikaros
@@ -22,8 +23,7 @@ class IkarosLookAndFeel;
     Message thread only.
 */
 class ThemeManager  : private Preferences::Listener,
-                      private juce::DarkModeSettingListener,
-                      private juce::Timer
+                      private juce::DarkModeSettingListener
 {
 public:
     ThemeManager (Preferences&, IkarosLookAndFeel&);
@@ -32,7 +32,6 @@ public:
 private:
     void preferenceChanged (const juce::String& key) override;   // Preferences::Listener
     void darkModeSettingChanged() override;                      // the desktop's mode, as JUCE sees it
-    void timerCallback() override;                               // the desktop's mode, on Linux
 
     /** Makes the palette the setting asks for active, and repaints
         everything if that's a change. */
@@ -40,6 +39,10 @@ private:
 
     Preferences& preferences;
     IkarosLookAndFeel& lookAndFeel;
+
+    // Kept whatever the setting, so it's current when Match system is
+    // picked; it calls update() when the desktop portal's mode changes.
+    platform::SystemAppearance systemAppearance { [this] { update(); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThemeManager)
 };
