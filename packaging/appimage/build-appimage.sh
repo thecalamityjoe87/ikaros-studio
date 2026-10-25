@@ -9,7 +9,6 @@ out="$root/build-appimage"
 tools="$out/tools"
 appdir="$out/AppDir"
 app_id="io.github.thecalamityjoe87.IkarosStudio"
-version="$(sed -n 's/^project(IkarosStudio VERSION \([0-9.]*\).*/\1/p' "$root/CMakeLists.txt")"
 
 mkdir -p "$tools"
 fetch() {  # fetch <name> <url>
@@ -22,6 +21,7 @@ fetch appimagetool https://github.com/AppImage/appimagetool/releases/download/co
 export APPIMAGE_EXTRACT_AND_RUN=1
 
 cmake --build "$root/build-release" -j3
+version="$(cat "$root/build-release/version.txt")"   # written by CMake
 
 rm -rf "$appdir"
 DESTDIR="$appdir" cmake --install "$root/build-release" --prefix /usr

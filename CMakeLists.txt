@@ -16,7 +16,16 @@ set(IKAROS_MILESTONE 13)
 set(IKAROS_PATCH 0)
 set(IKAROS_STAGE "alpha")
 
+# The oldest macOS the app runs on. It has to be set before project(), which
+# otherwise creates it empty, and the compiler then builds for the macOS of
+# the SDK it comes with. Other systems ignore it. Xcode 27 doesn't build for
+# anything older than 12.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
+
 project(IkarosStudio VERSION 0.${IKAROS_MILESTONE}.${IKAROS_PATCH} LANGUAGES C CXX)
+
+# The packaging scripts (packaging/*) name their files with this.
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/version.txt" CONTENT "${PROJECT_VERSION}\n")
 
 # Sanitizer builds for the stress tests (docs/perf-report.md), each in its own
 # build folder: -DIKAROS_SANITIZE=address, thread, or realtime (Clang 20+
@@ -49,13 +58,13 @@ set(CMAKE_JOB_POOL_COMPILE ikaros_compile)
 set(CMAKE_JOB_POOL_LINK ikaros_link)
 
 # Platform settings that must be decided *before* JUCE is added.
-if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-endif()
-
 if(MSVC)
     # Static runtime, same as Tracktion's own examples, so the .exe has no VC++ redist dependency.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # Read the sources as UTF-8 (comments have characters like "—" and "·"),
+    # not in whatever code page Windows happens to use.
+    add_compile_options(/utf-8)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -155,16 +164,46 @@ set(SFIZZ_BENCHMARKS OFF CACHE BOOL "" FORCE)
 set(SFIZZ_DEVTOOLS OFF CACHE BOOL "" FORCE)
 set(ENABLE_LTO OFF CACHE BOOL "" FORCE)   # sfizz's own option; keeps its build quick
 
+# On macOS sfizz picks its SIMD compiler flags from the architecture's name,
+# and takes Apple Silicon's "arm64" for 32-bit ARM (-mfpu=neon, which Apple's
+# compiler rejects); "aarch64" gets none, which is right. Its Intel code needs
+# -mavx on some files, so it can't build both architectures in one go:
+# packaging/macos/build-dmg.sh builds each on its own and joins them.
+if(APPLE)
+    set(IKAROS_MAC_ARCH "${CMAKE_OSX_ARCHITECTURES}")
+
+    if(NOT IKAROS_MAC_ARCH)
+        set(IKAROS_MAC_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+
+    if(IKAROS_MAC_ARCH MATCHES ";")
+        message(FATAL_ERROR
+            "Build one architecture at a time (CMAKE_OSX_ARCHITECTURES=arm64 or x86_64); "
+            "packaging/macos/build-dmg.sh makes a universal app from the two.")
+    endif()
+
+    if(IKAROS_MAC_ARCH STREQUAL "arm64")
+        set(IKAROS_MAC_ARCH "aarch64")
+    endif()
+
+    set(PROJECT_SYSTEM_PROCESSOR "${IKAROS_MAC_ARCH}" CACHE STRING "" FORCE)
+
+    # WavPack's assembly doesn't build for Apple Silicon (or for Intel from
+    # an Apple Silicon Mac); it only speeds up reading .wv samples.
+    set(WAVPACK_ENABLE_ASM OFF CACHE BOOL "" FORCE)
+endif()
+
 # Two settings just for sfizz's code. The values a subdirectory sees are
 # fixed when it's added, so restoring them afterwards leaves our own targets
 # as they were:
 #  - C++17: sfizz doesn't build as C++20 (which the app uses).
 #  - <cstdint>: sfizz's copy of abseil uses uintptr_t in its debug-build
-#    asserts without including it, which newer GCC versions reject.
+#    asserts without including it, which newer GCC versions reject (and
+#    Clang with a newer libc++, which includes less by itself).
 set(IKAROS_SAVED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 set(CMAKE_CXX_STANDARD 17)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(NOT MSVC)
     string(APPEND CMAKE_CXX_FLAGS " -include cstdint")
 endif()
 
