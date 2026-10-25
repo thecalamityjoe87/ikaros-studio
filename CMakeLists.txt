@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 3.22)
 # The version is 0.<milestone>.<patch>: bump IKAROS_MILESTONE when a new
 # milestone starts, IKAROS_PATCH for fix builds within one. IKAROS_STAGE is the
 # label shown beside the version (About, splash) until 1.0.
-set(IKAROS_MILESTONE 13)
+set(IKAROS_MILESTONE 14)
 set(IKAROS_PATCH 0)
 set(IKAROS_STAGE "alpha")
 

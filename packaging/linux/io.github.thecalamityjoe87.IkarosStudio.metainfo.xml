@@ -62,6 +62,11 @@
   <!-- TODO(release): add screenshots before submitting to Flathub. -->
 
   <releases>
+    <release version="0.14.0" date="2026-10-25" type="development">
+      <description>
+        <p>Alpha release for milestone 14: native window buttons on macOS, working title bar on Windows.</p>
+      </description>
+    </release>
     <release version="0.13.0" date="2026-10-25" type="development">
       <description>
         <p>Alpha release for milestone 13: performance fixes.</p>
