@@ -1,0 +1,3 @@
+# The patches must match JUCE's and Tracktion's files byte for byte, some
+# lines with Windows line endings: Git mustn't convert them on checkout.
+external/patches/*.patch -text
