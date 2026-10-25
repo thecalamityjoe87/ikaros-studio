@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -60,8 +60,8 @@ enum class MessageBoxIconType
                               .withIconType (MessageBoxIconType::InfoIcon)
                               .withTitle ("A Title")
                               .withMessage ("A message.")
-                              .withButton ("OK")
-                              .withButton ("Cancel")
+                              .withButton ("OK", 1)
+                              .withButton ("Cancel", 0)
                               .withAssociatedComponent (myComp),
                             myCallback);
     @endcode
@@ -85,15 +85,27 @@ public:
     /** Sets the message that should be displayed in the dialog box. */
     [[nodiscard]] MessageBoxOptions withMessage (const String& boxMessage) const          { return withMember (*this, &MessageBoxOptions::message, boxMessage); }
 
-    /** If the string passed in is not empty, this will add a button to the
-        dialog box with the specified text.
+    /** This will add a button to the dialog box with the specified text and result code.
 
         Generally up to 3 buttons are supported for dialog boxes, so adding any more
         than this may have no effect.
-    */
-    [[nodiscard]] MessageBoxOptions withButton (const String& text) const                 { auto copy = *this; copy.buttons.add (text); return copy; }
 
-    /** The component that the dialog box should be associated with. */
+        On Android, native message boxes may be dismissed by tapping outside the box. In this case,
+        the result code will match that of the final button in the MessageBoxOptions. If there are
+        no buttons, the result code will be 0.
+    */
+    [[nodiscard]] MessageBoxOptions withButton (const String& text, int resultCode) const
+    {
+        auto copy = *this;
+        copy.buttons.push_back ({ text, resultCode });
+        return copy;
+    }
+
+    /** The component that the dialog box should be associated with.
+
+        An AlertWindow is kept above the window containing this component.
+        See TopLevelWindow::setAssociatedComponent().
+    */
     [[nodiscard]] MessageBoxOptions withAssociatedComponent (Component* component) const  { return withMember (*this, &MessageBoxOptions::associatedComponent, component); }
 
     /** The component that will contain the message box (e.g. the AudioProcessorEditor in a plugin).
@@ -124,15 +136,48 @@ public:
 
     /** Returns the number of buttons that have been added to the dialog box.
 
-        @see withButtonText
+        @see withButton
     */
-    int getNumButtons() const noexcept                       { return buttons.size(); }
+    int getNumButtons() const noexcept                       { return (int) buttons.size(); }
 
     /** Returns the text that has been set for one of the buttons of the dialog box.
 
-        @see withButtonText, getNumButtons
+        @see withButton, getNumButtons
     */
-    String getButtonText (int buttonIndex) const             { return buttons[buttonIndex]; }
+    String getButtonText (int buttonIndex) const
+    {
+        if (isPositiveAndBelow (buttonIndex, buttons.size()))
+            return buttons[(size_t) buttonIndex].text;
+
+        // Button index does not refer to a known button!
+        jassertfalse;
+        return {};
+    }
+
+    /** Returns the result code associated with the button at the given index.
+
+        @see withButton, getNumButtons
+    */
+    int getButtonResultCode (int buttonIndex) const
+    {
+        if (isPositiveAndBelow (buttonIndex, buttons.size()))
+            return buttons[(size_t) buttonIndex].code;
+
+        // Button index does not refer to a known button!
+        jassertfalse;
+        return {};
+    }
+
+    /** Returns true if all buttons have a unique result code, or false otherwise. */
+    bool areAllResultCodesUnique() const
+    {
+        std::set<int> codes;
+
+        for (auto i = 0; i < getNumButtons(); ++i)
+            codes.insert (getButtonResultCode (i));
+
+        return (int) codes.size() == getNumButtons();
+    }
 
     /** Returns the component that the dialog box is associated with.
 
@@ -160,6 +205,7 @@ public:
 
         If no button text is supplied, "OK" and "Cancel" will be used.
     */
+    [[deprecated ("Prefer to use MessageBoxOptions{}.withButton()..., so that result codes for each button are explicit")]]
     static MessageBoxOptions makeOptionsOkCancel (MessageBoxIconType iconType,
                                                   const String& title,
                                                   const String& message,
@@ -171,6 +217,7 @@ public:
 
         If no button text is supplied, "Yes" and "No" will be used.
     */
+    [[deprecated ("Prefer to use MessageBoxOptions{}.withButton()..., so that result codes for each button are explicit")]]
     static MessageBoxOptions makeOptionsYesNo (MessageBoxIconType iconType,
                                                const String& title,
                                                const String& message,
@@ -182,6 +229,7 @@ public:
      *
         If no button text is supplied, "Yes", "No", and "Cancel" will be used.
     */
+    [[deprecated ("Prefer to use MessageBoxOptions{}.withButton()..., so that result codes for each button are explicit")]]
     static MessageBoxOptions makeOptionsYesNoCancel (MessageBoxIconType iconType,
                                                      const String& title,
                                                      const String& message,
@@ -192,9 +240,15 @@ public:
 
 private:
     //==============================================================================
+    struct ButtonInfo
+    {
+        String text;
+        int code{};
+    };
+
     MessageBoxIconType iconType = MessageBoxIconType::InfoIcon;
     String title, message;
-    StringArray buttons;
+    std::vector<ButtonInfo> buttons;
     WeakReference<Component> associatedComponent;
     WeakReference<Component> parentComponent;
 };

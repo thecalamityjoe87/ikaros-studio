@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -195,6 +195,19 @@ private:
     JUCE_DECLARE_NON_COPYABLE (MouseListenerList)
 };
 
+class Component::Data
+{
+public:
+    std::unique_ptr<Positioner> positioner;
+    AffineTransform affineTransform;
+    std::unique_ptr<EffectState> effectState;
+    MouseListenerList mouseListeners;
+    Array<KeyListener*> keyListeners;
+    ComponentPaintDiagnostics* currentDiagnostics{};
+    std::unique_ptr<CachedComponentImage> cachedImage{};
+    std::unique_ptr<AccessibilityHandler> accessibilityHandler;
+};
+
 class Component::EffectState
 {
 public:
@@ -244,7 +257,12 @@ public:
             g2.addTransform (AffineTransform::scale ((float) scaledBounds.getWidth()  / (float) c.getWidth(),
                                                      (float) scaledBounds.getHeight() / (float) c.getHeight()));
 
-            c.paintComponentAndChildren (g2, opaqueLayer, diagnostics);
+            // Draw the component without any effect applied
+            const ScopeGuard scope { [&c, x = std::move (c.componentData->effectState)]() mutable
+            {
+                c.componentData->effectState = std::move (x);
+            } };
+            c.paintEntireComponent (g2, false, opaqueLayer, diagnostics);
         }
 
         Graphics::ScopedSaveState ss (g);
@@ -263,19 +281,6 @@ public:
 private:
     Image effectImage;
     ImageEffectFilter* effect;
-};
-
-class Component::Data
-{
-public:
-    std::unique_ptr<Positioner> positioner;
-    AffineTransform affineTransform;
-    std::unique_ptr<EffectState> effectState;
-    MouseListenerList mouseListeners;
-    Array<KeyListener*> keyListeners;
-    ComponentPaintDiagnostics* currentDiagnostics{};
-    std::unique_ptr<CachedComponentImage> cachedImage{};
-    std::unique_ptr<AccessibilityHandler> accessibilityHandler;
 };
 
 auto Component::createDataIfNeeded() -> Data&
@@ -618,22 +623,78 @@ void* Component::getWindowHandle() const
 }
 
 //==============================================================================
+static DesktopWindowOptions withPlatformParent (const DesktopWindowOptions& options,
+                                                [[maybe_unused]] void* nativeWindowToAttachTo)
+{
+   #if JUCE_WINDOWS
+    return options.withParentHWND (nativeWindowToAttachTo);
+   #elif JUCE_MAC
+    return options.withParentNSView (nativeWindowToAttachTo);
+   #elif JUCE_IOS
+    return options.withParentUIView (nativeWindowToAttachTo);
+   #elif JUCE_ANDROID
+    // The object may be an Activity or a ViewGroup, and the peer checks which
+    return options.withParentAndroidViewGroup (nativeWindowToAttachTo);
+   #elif JUCE_LINUX || JUCE_BSD
+    return options.withParentX11Window ((uint64_t) (pointer_sized_uint) nativeWindowToAttachTo);
+   #else
+    return options;
+   #endif
+}
+
 void Component::addToDesktop (int styleWanted, void* nativeWindowToAttachTo)
+{
+    // A window that is recreated with only its style flags keeps the component it was opened from.
+    auto* peer = ComponentPeer::getPeerFor (this);
+
+    addToDesktop (withPlatformParent (DesktopWindowOptions().withStyleFlags (styleWanted), nativeWindowToAttachTo)
+                      .withAssociatedComponent (peer != nullptr ? peer->getAssociatedComponent() : nullptr));
+}
+
+void Component::addToDesktop (const DesktopWindowOptions& options)
+{
+    createDesktopWindow (options);
+}
+
+void Component::createDesktopWindow (const DesktopWindowOptions& optionsIn)
 {
     // if component methods are being called from threads other than the message
     // thread, you'll need to use a MessageManagerLock object to make sure it's thread-safe.
     JUCE_ASSERT_MESSAGE_MANAGER_IS_LOCKED
 
-    if (isOpaque())
-        styleWanted &= ~ComponentPeer::windowIsSemiTransparent;
-    else
-        styleWanted |= ComponentPeer::windowIsSemiTransparent;
+    const auto options = optionsIn.withAssociatedComponent (std::invoke ([&]() -> Component*
+    {
+        // Following the windows that the associated component's window was opened from must not
+        // lead back to this window, which also covers a component inside this window.
+        for (auto* opener = optionsIn.getAssociatedComponent(); opener != nullptr;)
+        {
+            auto* window = opener->getTopLevelComponent();
+
+            if (window == this)
+            {
+                // This window is being associated with a component that is inside it, or inside
+                // a window that was opened from it.
+                jassertfalse;
+                return nullptr;
+            }
+
+            auto* windowPeer = window->getPeer();
+            opener = windowPeer != nullptr ? windowPeer->getAssociatedComponent() : nullptr;
+        }
+
+        return optionsIn.getAssociatedComponent();
+    }));
+
+    const auto styleWanted = isOpaque() ? options.getStyleFlags() & ~ComponentPeer::windowIsSemiTransparent
+                                        : options.getStyleFlags() |  ComponentPeer::windowIsSemiTransparent;
 
     // don't use getPeer(), so that we only get the peer that's specifically
     // for this comp, and not for one of its parents.
     auto* peer = ComponentPeer::getPeerFor (this);
 
-    if (peer == nullptr || styleWanted != peer->getStyleFlags())
+    if (peer == nullptr
+        || styleWanted != peer->getStyleFlags()
+        || ! peer->setAssociatedComponent (options.getAssociatedComponent()))
     {
         const WeakReference<Component> safePointer (this);
 
@@ -683,7 +744,7 @@ void Component::addToDesktop (int styleWanted, void* nativeWindowToAttachTo)
         {
             flags.hasHeavyweightPeerFlag = true;
 
-            peer = createNewPeer (styleWanted, nativeWindowToAttachTo);
+            peer = createNewPeer (options.withStyleFlags (styleWanted));
 
             Desktop::getInstance().addDesktopComponent (this);
 
@@ -730,6 +791,10 @@ void Component::addToDesktop (int styleWanted, void* nativeWindowToAttachTo)
            #endif
 
             internalHierarchyChanged();
+
+            for (auto* other : Desktop::getInstance().findComponentsAssociatedWith (*peer))
+                if (auto* otherPeer = other->getPeer())
+                    otherPeer->associationChanged();
 
             if (auto* handler = getAccessibilityHandler())
                 detail::AccessibilityHelpers::notifyAccessibilityEvent (*handler, detail::AccessibilityHelpers::Event::windowOpened);
@@ -4256,6 +4321,31 @@ struct ComponentTests  : public UnitTest
 
             expectEquals (child.numPaintCalls, 2);
             expectEquals (child.numComponentPaintedCalls, 3);
+        });
+
+        testCase ("Components with an effect can be semi-transparent", [&]
+        {
+            TestComponent parent;
+            TestComponent childA;
+            TestComponent childB;
+
+            GlowEffect effect;
+            childB.setComponentEffect (&effect);
+            childB.setAlpha (0.5f);
+
+            const Rectangle<int> bounds { 0, 0, 100, 100 };
+            parent.setBounds (bounds);
+            childA.setBounds (bounds);
+            childB.setBounds (bounds);
+
+            parent.addAndMakeVisible (childA);
+            parent.addAndMakeVisible (childB);
+
+            paintComponentBounds (childB);
+
+            expectEquals (parent.numPaintCalls, 1);
+            expectEquals (childA.numPaintCalls, 1);
+            expectEquals (childB.numPaintCalls, 1);
         });
     }
 };

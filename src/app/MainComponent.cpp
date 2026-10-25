@@ -1256,9 +1256,9 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
     auto options = juce::MessageBoxOptions()
                        .withTitle ("Save changes?")
                        .withMessage ("Do you want to save the changes to \"" + engine.getSessionName() + "\"?")
-                       .withButton ("Save")
-                       .withButton ("Don't Save")
-                       .withButton ("Cancel")
+                       .withButton ("Save", 1)
+                       .withButton ("Don't Save", 2)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (this);
 
     // The callback gets 1 for the first button, 2 for the second, and
@@ -1440,8 +1440,8 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
                            .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
                                            + "\" already exists in " + target.getParentDirectory().getFullPathName()
                                            + ". Replace it?")
-                           .withButton ("Replace")
-                           .withButton ("Cancel")
+                           .withButton ("Replace", 1)
+                           .withButton ("Cancel", 0)
                            .withAssociatedComponent (this);
 
         AlertDialog::show (options, [save, afterSave] (int result)
@@ -1520,7 +1520,7 @@ void MainComponent::setInterfaceScale (float requested)
     // size, so settle for the biggest scale where that still fits.
     if (auto* display = desktop.getDisplays().getPrimaryDisplay())
     {
-        const auto area = display->userArea;   // in the units of the scale just set
+        const auto area = display->userBounds.toNearestInt();   // in the units of the scale just set
         const float fits = juce::jmin ((float) area.getWidth() / (float) minWindowWidth,
                                        (float) area.getHeight() / (float) minWindowHeight);
 
@@ -1626,7 +1626,7 @@ void MainComponent::showError (const juce::String& title, const juce::String& me
     AlertDialog::show (juce::MessageBoxOptions()
                        .withTitle (title)
                        .withMessage (message)
-                       .withButton ("OK")
+                       .withButton ("OK", 0)
                        .withAssociatedComponent (this));
 }
 

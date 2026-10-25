@@ -259,7 +259,7 @@ void NewTrackDialog::chooseSamplerSound()
                            .withTitle ("Couldn't use that sound")
                            .withMessage ("\"" + file.getFileName() + "\" couldn't be read as audio. "
                                          "Try a WAV, AIFF, FLAC, Ogg or MP3 file.")
-                           .withButton ("OK")
+                           .withButton ("OK", 0)
                            .withAssociatedComponent (safeThis.getComponent()));
     });
 }

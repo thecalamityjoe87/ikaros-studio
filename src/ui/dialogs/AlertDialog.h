@@ -18,9 +18,11 @@ namespace ikaros
     when closed.
 
     Takes the same juce::MessageBoxOptions as AlertWindow::showAsync, and the
-    callback gets the same result: 1 for the first button, 2 for the second,
-    and 0 for the last one (also Escape). The first button is the main action
-    and has the keyboard focus, so Return picks it. The icon type is ignored.
+    callback gets the result code of the button that was clicked (Escape
+    answers like the last button). The app's dialogs follow JUCE's old
+    convention: 1 for the first button, 2 for the second, 0 for the last. The
+    first button is the main action and has the keyboard focus, so Return
+    picks it. The icon type is ignored.
 */
 class AlertDialog  : public juce::Component,
                      private juce::ComponentListener
@@ -55,6 +57,7 @@ private:
     juce::OwnedArray<IconButton> buttons;   // in the options' order; buttons[0] is the main action
     std::unique_ptr<juce::ToggleButton> tickBox;
     std::function<void (int, bool)> onClose;
+    int escapeResult = 0;
 
     juce::Component::SafePointer<juce::Component> host;
     juce::Rectangle<int> panel, titleArea, messageArea;

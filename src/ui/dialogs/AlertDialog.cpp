@@ -95,13 +95,14 @@ AlertDialog::AlertDialog (const juce::MessageBoxOptions& options, const juce::St
         addAndMakeVisible (*tickBox);
     }
 
-    // Like AlertWindow: the last button answers 0, the others 1, 2, ...
+    // Each button answers the result code it was given in the options; with none, one OK answers 0.
     const int numButtons = juce::jmax (1, options.getNumButtons());
 
     for (int i = 0; i < numButtons; ++i)
     {
         const auto text = options.getNumButtons() > 0 ? options.getButtonText (i) : juce::String ("OK");
-        const int result = i == numButtons - 1 ? 0 : i + 1;
+        const int result = options.getNumButtons() > 0 ? options.getButtonResultCode (i) : 0;
+        escapeResult = result;   // Escape answers like the last button
 
         auto* button = buttons.add (new IconButton (text, std::nullopt, text));
 
@@ -164,7 +165,7 @@ bool AlertDialog::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::escapeKey)
     {
-        close (0);
+        close (escapeResult);
     }
     else if (key == juce::KeyPress::returnKey)
     {

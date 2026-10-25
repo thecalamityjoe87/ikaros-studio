@@ -309,8 +309,8 @@ private:
                            .withMessage (plugin.name + " is used in this session (" + trackList + "). It stays loaded until the session "
                                          "is opened again; then those tracks show it as disabled and it won't make a sound. "
                                          "Its settings are kept, and turning it back on brings it back.")
-                           .withButton ("Turn Off")
-                           .withButton ("Cancel")
+                           .withButton ("Turn Off", 1)
+                           .withButton ("Cancel", 0)
                            .withAssociatedComponent (this);
 
         AlertDialog::show (options, [safeThis = SafePointer<InstalledList> (this), &lib = engine.getPlugins(), id = plugin.id] (int result)

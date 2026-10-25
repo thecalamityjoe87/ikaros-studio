@@ -714,8 +714,8 @@ void ManageSoundsDialog::confirmRemove (const juce::String& packId, const juce::
                        .withTitle ("Remove \"" + name + "\"?")
                        .withMessage ("Its sounds and loops are deleted from this computer. Tracks that use them stay in "
                                      "your sessions and play again once you download the pack again.")
-                       .withButton ("Remove")
-                       .withButton ("Cancel")
+                       .withButton ("Remove", 1)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
@@ -728,7 +728,7 @@ void ManageSoundsDialog::confirmRemove (const juce::String& packId, const juce::
             AlertDialog::show (juce::MessageBoxOptions()
                                .withTitle ("Couldn't remove the pack")
                                .withMessage ("Wait for downloads to finish, or check that its folder isn't open elsewhere.")
-                               .withButton ("OK")
+                               .withButton ("OK", 0)
                                .withAssociatedComponent (safeThis.getComponent()));
     });
 }

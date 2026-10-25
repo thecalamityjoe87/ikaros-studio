@@ -790,8 +790,8 @@ void LoopBrowser::confirmRemove (const Item& item)
     auto options = juce::MessageBoxOptions()
                        .withTitle ("Remove \"" + item.name + "\"?")
                        .withMessage ("The loop is deleted from this computer. You can add it from Freesound again.")
-                       .withButton ("Remove")
-                       .withButton ("Cancel")
+                       .withButton ("Remove", 1)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
@@ -809,7 +809,7 @@ void LoopBrowser::confirmRemove (const Item& item)
             AlertDialog::show (juce::MessageBoxOptions()
                                .withTitle ("Couldn't remove the loop")
                                .withMessage ("Check that its file isn't open elsewhere, then try again.")
-                               .withButton ("OK")
+                               .withButton ("OK", 0)
                                .withAssociatedComponent (safeThis.getComponent()));
     });
 }

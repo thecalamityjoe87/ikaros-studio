@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -374,11 +374,12 @@ public:
     static Array<var> getAllAUMainTypeVars() noexcept;
     Array<var> getDefaultAUMainTypes() const noexcept;
 
+    String getDefaultLV2PluginClass() const noexcept;
+
     static StringArray getAllVSTCategoryStrings() noexcept;
     Array<var> getDefaultVSTCategories() const noexcept;
 
-    static StringArray getAllVST3CategoryStrings() noexcept;
-    Array<var> getDefaultVST3Categories() const noexcept;
+    String getDefaultVST3Categories() const noexcept;
 
     static StringArray getAllAAXCategoryStrings() noexcept;
     static Array<var> getAllAAXCategoryVars() noexcept;
@@ -395,6 +396,7 @@ public:
 
     String getAUMainTypeString() const noexcept;
     bool isAUSandBoxSafe() const noexcept;
+    String getLV2PluginClassString() const noexcept;
     String getVSTCategoryString() const noexcept;
     String getVST3CategoryString() const noexcept;
     int getAAXCategory() const noexcept;
@@ -680,7 +682,7 @@ private:
 
     ValueTreePropertyWithDefault pluginFormatsValue, pluginNameValue, pluginDescriptionValue, pluginManufacturerValue, pluginManufacturerCodeValue,
                                  pluginCodeValue, pluginChannelConfigsValue, pluginCharacteristicsValue, pluginAUExportPrefixValue, pluginAAXIdentifierValue,
-                                 pluginAUMainTypeValue, pluginAUSandboxSafeValue, pluginVSTCategoryValue, pluginVST3CategoryValue, pluginAAXCategoryValue,
+                                 pluginAUMainTypeValue, pluginAUSandboxSafeValue, pluginLV2PluginClassValue, pluginVSTCategoryValue, pluginVST3CategoryValue, pluginAAXCategoryValue,
                                  pluginEnableARA, pluginARAAnalyzableContentValue, pluginARAFactoryIDValue, pluginARAArchiveIDValue, pluginARACompatibleArchiveIDsValue, pluginARATransformFlagsValue,
                                  pluginVSTNumMidiInputsValue, pluginVSTNumMidiOutputsValue, pluginLV2URIValue;
 
@@ -724,6 +726,7 @@ private:
 
     //==============================================================================
     void updateTitleDependencies();
+    void updateVersionDependencies();
     void updateCompanyNameDependencies();
     void updateProjectSettings();
     void updateWebsiteDependencies();

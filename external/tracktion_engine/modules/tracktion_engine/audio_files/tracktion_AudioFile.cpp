@@ -249,6 +249,10 @@ AudioProxyGenerator::GeneratorJob::GeneratorJob (const AudioFile& p)
 
 AudioProxyGenerator::GeneratorJob::~GeneratorJob()
 {
+    // A job removed from the pool before it ran (deleteProxy) never reaches the
+    // removeFinishedJob at the end of runJob, so take it off the list here or
+    // findJob would read it after it's freed.
+    proxy.engine->getAudioFileManager().proxyGenerator.removeFinishedJob (this);
     prepareForJobDeletion();
     callBlockingCatching ([this] { proxy.engine->getAudioFileManager().validateFile (proxy, false); });
 }

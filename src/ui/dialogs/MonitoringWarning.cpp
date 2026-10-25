@@ -19,8 +19,8 @@ void confirmMonitoring (AudioEngine& engine, juce::Component* associatedComponen
                                      "With a microphone and speakers, the speakers' sound goes back into the "
                                      "microphone and can build into a loud howl (feedback). Use headphones, "
                                      "or keep the volume down.")
-                       .withButton ("Turn On Monitoring")
-                       .withButton ("Cancel")
+                       .withButton ("Turn On Monitoring", 1)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (associatedComponent);
 
     // The callback gets 1 for the first button and 0 for the last.
