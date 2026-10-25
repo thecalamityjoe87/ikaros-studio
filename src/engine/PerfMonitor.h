@@ -99,6 +99,9 @@ public:
         bool playing = false;
         int droppedRecords = 0;          // FIFO full (the message thread fell behind)
         juce::String cores;              // which CPUs the callbacks ran on, e.g. "0:150 12:38"
+        int workers = 0, workersRealtime = 0;   // Tracktion's render workers, and how many are real-time
+        double workersCpu = 0;           // their CPU use together (also in otherThreadsCpu)
+        juce::String workerCores;        // the CPUs they were on at the moment of reading, e.g. "1 3"
         UiSample ui;
         std::vector<PluginLoad> plugins;   // heaviest first
         std::vector<ThreadLoad> busiestThreads;

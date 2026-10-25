@@ -11,6 +11,9 @@
 #              (default quick). "one" runs a single scenario given by
 #              SCENARIO="realistic" ARGS="--perf-buffer=256 ...".
 #
+# BUSY=1 runs a build beside the app the whole time (see start_busy), for how
+# the app copes with a busy desktop.
+#
 # Nothing is heard and no microphone is used: a private HOME holds an
 # .asoundrc that sends the app's ALSA output to a PipeWire null sink and takes
 # its input from a silent virtual source (both created here and left for
@@ -73,6 +76,52 @@ build_tools() {
     mkdir -p "$TOOLS"
     gcc -O2 -shared -fPIC -o "$TOOLS/rtcheck.so" "$ROOT/tools/perf/rtcheck.c" -ldl -lpthread || exit 1
     gcc -O2 -shared -fPIC -o "$TOOLS/sampler.so" "$ROOT/tools/perf/sampler.c" -ldl -lpthread -lrt || exit 1
+}
+
+# --- A busy desktop (BUSY=1) --------------------------------------------------
+# Compiles sfizz's sources from the build folder's compile_commands.json over
+# and over, BUSY_JOBS at a time (default 8), at normal priority like any build.
+# The objects go to $OUT/busy; nothing in the build folder is touched (no
+# dependency files either). Stopped when this script exits.
+start_busy() {
+    local db="$BUILD/compile_commands.json"
+    [ -f "$db" ] || { echo "BUSY=1 needs $db"; exit 1; }
+    mkdir -p "$OUT/busy"
+    python3 -I - "$db" "$OUT/busy" > "$OUT/busy/commands.txt" <<'PY'
+import json, shlex, sys
+db, out = sys.argv[1], sys.argv[2]
+for i, e in enumerate(json.load(open(db))):
+    if '/external/sfizz/' not in e['file'] or not e['file'].endswith('.cpp'):
+        continue
+    args, kept = shlex.split(e['command']), []
+    while args:
+        a = args.pop(0)
+        if a in ('-MD', '-MMD'):
+            continue
+        if a in ('-MF', '-MT', '-MQ'):
+            args.pop(0)
+            continue
+        if a == '-o':
+            args.pop(0)
+            a = '-o ' + shlex.quote(f'{out}/{i}.o')
+        else:
+            a = shlex.quote(a)
+        kept.append(a)
+    print('cd ' + shlex.quote(e['directory']) + ' && ' + ' '.join(kept))
+PY
+    [ -s "$OUT/busy/commands.txt" ] || { echo "BUSY=1: no sfizz sources in $db"; exit 1; }
+    # Its own process group, so stop_busy can end the compilers with it.
+    setsid bash -c 'while :; do tr "\n" "\0" < "$1" | xargs -0 -P "$2" -I{} sh -c "{}"; done' \
+        busy "$OUT/busy/commands.txt" "${BUSY_JOBS:-8}" >/dev/null 2>&1 &
+    BUSY_PID=$!
+    trap stop_busy EXIT
+    echo "Background build running ($(wc -l < "$OUT/busy/commands.txt") files, ${BUSY_JOBS:-8} at a time)"
+    sleep 10   # until it's in full swing
+}
+
+stop_busy() {
+    [ -n "${BUSY_PID:-}" ] && kill -- -"$BUSY_PID" 2>/dev/null
+    BUSY_PID=
 }
 
 # --- One run ------------------------------------------------------------------
@@ -162,11 +211,23 @@ case "$WHAT" in
             RUN_PREFIX="taskset -c $set" run "cores-$set" realistic --perf-buffer=256 --perf-rate=48000 --perf-seconds=32
         done ;;
     threads)
-        # Tracktion's render threads (Ikaros uses 1; see IkarosEngineBehaviour).
+        # Tracktion's render threads: 1, or 2 and 4 with the workers real-time and kept on
+        # the fast cores as in the app (which uses 2; see IkarosEngineBehaviour), or at
+        # ordinary priority (IKAROS_PERF_WORKERS_RT=0, the October 2026 problem).
+        # With BUSY=1 the run names end in -busy.
+        tag=""
+        [ "${BUSY:-0}" = 1 ] && { start_busy; tag="-busy"; }
         for n in 1 2 4; do
-            for buffer in 64 256; do
-                RUN_ENV="IKAROS_PERF_AUDIO_THREADS=$n" run "threads-$n-mix32-$buffer" mix --perf-tracks=32 \
-                    --perf-buffer="$buffer" --perf-rate=48000 --perf-seconds=32
+            for rt in 1 0; do
+                [ "$n" = 1 ] && [ "$rt" = 0 ] && continue
+                v="$n"; [ "$n" != 1 ] && { [ "$rt" = 1 ] && v="${n}rt" || v="${n}ord"; }
+                for buffer in 64 256; do
+                    RUN_ENV="IKAROS_PERF_AUDIO_THREADS=$n IKAROS_PERF_WORKERS_RT=$rt" \
+                        run "threads-$v-mix32-$buffer$tag" mix --perf-tracks=32 \
+                            --perf-buffer="$buffer" --perf-rate=48000 --perf-seconds=32
+                done
+                RUN_ENV="IKAROS_PERF_AUDIO_THREADS=$n IKAROS_PERF_WORKERS_RT=$rt" \
+                    run "threads-$v-realistic-64$tag" realistic --perf-buffer=64 --perf-rate=48000 --perf-seconds=32
             done
         done ;;
     rtcheck)

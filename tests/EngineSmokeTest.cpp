@@ -15,6 +15,7 @@
 #include "engine/TestAudioDevice.h"
 #include "engine/AudioPreview.h"
 #include "engine/AudioLoadMeter.h"
+#include "engine/RealtimeAudioThread.h"            // which render workers it looks after
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
@@ -9091,6 +9092,34 @@ int main (int argc, char* argv[])
         check (meter.addXruns (2) == 2, "then they count again, from JUCE's new count");
     }
 
+   #if JUCE_LINUX
+    if (runs ("main"))
+    {
+        // Tracktion's render workers are noted as they start and stop, so
+        // RealtimeAudioThread can make them real-time like the audio thread.
+        // (Whether the system then grants real-time is up to the system.)
+        std::cout << "Render workers\n";
+        auto threadName = [] (std::int64_t tid)
+        {
+            return juce::File ("/proc/self/task/" + juce::String (tid) + "/comm").loadFileAsString().trim();
+        };
+
+        {
+            AudioEngine engine { testSettings, false };
+            TestAudioDevice device (engine, {});
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            runAudio (device, 0.5);
+
+            const auto workers = RealtimeAudioThread::getRenderThreadIds();
+            check (workers.size() == 1, "a session renders on the audio thread and one worker");
+            check (! workers.empty() && threadName (workers.front()) == "Render worker",
+                   "the worker is noted by its kernel thread ID");
+        }
+
+        check (RealtimeAudioThread::getRenderThreadIds().empty(), "...and forgotten once it's gone");
+    }
+   #endif
+
     if (runs ("main"))
     {
         std::cout << "Automation\n";
@@ -9427,6 +9456,50 @@ int main (int argc, char* argv[])
         std::cout << "  (MP3 " << seconds (mp3) << " s, " << exportDir.getChildFile ("Song.mp3").getSize() / 1024 << " KB)\n";
         check (std::abs (seconds (mp3) - seconds (mix)) < 0.5 && peakIn (mp3, 4.2, 11.8) > 0.01f,
                "MP3 exports (with LAME)");
+
+       #if JUCE_LINUX
+        // An export renders as fast as it can, so its workers stay at ordinary
+        // priority: a real-time one running flat out would trip the CPU limit,
+        // which takes real-time from the live audio thread too (see RealtimeAudioThread).
+        {
+            auto namesOf = [] (const std::vector<std::int64_t>& ids)
+            {
+                juce::StringArray names;
+
+                for (auto id : ids)
+                    names.add (juce::File ("/proc/self/task/" + juce::String (id) + "/comm").loadFileAsString().trim());
+
+                return names;
+            };
+
+            auto allThreads = []
+            {
+                std::vector<std::int64_t> ids;
+
+                for (auto& d : juce::File ("/proc/self/task").findChildFiles (juce::File::findDirectories, false))
+                    ids.push_back (d.getFileName().getLargeIntValue());
+
+                return ids;
+            };
+
+            settings.format = ExportFormat::wav;
+            settings.destination = exportDir.getChildFile ("Workers.wav");
+            bool done = false, sawOfflineWorker = false, trackedOfflineWorker = false;
+
+            if (exporter.start (settings, [&] (const ExportResult&) { done = true; }).wasOk())
+            {
+                for (int i = 0; i < 3000 && ! done; ++i)
+                {
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                    sawOfflineWorker = sawOfflineWorker || namesOf (allThreads()).contains ("Offline worker");
+                    trackedOfflineWorker = trackedOfflineWorker
+                                            || namesOf (RealtimeAudioThread::getRenderThreadIds()).contains ("Offline worker");
+                }
+            }
+
+            check (done && sawOfflineWorker && ! trackedOfflineWorker, "an export's workers aren't made real-time");
+        }
+       #endif
 
         // Cancel: nothing is left behind, and the song still plays.
         settings.format = ExportFormat::wav;

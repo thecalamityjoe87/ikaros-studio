@@ -3,10 +3,12 @@
 
     python3 tools/perf/summarize.py ~/ikaros-perf/runs/matrix [more run folders...]
     python3 tools/perf/summarize.py --plugins ~/ikaros-perf/runs/features/effect-each.plugins.csv
+    python3 tools/perf/summarize.py --threads ~/ikaros-perf/runs/threads [more run folders...]
 
 The first form prints one row per run from each folder's summary.csv; the
 second, each plug-in's average and peak share of the audio thread from a
-per-plug-in CSV, grouped by the harness's label.
+per-plug-in CSV, grouped by the harness's label; the third, one row per run
+(by run name) with where the audio thread and Tracktion's render workers ran.
 """
 
 import collections
@@ -44,6 +46,28 @@ def summary(folders):
                 "yes" if r["always_rt"] == "1" else "**no**"))
 
 
+def threads(folders):
+    print("| Run | Callback avg % | p99 % | max % | Over budget | Device xruns | Slow-core callbacks % "
+          "| Audio RT | Workers | Workers RT | Worker CPU % | Worker cores |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+
+    for folder in folders:
+        path = os.path.join(folder, "summary.csv")
+        if not os.path.exists(path):
+            continue
+        for r in csv.DictReader(open(path)):
+            name = r.get("csv", "").removesuffix(".csv") or r["label"]
+            if r.get("seconds", "") == "":
+                print("| %s | **%s** | | | | | | | | | | |" % (name, r.get("actions", "failed")))
+                continue
+            workers = r.get("workers") or "0"
+            print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                name, num(r, "cb_avg_pct"), num(r, "cb_p99_pct"), num(r, "cb_max_pct"), r["over_budget"],
+                r["device_xruns"], num(r, "slow_core_pct"), "yes" if r["always_rt"] == "1" else "**no**",
+                workers, "-" if workers == "0" else ("yes" if r.get("workers_always_rt") == "1" else "**no**"),
+                num(r, "workers_cpu"), r.get("worker_cores") or "-"))
+
+
 def plugins(path):
     rows = list(csv.DictReader(open(path)))
     by_label = collections.defaultdict(lambda: collections.defaultdict(list))
@@ -64,5 +88,7 @@ def plugins(path):
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--plugins":
         plugins(sys.argv[2])
+    elif len(sys.argv) > 2 and sys.argv[1] == "--threads":
+        threads(sys.argv[2:])
     else:
         summary(sys.argv[1:])

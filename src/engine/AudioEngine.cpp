@@ -72,12 +72,16 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
 
-    // Render everything on the audio thread itself. Tracktion's default
-    // hands parts of each block to a worker per CPU core, and with small
-    // buffers (64 samples is 750 blocks a second) waking them costs more than
-    // it saves; worse, the workers run at ordinary priority, so when the
-    // desktop is busy the audio thread sits waiting for them and the sound
-    // breaks up. A session of a beginner's size fits on one core easily.
+    // The audio thread plus one render worker share each block (Tracktion
+    // renders tracks in parallel; only the buses and master wait for the
+    // rest). On one thread, one core was the ceiling: a 32-track session took
+    // 53% of the block on its own, 28% with a worker (docs/perf-report.md,
+    // section 6). Not Tracktion's default of a worker per core: workers spin
+    // while they wait for work, so three cost 2-3 times one's CPU (and
+    // battery) for a few percent more. The worker is made real-time and kept on the
+    // fast cores like the audio thread (RealtimeAudioThread); at ordinary
+    // priority a busy desktop kept it waiting, and the audio thread with it,
+    // which is why Ikaros rendered on one thread from October 2026 until then.
     int getNumberOfCPUsToUseForAudio() override
     {
         // The performance monitor can try other counts (IKAROS_PERF_AUDIO_THREADS=N)
@@ -86,7 +90,7 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
             if (auto n = juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_AUDIO_THREADS", {}).getIntValue(); n > 0)
                 return n;
 
-        return 1;
+        return 2;
     }
 
     // Takes are recorded straight into the session's working copy (its
@@ -270,6 +274,12 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         : owner (o),
           engine (settingsName, std::make_unique<IkarosUIBehaviour>(), std::make_unique<IkarosEngineBehaviour>())
     {
+        // Before any Edit starts its render workers, so none is missed. The
+        // performance monitor can leave them at ordinary priority
+        // (IKAROS_PERF_WORKERS_RT=0) to compare.
+        if (! (PerfMonitor::isEnabled() && juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_WORKERS_RT", {}) == "0"))
+            RealtimeAudioThread::trackRenderThreads();
+
         // 2 inputs, 2 outputs by default. (Tracktion's default of "every
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.

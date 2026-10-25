@@ -44,6 +44,12 @@ std::int64_t currentThreadId();
 */
 bool makeThreadRealtime (std::int64_t threadId);
 
+/*  Tells the CPU-limit handler that a thread made real-time is gone (or
+    about to go), so it never touches the thread that gets its ID next.
+    Safe on any thread.
+*/
+void forgetRealtimeThread (std::int64_t threadId);
+
 /*  Whether a thread runs at real-time priority right now (it may have been
     put back since makeThreadRealtime, or never got it). Empty on macOS and
     Windows, where the OS looks after audio threads itself.

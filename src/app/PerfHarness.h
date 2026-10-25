@@ -3,6 +3,8 @@
 #include "engine/AudioEngine.h"
 #include "engine/PerfMonitor.h"
 
+#include <set>
+
 namespace ikaros
 {
 
@@ -103,6 +105,9 @@ private:
         double paintMs = 0, frames = 0, maxFrameMs = 0, rssStart = 0, rssEnd = 0, rssMax = 0;
         int openFilesStart = 0, openFilesEnd = 0;
         bool alwaysRealtime = true;
+        bool workersAlwaysRealtime = true;   // every render worker real-time every second
+        double workersCpu = 0;
+        std::set<int> workerCores;           // every CPU a render worker was seen on
     } totals;
 
     static constexpr double loopBeats = 64.0;   // 16 bars of 4/4: the stretch every scenario loops

@@ -234,6 +234,11 @@ void PerfHarness::accumulate (const PerfMonitor::Snapshot& s)
     totals.rssMax = juce::jmax (totals.rssMax, s.rssMb);
     totals.openFilesEnd = s.openFiles;
     totals.alwaysRealtime = totals.alwaysRealtime && s.audioThreadRealtime;
+    totals.workersAlwaysRealtime = totals.workersAlwaysRealtime && s.workersRealtime == s.workers;
+    totals.workersCpu += s.workersCpu;
+
+    for (auto& cpu : juce::StringArray::fromTokens (s.workerCores, " ", {}))
+        totals.workerCores.insert (cpu.getIntValue());
 }
 
 void PerfHarness::finishPart()
@@ -249,6 +254,13 @@ void PerfHarness::finishPart()
     const auto n = juce::jmax (1, totals.seconds);
     auto f = [] (double v) { return juce::String (v, 2); };
 
+    juce::StringArray workerCoreNames;
+
+    for (auto cpu : totals.workerCores)
+        workerCoreNames.add (juce::String (cpu));
+
+    const auto workerCores = workerCoreNames.joinIntoString (" ");
+
     juce::StringArray cols {
         options.scenario, "\"" + parts[partIndex].label + "\"", juce::String (s.sampleRate, 0), juce::String (s.bufferSize),
         juce::String ((int) engine.getTracks().getTracks().size()), juce::String (totals.seconds),
@@ -261,7 +273,8 @@ void PerfHarness::finishPart()
         f (totals.paintMs / n), f (totals.frames / n), f (totals.maxFrameMs),
         totals.alwaysRealtime ? "1" : "0", "\"" + options.actions.joinIntoString (" ") + "\"",
         monitor.getCsvFile().getFileName(),
-        f (100.0 * run.onSlowCores / juce::jmax (1, run.callbacks)), f (run.avgPercentFastCores), f (run.avgPercentSlowCores) };
+        f (100.0 * run.onSlowCores / juce::jmax (1, run.callbacks)), f (run.avgPercentFastCores), f (run.avgPercentSlowCores),
+        juce::String (s.workers), totals.workersAlwaysRealtime ? "1" : "0", f (totals.workersCpu / n), "\"" + workerCores + "\"" };
 
     const auto line = cols.joinIntoString (",");
     log ("result: " + line);
@@ -273,7 +286,8 @@ void PerfHarness::finishPart()
                                         "cb_p99_pct,cb_max_pct,over_budget,late_starts,device_xruns,juce_meter_avg,"
                                         "te_avg_ms,plugins_pct,audio_cpu,ui_cpu,other_cpu,process_cpu,rss_start_mb,"
                                         "rss_end_mb,rss_max_mb,files_start,files_end,paint_ms_per_s,frames_per_s,"
-                                        "max_frame_ms,always_rt,actions,csv,slow_core_pct,avg_pct_fast_cores,avg_pct_slow_cores\n");
+                                        "max_frame_ms,always_rt,actions,csv,slow_core_pct,avg_pct_fast_cores,avg_pct_slow_cores,"
+                                        "workers,workers_always_rt,workers_cpu,worker_cores\n");
 
         options.summary.appendText (line + "\n");
     }

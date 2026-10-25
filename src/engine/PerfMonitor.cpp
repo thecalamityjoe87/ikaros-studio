@@ -2,6 +2,7 @@
 #include "platform/AudioHardware.h"
 
 #include <tracktion_engine/tracktion_engine.h>
+#include <set>
 
 #if JUCE_LINUX
  #include <dirent.h>
@@ -121,7 +122,7 @@ PerfMonitor::PerfMonitor (te::Engine& e, std::function<te::Edit*()> editGetter)
                 "over_budget,late_starts,device_xruns,juce_meter_pct,te_avg_ms,te_max_ms,plugins_pct,audio_threads,rt,"
                 "audio_thread_cpu,message_thread_cpu,other_threads_cpu,process_cpu,rss_mb,open_files,threads,burn_pct,"
                 "playing,dropped,ui_paint_ms_per_s,ui_paint_calls,ui_frames,ui_max_frame_ms,ui_top_painters,"
-                "slow_core_callbacks,avg_pct_fast_cores,avg_pct_slow_cores,cores");
+                "slow_core_callbacks,avg_pct_fast_cores,avg_pct_slow_cores,cores,workers,workers_rt,workers_cpu,worker_cores");
     pluginCsv = open (pluginCsvFile, "time_s,label,track,plugin,avg_pct,max_pct");
     threadCsv = open (threadCsvFile, "time_s,label,tid,name,cpu_pct");
 
@@ -510,6 +511,9 @@ void PerfMonitor::readProcessStats()
     std::map<int, double> threadSeconds;
     latest.busiestThreads.clear();
     latest.audioThreadCpu = latest.messageThreadCpu = latest.otherThreadsCpu = latest.processCpu = 0;
+    latest.workers = latest.workersRealtime = 0;
+    latest.workersCpu = 0;
+    std::set<int> workerCores;
 
     // /proc/self/task has a folder per thread; its "stat" file holds the CPU
     // time used so far (utime + stime, in clock ticks) after the name, which
@@ -553,12 +557,32 @@ void PerfMonitor::readProcessStats()
 
             if (percent >= 0.5)
                 latest.busiestThreads.push_back ({ tid, name, percent });
+
+            // Tracktion's render workers (named by external/patches/tracktion-render-thread-hook.patch).
+            // "processor" (the CPU it last ran on) and "policy" are the 39th and 41st
+            // fields of the whole line; fields[] starts at the 3rd.
+            if (name == "Render worker" && fields.size() > 38)
+            {
+                ++latest.workers;
+                latest.workersCpu += percent;
+                workerCores.insert (fields[36].getIntValue());
+
+                if (const int policy = fields[38].getIntValue(); policy == SCHED_FIFO || policy == SCHED_RR)
+                    ++latest.workersRealtime;
+            }
         }
 
         closedir (dir);
     }
 
     lastThreadSeconds = std::move (threadSeconds);
+
+    juce::StringArray workerCoreNames;
+
+    for (auto cpu : workerCores)
+        workerCoreNames.add (juce::String (cpu));
+
+    latest.workerCores = workerCoreNames.joinIntoString (" ");
     std::sort (latest.busiestThreads.begin(), latest.busiestThreads.end(),
                [] (const ThreadLoad& a, const ThreadLoad& b) { return a.percent > b.percent; });
 
@@ -607,7 +631,8 @@ void PerfMonitor::writeCsvLine()
             f (s.ui.paintMsPerSecond), juce::String (s.ui.paintCalls), juce::String (s.ui.frames),
             f (s.ui.maxFrameMs), quoted (s.ui.topPainters),
             juce::String (s.callback.onSlowCores), f (s.callback.avgPercentFastCores),
-            f (s.callback.avgPercentSlowCores), quoted (s.cores) };
+            f (s.callback.avgPercentSlowCores), quoted (s.cores),
+            juce::String (s.workers), juce::String (s.workersRealtime), f (s.workersCpu), quoted (s.workerCores) };
 
         *csv << cols.joinIntoString (",") << "\n";
         csv->flush();   // so the file is complete even if the app is killed

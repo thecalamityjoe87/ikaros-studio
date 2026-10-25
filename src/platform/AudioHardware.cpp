@@ -2,6 +2,7 @@
 
 #if JUCE_LINUX
  #include <alsa/asoundlib.h>
+ #include <array>
  #include <sched.h>
  #include <signal.h>
  #include <sys/resource.h>
@@ -78,13 +79,30 @@ namespace
     // RealtimeKit caps it lower anyway (20 by default).
     constexpr int preferredPriority = 70;
 
-    // The thread made real-time last, for the signal handler below.
-    std::atomic<pid_t> realtimeThread { 0 };
+    // The threads made real-time (the audio thread and Tracktion's render
+    // workers), for the signal handler below; 0 = a free slot. Plain atomics
+    // in a fixed array, as the handler can't take locks or allocate.
+    std::array<std::atomic<pid_t>, 16> realtimeThreads {};
+
+    void rememberRealtimeThread (pid_t tid)
+    {
+        for (auto& slot : realtimeThreads)
+            if (slot.load() == tid)
+                return;
+
+        for (auto& slot : realtimeThreads)
+            if (pid_t empty = 0; slot.compare_exchange_strong (empty, tid))
+                return;
+    }
 
     // The kernel sends SIGXCPU when a real-time thread has run for too long
     // without a break (the RLIMIT_RTTIME soft limit), and kills the app at
     // the hard limit. Putting the thread back to ordinary priority stops the
     // count. (Only system calls are safe in a signal handler; this is one.)
+    //
+    // All of them go back, not just the one that ran too long: the session is
+    // too heavy, and a real-time audio thread waiting on an ordinary worker
+    // would only spin. RealtimeAudioThread asks again once the load is light.
     //
     // SCHED_RESET_ON_FORK must stay set: RealtimeKit (and makeThreadRealtime
     // below) set it, and only a privileged process may clear it. Asking for
@@ -93,10 +111,13 @@ namespace
     // when the CPU meter got near 90-100%.
     void onCpuLimit (int)
     {
-        if (const auto tid = realtimeThread.load())
+        for (auto& slot : realtimeThreads)
         {
-            sched_param ordinary {};
-            sched_setscheduler (tid, SCHED_OTHER | SCHED_RESET_ON_FORK, &ordinary);
+            if (const auto tid = slot.load())
+            {
+                sched_param ordinary {};
+                sched_setscheduler (tid, SCHED_OTHER | SCHED_RESET_ON_FORK, &ordinary);
+            }
         }
     }
 
@@ -188,7 +209,7 @@ bool makeThreadRealtime (std::int64_t threadId)
     if (tid <= 0)
         return false;
 
-    realtimeThread = tid;
+    rememberRealtimeThread (tid);
     limitRealtimeRuns (200000);   // 200 ms, RealtimeKit's usual limit
 
     // Allowed for users with a real-time limit (e.g. in the "audio" group).
@@ -210,6 +231,19 @@ bool makeThreadRealtime (std::int64_t threadId)
    #else
     juce::ignoreUnused (threadId);
     return false;
+   #endif
+}
+
+void forgetRealtimeThread (std::int64_t threadId)
+{
+   #if JUCE_LINUX
+    // Thread IDs are reused (by any process), so a gone thread's mustn't stay
+    // where the signal handler would demote whatever thread gets it next.
+    for (auto& slot : realtimeThreads)
+        if (pid_t tid = (pid_t) threadId; tid > 0)
+            slot.compare_exchange_strong (tid, 0);
+   #else
+    juce::ignoreUnused (threadId);
    #endif
 }
 

@@ -57,6 +57,12 @@ public:
         nodePlayer.setNumThreads (numThreads);
     }
 
+    /** See LockFreeMultiThreadedNodePlayer::setRendersLive. */
+    void setRendersLive (bool isLive)
+    {
+        nodePlayer.setRendersLive (isLive);
+    }
+
     tracktion::graph::Node* getNode()
     {
         return nodePlayer.getNode();
