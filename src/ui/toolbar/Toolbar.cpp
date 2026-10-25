@@ -18,7 +18,11 @@ namespace
     constexpr int speakerWidth = 20, speakerGap = 8;
     constexpr int masterWidth = 150;        // "Master", its dB readout and the slider
     constexpr int masterLabelHeight = 13;   // the "Master  −3.0 dB" row
-    constexpr int statsGap = 14, statsWidth = 110;
+    constexpr int statsGap = 14, statsWidth = 130;   // wide enough for "CPU 100%  12 xruns"
+    constexpr int xrunGap = 10;                       // between "CPU 34%" and "2 xruns"
+
+    // How long the warnings stay up, so a short spike is still seen.
+    constexpr double busyHoldMs = 1000.0, xrunHoldMs = 3000.0;
 }
 
 Toolbar::Toolbar (AudioEngine& e, juce::ApplicationCommandManager& cm)
@@ -85,7 +89,26 @@ void Toolbar::update (bool libraryVisible)
     {
         statsCountdown = 10;
         auto stats = engine.getSystemStats();
-        auto l1 = "CPU " + juce::String (juce::roundToInt (stats.cpuPercent)) + "%";
+        auto cpu = "CPU " + juce::String (juce::roundToInt (stats.cpuPercent)) + "%";
+
+        // The CPU figure is an average, which hides single slow blocks, and
+        // those are what break up the sound (see AudioLoadMeter).
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+
+        if (stats.peakPercent >= 90.0f)
+            lastBusyMs = now;
+
+        if (stats.xruns != xruns)
+        {
+            xruns = stats.xruns;
+            lastXrunMs = now;
+        }
+
+        const bool isBusy = now - lastBusyMs < busyHoldMs;
+        const bool isXrunShowing = now - lastXrunMs < xrunHoldMs;
+        auto xrunsText = xruns == 0 ? juce::String()
+                                    : juce::String (xruns) + (xruns == 1 ? " xrun" : " xruns");
+
         auto khz = stats.sampleRate / 1000.0;
         auto khzText = std::fmod (khz, 1.0) == 0.0 ? juce::String ((int) khz) : juce::String (khz, 1);
         auto l2 = stats.sampleRate > 0
@@ -97,9 +120,13 @@ void Toolbar::update (bool libraryVisible)
         const bool known = stats.sampleRate > 0 && stats.realtimeAudio.has_value();
         const bool rt = known && stats.realtimeAudio.value_or (false);
 
-        if (l1 != statsLine1 || l2 != statsLine2 || rt != realtimeBadge || known != realtimeKnown)
+        if (cpu != cpuText || xrunsText != xrunText || isBusy != busy || isXrunShowing != xrunShowing
+             || l2 != statsLine2 || rt != realtimeBadge || known != realtimeKnown)
         {
-            statsLine1 = l1;
+            cpuText = cpu;
+            xrunText = xrunsText;
+            busy = isBusy;
+            xrunShowing = isXrunShowing;
             statsLine2 = l2;
             realtimeBadge = rt;
             realtimeKnown = known;
@@ -126,9 +153,23 @@ void Toolbar::paint (juce::Graphics& g)
     g.setFont (fonts::mono (textSize::xs));
     g.drawText (masterDbText, labelRow, juce::Justification::centredRight);
 
-    g.setColour (theme().textSecondary);
+    // "CPU 34%  2 xruns", right-aligned, so the xrun count goes in first.
+    const auto statsFont = fonts::mono (textSize::xs);
+    g.setFont (statsFont);
     auto s = statsArea;
-    g.drawText (statsLine1, s.removeFromTop (s.getHeight() / 2), juce::Justification::bottomRight);
+    auto line1 = s.removeFromTop (s.getHeight() / 2);
+
+    if (xrunText.isNotEmpty())
+    {
+        g.setColour (xrunShowing ? theme().record : theme().textSecondary);
+        g.drawText (xrunText, line1, juce::Justification::bottomRight);
+        line1.removeFromRight (juce::GlyphArrangement::getStringWidthInt (statsFont, xrunText) + xrunGap);
+    }
+
+    g.setColour (xrunShowing ? theme().record : busy ? theme().warning : theme().textSecondary);
+    g.drawText (cpuText, line1, juce::Justification::bottomRight);
+
+    g.setColour (theme().textSecondary);
     g.drawText (statsLine2, s, juce::Justification::topRight);
 
     // "RT": a small badge under the readout while the audio thread is real-time.
@@ -155,7 +196,9 @@ juce::String Toolbar::getTooltip()
     if (! statsArea.getUnion (getRealtimeBadgeArea()).contains (getMouseXYRelative()))
         return {};
 
-    juce::String tip ("CPU: how much of the time between audio blocks it takes to make the sound.");
+    juce::String tip ("CPU: how much of the time between audio blocks it takes to make the sound.\n\n"
+                      "Amber: the computer is close to its limit. "
+                      "xruns: times the sound couldn't keep up and briefly dropped out.");
 
     if (realtimeKnown)
         tip << "\n\n" << (realtimeBadge

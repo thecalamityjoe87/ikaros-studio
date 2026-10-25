@@ -363,7 +363,7 @@ public:
     //==============================================================================
     // Meters and stats, polled by the UI at ~30 Hz
     StereoLevel getMasterLevel();
-    SystemStats getSystemStats() const;
+    SystemStats getSystemStats();   // not const: its peak is "since the last call"
 
     /** The debug performance monitor, or nullptr unless IKAROS_PERF=1 (see PerfMonitor). */
     PerfMonitor* getPerfMonitor() const noexcept;

@@ -480,7 +480,9 @@ struct RecentSession
 
 struct SystemStats
 {
-    float cpuPercent = 0.0f;
+    float cpuPercent = 0.0f;    // a smoothed average (JUCE's), so it hides single slow blocks
+    float peakPercent = 0.0f;   // ...which this shows: the busiest block since the last getSystemStats
+    int xruns = 0;              // since the app started (see AudioLoadMeter)
     double sampleRate = 0.0;
     double latencyMs = 0.0;
 

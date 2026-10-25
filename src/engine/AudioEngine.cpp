@@ -9,6 +9,7 @@
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
 #include "engine/PerfMonitor.h"
+#include "engine/AudioLoadMeter.h"
 #include "engine/RealtimeAudioThread.h"
 #include "engine/FreesoundStore.h"
 #include "engine/LoopKey.h"
@@ -278,6 +279,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
             if (PerfMonitor::isEnabled())
                 perfMonitor = std::make_unique<PerfMonitor> (engine, [this] { return edit.get(); });
 
+            // Also before it, and after PerfMonitor's (it times blocks itself only without one).
+            loadMeter = std::make_unique<AudioLoadMeter> (engine.getDeviceManager().deviceManager, perfMonitor == nullptr);
+
             engine.getDeviceManager().initialise (2, 2);
             chooseSmallBufferOnce();
 
@@ -415,6 +419,9 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
     // Only with IKAROS_PERF=1 (see PerfMonitor). Also after `engine`.
     std::unique_ptr<PerfMonitor> perfMonitor;
+
+    // The toolbar's busiest block and xruns (see AudioLoadMeter). After `engine` too.
+    std::unique_ptr<AudioLoadMeter> loadMeter;
 
     // The session being edited: its working copy (an unpacked bundle, see
     // AudioEngine.h), the session file inside it that Tracktion reads and
@@ -2746,7 +2753,7 @@ PerfMonitor* AudioEngine::getPerfMonitor() const noexcept
     return impl->perfMonitor.get();
 }
 
-SystemStats AudioEngine::getSystemStats() const
+SystemStats AudioEngine::getSystemStats()
 {
     auto& dm = impl->engine.getDeviceManager();
 
@@ -2754,6 +2761,14 @@ SystemStats AudioEngine::getSystemStats() const
     s.cpuPercent = dm.getCpuUsage() * 100.0f;
     s.sampleRate = dm.getSampleRate();
     s.latencyMs = dm.getOutputLatencySeconds() * 1000.0;
+
+    if (auto* meter = impl->loadMeter.get())
+    {
+        // With IKAROS_PERF, PerfMonitor times the blocks (see AudioLoadMeter's constructor).
+        s.peakPercent = impl->perfMonitor != nullptr ? (float) impl->perfMonitor->getSnapshot().callback.maxPercent
+                                                     : meter->takePeak() * 100.0f;
+        s.xruns = meter->getXruns();
+    }
 
     if (impl->realtimeThread != nullptr)
         s.realtimeAudio = impl->realtimeThread->isRealtime();

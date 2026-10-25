@@ -362,6 +362,7 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
     src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp
     src/engine/PerfMonitor.h        src/engine/PerfMonitor.cpp
+    src/engine/AudioLoadMeter.h     src/engine/AudioLoadMeter.cpp
     src/engine/SilenceSkip.h)
 
 # Tune's pitch correction is fat1's retuner (GPL 2+, see

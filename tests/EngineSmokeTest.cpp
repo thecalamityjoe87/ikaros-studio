@@ -14,6 +14,7 @@
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
 #include "engine/AudioPreview.h"
+#include "engine/AudioLoadMeter.h"
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
@@ -9061,6 +9062,33 @@ int main (int argc, char* argv[])
         check (std::abs (reopened.getTracks().getMasterVolume() - 0.3f) < 0.01f, "master volume round-trips");
         auto first = reopened.getTracks().getTracks().front();
         check (std::abs (first.reverbSend - 0.5f) < 0.01f && std::abs (first.delaySend - 0.25f) < 0.01f, "sends round-trip");
+    }
+
+    if (runs ("main"))
+    {
+        // The toolbar's busiest block and xrun count. There's no real device
+        // here, so its callbacks' parts are driven directly.
+        std::cout << "Load meter\n";
+        juce::AudioDeviceManager deviceManager;
+        AudioLoadMeter meter (deviceManager, true);
+        const double blockSeconds = 256.0 / 48000.0;
+
+        meter.deviceStarting (48000.0);
+        meter.blockDone (0.3 * blockSeconds, 256);
+        meter.blockDone (1.25 * blockSeconds, 256);   // one slow block among quick ones
+        meter.blockDone (0.4 * blockSeconds, 256);
+        check (std::abs (meter.takePeak() - 1.25f) < 0.001f, "the busiest block shows, though the others were quick");
+        check (meter.takePeak() == 0.0f, "...and only until it's been read");
+
+        check (meter.addXruns (2) == 0, "xruns in the device's first second don't count");
+        juce::Thread::sleep (1100);
+        check (meter.addXruns (3) == 1, "later ones do");
+        check (meter.addXruns (3) == 1, "each one once");
+
+        meter.deviceStarting (48000.0);                // JUCE counts from zero again
+        check (meter.addXruns (1) == 1, "nor after the device restarts");
+        juce::Thread::sleep (1100);
+        check (meter.addXruns (2) == 2, "then they count again, from JUCE's new count");
     }
 
     if (runs ("main"))
