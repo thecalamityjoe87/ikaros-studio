@@ -111,6 +111,7 @@ private:
 
     juce::TextEditor nameEditor;
     bool renaming = false;
+    float nameWidth = 0.0f;   // of info.name as drawn, so paint() can tell when the text is outside the clip
 
     void finishRenaming (bool keepNewName);
     // How the content repeats: one loop's length and how far into the loop
