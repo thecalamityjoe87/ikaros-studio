@@ -40,6 +40,7 @@ namespace
 
         p.wellBg              = hex (0xff0e1013);
         p.cardBg              = hex (0xff15181d);
+        p.panelBoxBg          = hex (0xff15181d);
         p.raised              = hex (0xff22262e);
         p.controlFill         = hex (0xff2a2f38);
         p.selectedRow         = hex (0xff242831);
@@ -261,6 +262,7 @@ namespace
         p.pedalboardFloor     = hex (0xffd3d8e0);
         p.pedalboardCable     = hex (0xff959ca7);
         p.cardBg              = hex (0xffffffff);
+        p.panelBoxBg          = hex (0xffeceef2);
         p.raised              = hex (0xffffffff);
         p.controlFill         = hex (0xffe2e5ea);
         p.selectedRow         = hex (0xffe6e9ee);

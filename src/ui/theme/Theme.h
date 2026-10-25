@@ -52,6 +52,7 @@ struct ThemePalette
     // Generic surfaces inside the areas
     juce::Colour wellBg;              // inset wells (popover segment wells, the fader slot)
     juce::Colour cardBg;              // effect rows, mixer strips, message cards
+    juce::Colour panelBoxBg;          // a bordered box of controls (Tune's panel): not white in light mode, so white keys and cards show on it
     juce::Colour raised;              // raised buttons
     juce::Colour controlFill;         // inactive pills, the tempo lane's chips
     juce::Colour selectedRow;

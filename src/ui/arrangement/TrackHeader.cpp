@@ -619,10 +619,12 @@ void TrackHeader::resized()
     // The pan knob shares the arm button's column, centred under it. Its
     // ring is as wide as the arm button; the box around it is the column.
     pan.setBounds (bottom.removeFromRight (roundSize).withSizeKeepingCentre (roundSize, roundSize));
-    bottom.removeFromRight (16);
+    bottom.removeFromRight (18);   // room for the clip light, clear of the volume's thumb
 
+    // The clip light sits midway between where the meter's bars end (the
+    // thumb's radius, 6px, short of the slider's edge) and the pan ring.
     if (clipLight.isVisible())
-        clipLight.setBounds (juce::Rectangle<int> (bottom.getRight() + 4, bottom.getY(), 8, bottom.getHeight()).withSizeKeepingCentre (8, 8));
+        clipLight.setBounds (juce::Rectangle<int> (12, 12).withCentre ({ (bottom.getRight() - 6 + pan.getX()) / 2, bottom.getCentreY() }));
 
     bottom.removeFromLeft (12 - smallButtonGap);
     volume.setBounds (bottom);

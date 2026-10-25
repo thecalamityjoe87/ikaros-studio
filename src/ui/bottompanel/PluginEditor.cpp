@@ -63,10 +63,7 @@ void PluginEditor::refreshValues()
                 powerButton.setToggleState (slot.enabled, juce::dontSendNotification);
                 powerButton.setTitle ((slot.enabled ? "Turn off " : "Turn on ") + slot.name);
                 powerButton.setTooltip (slot.enabled ? "On (click to bypass)" : "Off (click to turn on)");
-
-                if (tuneControls != nullptr)
-                    resized();   // Tune's header controls start after the name, which just changed
-
+                resized();   // the box fits the name, and Tune's Key starts after it
                 repaint();
             }
             break;
@@ -101,23 +98,48 @@ void PluginEditor::timerCallback()
     refreshValues();
 }
 
-int PluginEditor::columnsFor (int width) const
+int PluginEditor::columnsFor (int innerWidth) const
 {
-    return juce::jmax (1, (width - padding * 2 + gap) / (Knob::preferredWidth + gap));
+    return juce::jmax (1, (innerWidth + gap) / (Knob::preferredWidth + gap));
 }
 
-int PluginEditor::knobsHeight (int width) const
+int PluginEditor::getTitleWidth() const
 {
-    const int rows = juce::jmax (1, (knobs.size() + columnsFor (width) - 1) / columnsFor (width));
-    return rows * Knob::preferredHeight + (rows - 1) * gap;
+    return powerSize + titleGap + juce::GlyphArrangement::getStringWidthInt (getTitleFont(), getTitleText());
+}
+
+juce::Rectangle<int> PluginEditor::getBoxBounds (int width) const
+{
+    // The box reaches at most to just short of Done. It's as wide as its
+    // contents need (Tune's as wide as its design) and as tall.
+    const int maxInner = juce::jmax (1, width - padding - doneWidth - 16 - padding - boxPadding * 2);
+    int inner = 0, contentHeight = 0;
+
+    if (tuneControls != nullptr)
+    {
+        inner = TuneControls::panelWidth - boxPadding * 2;
+        contentHeight = TuneControls::getBodyHeight();
+    }
+    else if (knobs.isEmpty())
+    {
+        inner = juce::jmax (getTitleWidth(), juce::GlyphArrangement::getStringWidthInt (fonts::ui (textSize::md), noSettingsText));
+        contentHeight = 20;
+    }
+    else
+    {
+        const int cols = juce::jmin (columnsFor (maxInner), knobs.size());
+        const int rows = (knobs.size() + cols - 1) / cols;
+        inner = juce::jmax (getTitleWidth(), cols * Knob::preferredWidth + (cols - 1) * gap);
+        contentHeight = rows * Knob::preferredHeight + (rows - 1) * gap;
+    }
+
+    return { padding, padding, juce::jmin (inner, maxInner) + boxPadding * 2,
+             boxPadding * 2 + titleRowHeight + gap + contentHeight };
 }
 
 int PluginEditor::getIdealHeight (int width) const
 {
-    if (tuneControls != nullptr)
-        return headerHeight + padding + TuneControls::getBodyHeight() + padding;
-
-    return headerHeight + padding + knobsHeight (width) + padding;
+    return getBoxBounds (width).getBottom() + padding;
 }
 
 juce::String PluginEditor::getTitleText() const
@@ -134,43 +156,48 @@ juce::Font PluginEditor::getTitleFont() const
 
 void PluginEditor::paint (juce::Graphics& g)
 {
-    auto header = getLocalBounds().removeFromTop (headerHeight).withTrimmedLeft (padding + 32);
+    // The box everything but Done sits in.
+    const auto b = box.toFloat();
+    g.setColour (theme().panelBoxBg);
+    g.fillRoundedRectangle (b, size::radiusCard);
+    g.setColour (theme().border);
+    g.drawRoundedRectangle (b.reduced (0.5f), size::radiusCard, 1.0f);
 
     g.setColour (slot.enabled ? theme().text : theme().textSecondary);
     g.setFont (getTitleFont());
-    g.drawText (getTitleText(), header, juce::Justification::centredLeft, true);
+    g.drawText (getTitleText(), titleArea, juce::Justification::centredLeft, true);
 
     if (knobs.isEmpty())
     {
         g.setColour (theme().textSecondary);
         g.setFont (fonts::ui (textSize::md));
-        g.drawText ("This effect has no settings.", getLocalBounds().withTrimmedTop (headerHeight).reduced (padding),
-                    juce::Justification::topLeft);
+        g.drawText (noSettingsText, contentArea, juce::Justification::topLeft);
     }
 }
 
 void PluginEditor::resized()
 {
-    auto header = getLocalBounds().removeFromTop (headerHeight).reduced (padding, 0).withTrimmedTop (10);
-    powerButton.setBounds (header.removeFromLeft (24).withSizeKeepingCentre (24, 24));
-    doneButton.setBounds (header.removeFromRight (76).withSizeKeepingCentre (76, 30));
+    // In the box: on/off and the name along the top, the knobs (or Tune's
+    // panel) under them. Done sits outside it, level with the name.
+    box = getBoxBounds (getWidth());
+    contentArea = box.reduced (boxPadding);
+    auto titleRow = contentArea.removeFromTop (titleRowHeight);
+    contentArea.removeFromTop (gap);
 
-    const int left = padding, top = headerHeight + padding;
+    powerButton.setBounds (titleRow.removeFromLeft (powerSize).withSizeKeepingCentre (powerSize, powerSize));
+    titleRow.removeFromLeft (titleGap);
+    titleArea = titleRow;
+    doneButton.setBounds (juce::Rectangle<int> (getWidth() - padding - doneWidth, 0, doneWidth, 30)
+                              .withY (titleRow.getCentreY() - 15));
 
     if (tuneControls != nullptr)
     {
-        // Tune's panel (see TuneControls): the header's free part, from after
-        // the name to the panel's right edge (and short of Done), and the
-        // body under it, at most the panel's width.
-        const int panelRight = juce::jmin (left + TuneControls::panelWidth, doneButton.getX() - 16);
-        const int titleRight = padding + 32 + juce::GlyphArrangement::getStringWidthInt (getTitleFont(), getTitleText()) + 16;
-        const auto headerFree = juce::Rectangle<int>::leftTopRightBottom (titleRight, header.getY(), juce::jmax (titleRight, panelRight),
-                                                                          header.getBottom());
-        const auto body = juce::Rectangle<int>::leftTopRightBottom (left, top, juce::jmax (left + 1, panelRight),
-                                                                    top + TuneControls::getBodyHeight());
-
+        // Tune's panel (see TuneControls): Key and Lock to Key in the rest
+        // of the top row, after the name; the rest under it.
+        const int titleRight = juce::jmin (titleRow.getX() + juce::GlyphArrangement::getStringWidthInt (getTitleFont(), getTitleText()) + 16,
+                                           titleRow.getRight());
         tuneControls->setBounds (getLocalBounds());
-        const auto knobArea = tuneControls->layOut (headerFree, body);
+        const auto knobArea = tuneControls->layOut (titleRow.withLeft (titleRight), contentArea);
 
         for (int i = 0; i < knobs.size(); ++i)
             knobs[i]->setBounds (knobArea.getX() + i * (Knob::preferredWidth + gap), knobArea.getY(),
@@ -179,11 +206,11 @@ void PluginEditor::resized()
         return;
     }
 
-    const int cols = columnsFor (getWidth());
+    const int cols = columnsFor (contentArea.getWidth());
 
     for (int i = 0; i < knobs.size(); ++i)
-        knobs[i]->setBounds (left + (i % cols) * (Knob::preferredWidth + gap),
-                             top + (i / cols) * (Knob::preferredHeight + gap),
+        knobs[i]->setBounds (contentArea.getX() + (i % cols) * (Knob::preferredWidth + gap),
+                             contentArea.getY() + (i / cols) * (Knob::preferredHeight + gap),
                              Knob::preferredWidth, Knob::preferredHeight);
 }
 
