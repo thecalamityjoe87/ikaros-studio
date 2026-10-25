@@ -2,6 +2,7 @@
 
 #include "ui/widgets/IconButton.h"
 #include "ui/toolbar/LcdDisplay.h"
+#include "ui/toolbar/MetronomeButton.h"
 
 namespace ikaros
 {
@@ -41,7 +42,7 @@ private:
     IconButton loopButton      { "Loop", Icon::loop };
     LcdDisplay lcd;
     IconButton tunerButton     { "Tuner", Icon::tuningFork };
-    IconButton metronomeButton { "Metronome", Icon::metronome };
+    MetronomeButton metronomeButton;
     IconButton countInButton   { "Count-in", Icon::timer, "Count-in" };
 
     int bpmDragIndex = 0;   // the tempo change a BPM drag in the readout is changing

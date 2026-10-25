@@ -620,7 +620,9 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::makeInstrumentFromRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
-                                   CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
+                                   CommandIDs::countInTwoBars, CommandIDs::metronomeVolume20, CommandIDs::metronomeVolume40,
+                                   CommandIDs::metronomeVolume60, CommandIDs::metronomeVolume80, CommandIDs::metronomeVolume100,
+                                   CommandIDs::toggleMidiCycleTakes,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut, CommandIDs::zoomReset,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
@@ -853,6 +855,19 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("2 Bars", "Play two bars of clicks before recording starts", "Transport", 0);
             info.setTicked (engine.getCountInBars() == 2);
             break;
+
+        // The Metronome Volume submenu: the step matching the click's level is ticked.
+        case CommandIDs::metronomeVolume20:
+        case CommandIDs::metronomeVolume40:
+        case CommandIDs::metronomeVolume60:
+        case CommandIDs::metronomeVolume80:
+        case CommandIDs::metronomeVolume100:
+        {
+            const int percent = 20 * (id - CommandIDs::metronomeVolume20 + 1);
+            info.setInfo (juce::String (percent) + "%", "Set how loud the metronome clicks", "Transport", 0);
+            info.setTicked (juce::roundToInt (engine.getMetronomeVolume() * 100.0f) == percent);
+            break;
+        }
 
         case CommandIDs::toggleMidiCycleTakes:
             info.setInfo ("Keep MIDI Loop Passes as Takes",
@@ -1137,6 +1152,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::countInOff:      engine.setCountInBars (0); break;
         case CommandIDs::countInOneBar:   engine.setCountInBars (1); break;
         case CommandIDs::countInTwoBars:  engine.setCountInBars (2); break;
+        case CommandIDs::metronomeVolume20:
+        case CommandIDs::metronomeVolume40:
+        case CommandIDs::metronomeVolume60:
+        case CommandIDs::metronomeVolume80:
+        case CommandIDs::metronomeVolume100:
+            engine.setMetronomeVolume (0.2f * (float) (info.commandID - CommandIDs::metronomeVolume20 + 1));
+            break;
         case CommandIDs::toggleMidiCycleTakes: engine.setMidiCycleTakes (! engine.getMidiCycleTakes()); break;
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;

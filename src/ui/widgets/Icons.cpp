@@ -46,6 +46,7 @@ namespace
             case Icon::record:    return "M12 5a7 7 0 1 1 0 14a7 7 0 1 1 0-14z";
             case Icon::loop:      return "M17 2l3 3-3 3 M4 11V9a4 4 0 0 1 4-4h12 M7 22l-3-3 3-3 M20 13v2a4 4 0 0 1-4 4H4";
             case Icon::metronome: return "M9 3h6l4 18H5z M12 15l5-8 M7 17h10";
+            case Icon::metronomeBody: return "M9 3h6l4 18H5z M7 17h10";
             case Icon::search:    return "M11 5a6 6 0 1 1 0 12a6 6 0 1 1 0-12z M20 20l-4.5-4.5";
             // Lucide "piano": a grand piano from the side.
             case Icon::keyboards: return "M10 13v4 M14 13v4 M18 13v4 M2 13h20 M6 13v4 "

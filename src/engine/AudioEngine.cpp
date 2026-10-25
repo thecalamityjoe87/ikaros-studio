@@ -2238,6 +2238,16 @@ void AudioEngine::setMetronomeEnabled (bool enabled)
     impl->edit->clickTrackEnabled = enabled;
 }
 
+void AudioEngine::setMetronomeVolume (float gain)
+{
+    impl->edit->setClickTrackVolume (gain);
+}
+
+float AudioEngine::getMetronomeVolume() const
+{
+    return impl->edit != nullptr ? impl->edit->getClickTrackVolume() : 0.6f;
+}
+
 void AudioEngine::setMidiCycleTakes (bool keepAsTakes)
 {
     preferences->set (settings::midiCycleTakes, keepAsTakes);

@@ -22,7 +22,7 @@ namespace
 
 TransportBar::TransportBar (AudioEngine& e) : engine (e)
 {
-    for (auto* b : { &toStartButton, &recordButton, &loopButton, &tunerButton, &metronomeButton, &countInButton })
+    for (auto* b : std::initializer_list<IconButton*> { &toStartButton, &recordButton, &loopButton, &tunerButton, &metronomeButton, &countInButton })
     {
         b->setCornerRadius (size::radiusLarge);
         addAndMakeVisible (b);
@@ -126,6 +126,10 @@ void TransportBar::update()
     recordButton.setTitle (state.recording ? "Stop recording" : "Record");
     loopButton.setToggleState (state.looping, juce::dontSendNotification);
     metronomeButton.setToggleState (state.metronome, juce::dontSendNotification);
+    // The arm swings whenever clicks can be heard: the metronome while
+    // playing, and a count-in (which clicks even with the metronome off).
+    metronomeButton.setSwing (state.playing && (state.metronome || state.countingIn)
+                                  ? std::optional<double> (state.positionBeats) : std::nullopt);
     countInButton.setToggleState (state.countIn, juce::dontSendNotification);
     lcd.setState (state, engine.getKeyName());
 

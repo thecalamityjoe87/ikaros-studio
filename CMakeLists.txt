@@ -453,6 +453,7 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/Toolbar.h                src/ui/toolbar/Toolbar.cpp
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
+    src/ui/toolbar/MetronomeButton.h        src/ui/toolbar/MetronomeButton.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/library/PreviewButton.h          src/ui/library/PreviewButton.cpp
     src/ui/library/ManageSoundsDialog.h       src/ui/library/ManageSoundsDialog.cpp

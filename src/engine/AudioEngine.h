@@ -266,6 +266,12 @@ public:
     void setLoopRangeBeats (double startBeat, double endBeat);
     void setMetronomeEnabled (bool);
 
+    /** The click's level, 0.2 to 1 (Tracktion's range; off is
+        setMetronomeEnabled). Kept in the session without an undo step, and
+        remembered as the level new sessions start with. */
+    void setMetronomeVolume (float gain);
+    float getMetronomeVolume() const;
+
     /** MIDI cycle recording: keep each pass as a take of one region (true),
         or merge every pass's notes into the region (false, the default).
         An app preference (Preferences, settings::midiCycleTakes). Audio
