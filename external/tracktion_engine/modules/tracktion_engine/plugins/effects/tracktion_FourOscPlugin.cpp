@@ -690,7 +690,9 @@ public:
     void noteKeyStateChanged() override     {}
 
 private:
-    float paramValue (AutomatableParameter::Ptr param)
+    // By reference: a copy of the Ptr is two atomic reference-count changes, and
+    // updateParams calls this ~50 times per voice every 32 samples on the audio thread.
+    float paramValue (const AutomatableParameter::Ptr& param)
     {
         jassert (param != nullptr);
         if (param == nullptr)
@@ -1792,7 +1794,7 @@ void FourOscPlugin::clearModulation (ModSource src, AutomatableParameter::Ptr pa
     jassertfalse;
 }
 
-float FourOscPlugin::paramValue (AutomatableParameter::Ptr param)
+float FourOscPlugin::paramValue (const AutomatableParameter::Ptr& param)
 {
     jassert (param != nullptr);
     if (param == nullptr)
