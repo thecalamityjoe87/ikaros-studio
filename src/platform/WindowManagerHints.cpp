@@ -2,7 +2,8 @@
 
 // This is the only file in the app that talks to the windowing system
 // directly, because JUCE has no API for window-manager state. Keep platform
-// code here, out of src/ui/.
+// code here, out of src/ui/. (The macOS inline title bar, which needs
+// Objective-C++, is in WindowManagerHints_mac.mm.)
 
 #if JUCE_LINUX || JUCE_BSD
 

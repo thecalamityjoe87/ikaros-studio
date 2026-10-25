@@ -16,8 +16,8 @@ namespace ikaros
     muted text, followed by a small dot while it has unsaved changes.
 
     Drag the empty parts to move the window; double-click to maximise/restore.
-    On macOS the menus move to the system menu bar and the window buttons sit
-    on the left, following platform convention.
+    On macOS the menus move to the system menu bar and the window's own
+    traffic lights sit on the left, following platform convention.
 */
 class MenuBar  : public juce::Component,
                  public juce::SettableTooltipClient   // adds setTooltip()
@@ -57,6 +57,7 @@ private:
     juce::String sessionName;
     bool unsavedChanges = false;
     juce::Rectangle<int> freeArea;   // between the menus and the window buttons
+    int nativeButtonsWidth = 0;      // macOS: the space kept for the traffic lights
     juce::Image logo;                // the app icon, drawn small beside the name
 
     int getMenusWidth();

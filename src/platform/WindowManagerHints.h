@@ -31,4 +31,18 @@ void setMaximised (juce::DocumentWindow&, bool shouldBeMaximised);
     (mouse button held). Linux only; returns false elsewhere. */
 bool startWindowManagerDrag (juce::DocumentWindow&);
 
+#if JUCE_MAC
+/*  macOS: an inline title bar. The window keeps its native title bar, so the
+    traffic lights, full screen, tiling and minimising are the system's own,
+    but it's made transparent with our content drawn under it, so the buttons
+    sit at the left of the MenuBar strip. Needs a window with a native title
+    bar. JUCE resets the window style when leaving full screen, so call this
+    again whenever the window may have changed; it does nothing if it's set. */
+void useInlineTitleBar (juce::DocumentWindow&);
+
+/** macOS: how much of the strip's left edge the traffic lights need, or 0
+    when they aren't shown there (e.g. in full screen). */
+int getInlineTitleBarButtonsWidth (const juce::DocumentWindow&);
+#endif
+
 } // namespace ikaros::platform

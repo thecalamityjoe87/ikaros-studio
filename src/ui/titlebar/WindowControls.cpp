@@ -81,16 +81,9 @@ void WindowControls::resized()
 {
     auto r = getLocalBounds();
 
-   #if JUCE_MAC
-    // macOS convention: close on the left.
-    closeButton.setBounds (r.removeFromLeft (buttonWidth));
-    minimiseButton.setBounds (r.removeFromLeft (buttonWidth));
-    maximiseButton.setBounds (r.removeFromLeft (buttonWidth));
-   #else
     minimiseButton.setBounds (r.removeFromLeft (buttonWidth));
     maximiseButton.setBounds (r.removeFromLeft (buttonWidth));
     closeButton.setBounds (r.removeFromLeft (buttonWidth));
-   #endif
 }
 
 } // namespace ikaros

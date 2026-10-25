@@ -24,13 +24,18 @@ public:
         then moves the window itself. */
     virtual bool startWindowManagerDrag() = 0;
 
+    /** How much of the title bar's left edge the OS's own window buttons use
+        (macOS), or 0 where the app draws them (WindowControls). */
+    virtual int getNativeButtonsWidth() const = 0;
+
     void toggleMaximised()      { setMaximised (! isMaximised()); }
 };
 
 //==============================================================================
 /**
     Minimise / maximise-restore / close buttons, drawn by the app so they look
-    the same on every OS and desktop.
+    the same on Windows and every Linux desktop. (macOS uses the system's
+    own traffic lights instead; see MainWindow.)
 
     They act on whatever DocumentWindow this component lives in, so they can be
     placed anywhere in the UI (we put them in the MenuBar strip).

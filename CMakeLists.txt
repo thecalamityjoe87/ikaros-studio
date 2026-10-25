@@ -439,6 +439,10 @@ set(IKAROS_PLATFORM_SOURCES
     src/platform/AudioHardware.h       src/platform/AudioHardware.cpp
     src/platform/SystemAppearance.h    src/platform/SystemAppearance.cpp)
 
+if(APPLE)
+    list(APPEND IKAROS_PLATFORM_SOURCES src/platform/WindowManagerHints_mac.mm)
+endif()
+
 set(IKAROS_UI_SOURCES
     # theme: colours/sizes, fonts, and the LookAndFeel that styles JUCE widgets
     src/ui/theme/Tokens.h                   src/ui/theme/Family.h

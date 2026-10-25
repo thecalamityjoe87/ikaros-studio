@@ -8,11 +8,17 @@ namespace ikaros
 MainWindow::MainWindow (const juce::String& name, AudioEngine& engine)
     : juce::DocumentWindow (name, theme().windowBg, juce::DocumentWindow::allButtons)
 {
-    // No OS title bar and no JUCE title bar either: the app's MenuBar strip
-    // is the title bar, with its own window buttons (see ui/titlebar).
-    // That keeps the window identical on every OS and desktop.
+    // No JUCE title bar: the app's MenuBar strip is the title bar.
+    // On Windows and Linux there's no OS title bar either, and the strip has
+    // its own window buttons (see ui/titlebar). On macOS the window keeps its
+    // native title bar, made transparent so the system's traffic lights sit
+    // in the strip (see platform::useInlineTitleBar).
+   #if JUCE_MAC
+    setUsingNativeTitleBar (true);
+   #else
     setUsingNativeTitleBar (false);
     setTitleBarHeight (0);
+   #endif
     setTitleBarButtonsRequired (0, false);
 
     // setContentOwned: the window deletes the component when it closes.
@@ -21,6 +27,12 @@ MainWindow::MainWindow (const juce::String& name, AudioEngine& engine)
 
     setResizable (true, false);
     setResizeLimits (MainComponent::minWindowWidth, MainComponent::minWindowHeight, 16384, 16384);
+
+   #if JUCE_MAC
+    // After setResizable(), which recreates the native window.
+    platform::useInlineTitleBar (*this);
+   #endif
+
     // No bigger than the screen (a large interface size makes the window's units bigger on it).
     auto size = juce::Point<int> (getWidth(), getHeight());
 
@@ -83,9 +95,38 @@ void MainWindow::setMaximisedFlag (bool m)
     }
 }
 
+int MainWindow::getNativeButtonsWidth() const
+{
+   #if JUCE_MAC
+    return platform::getInlineTitleBarButtonsWidth (*this);
+   #else
+    return 0;
+   #endif
+}
+
 void MainWindow::timerCallback()
 {
     setMaximisedFlag (platform::isMaximised (*this));
+}
+
+//==============================================================================
+// setTitleBarButtonsRequired (0) hides JUCE's own buttons, but it also drops
+// these flags. On Windows, JUCE ignores clicks on the button areas reported by
+// findControlAtPoint unless they're set, and they're also what gives the
+// window Snap Layouts and minimise-from-taskbar. On macOS they enable the
+// native close and minimise buttons. (Linux doesn't need them: there they
+// would change the window-manager hints.)
+int MainWindow::getDesktopWindowStyleFlags() const
+{
+    auto flags = juce::DocumentWindow::getDesktopWindowStyleFlags();
+
+   #if JUCE_WINDOWS || JUCE_MAC
+    flags |= juce::ComponentPeer::windowHasMinimiseButton
+           | juce::ComponentPeer::windowHasMaximiseButton
+           | juce::ComponentPeer::windowHasCloseButton;
+   #endif
+
+    return flags;
 }
 
 //==============================================================================
@@ -107,6 +148,12 @@ void MainWindow::resized()
 {
     juce::DocumentWindow::resized();
     rememberRestoredBounds();
+
+   #if JUCE_MAC
+    // Leaving full screen resets the window style (and so resizes the
+    // content); put the inline title bar back.
+    platform::useInlineTitleBar (*this);
+   #endif
 }
 
 void MainWindow::rememberRestoredBounds()

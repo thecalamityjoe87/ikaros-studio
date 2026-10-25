@@ -18,7 +18,10 @@ MenuBar::MenuBar (juce::MenuBarModel* m)
      #endif
 {
     addAndMakeVisible (menus);
+
+   #if ! JUCE_MAC   // macOS shows the window's own buttons in the strip (see resized())
     addAndMakeVisible (windowControls);
+   #endif
 
     // ImageCache decodes the embedded PNG once and keeps it, so asking for it
     // again (e.g. after the title bar is recreated) costs nothing.
@@ -40,6 +43,18 @@ void MenuBar::setSessionStatus (const juce::String& name, bool /*isUntitled*/, b
 void MenuBar::updateWindowState()
 {
     windowControls.update();
+
+   #if JUCE_MAC
+    // The traffic lights leave the strip in full screen, so their space comes and goes.
+    if (auto* window = dynamic_cast<MaximisableWindow*> (getWindow()))
+    {
+        if (window->getNativeButtonsWidth() != nativeButtonsWidth)
+        {
+            resized();
+            repaint();
+        }
+    }
+   #endif
 
     // Keep the OS window title (taskbar, Alt+Tab) in step with ours.
     if (auto* window = findParentComponentOfClass<juce::DocumentWindow>())
@@ -206,7 +221,10 @@ void MenuBar::resized()
     auto r = getLocalBounds().withTrimmedBottom (1);
 
    #if JUCE_MAC
-    windowControls.setBounds (r.removeFromLeft (WindowControls::preferredWidth));
+    // Keep clear of the native traffic lights, which the window draws over the strip.
+    auto* window = dynamic_cast<MaximisableWindow*> (getWindow());
+    nativeButtonsWidth = window != nullptr ? window->getNativeButtonsWidth() : 0;
+    r.removeFromLeft (nativeButtonsWidth);
    #else
     windowControls.setBounds (r.removeFromRight (WindowControls::preferredWidth));
    #endif
