@@ -1,4 +1,5 @@
 #include "ui/dialogs/SessionChooser.h"
+#include "BinaryData.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -12,6 +13,11 @@ namespace
 {
     constexpr int tileWidth = 200, tileGap = 16;
     constexpr int sidebarWidth = 210, headerHeight = 64, footerHeight = 72;
+    constexpr int contentPadding = 24, fieldLabelWidth = 48, sidebarLogoSize = 24;
+
+    // Exactly three tile columns, padded evenly; the scrollbar sits inside the right-hand padding.
+    constexpr int scrollbarGap = 6;
+    constexpr int panelWidth = sidebarWidth + 2 * contentPadding + 3 * tileWidth + 2 * tileGap;
 
     struct TemplateInfo
     {
@@ -216,6 +222,10 @@ SessionChooser::SessionChooser (AudioEngine& e, Callbacks c)
     setTitle ("Choose a session");
     setWantsKeyboardFocus (true);
     setAlwaysOnTop (true);
+
+    // ImageCache keeps the decoded PNG, which the title bar has already asked for.
+    logo = juce::ImageCache::getFromMemory (BinaryData::io_github_thecalamityjoe87_IkarosStudio_png,
+                                            BinaryData::io_github_thecalamityjoe87_IkarosStudio_pngSize);
 
     newNav = std::make_unique<NavItem> ("New Session", Icon::plus);
     recentNav = std::make_unique<NavItem> ("Recent", Icon::clock);
@@ -467,12 +477,29 @@ void SessionChooser::paint (juce::Graphics& g)
     g.setColour (theme().border);
     g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), size::radiusPill, 1.0f);
 
+    // Branding: [logo] Ikaros Studio
+    auto brand = sidebar.withHeight (headerHeight).reduced (20, 0);
+
+    if (logo.isValid())
+    {
+        // As in the title bar: draw just the rounded tile (the PNG has a 16px
+        // transparent margin of 256) and outline it so it shows on dark themes.
+        const auto tile = brand.removeFromLeft (sidebarLogoSize).withSizeKeepingCentre (sidebarLogoSize, sidebarLogoSize).toFloat();
+        const auto source = logo.getBounds().reduced (logo.getWidth() / 16);
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.drawImage (logo, (int) tile.getX(), (int) tile.getY(), (int) tile.getWidth(), (int) tile.getHeight(),
+                     source.getX(), source.getY(), source.getWidth(), source.getHeight());
+
+        g.setColour (theme().logoOutline);
+        g.drawRoundedRectangle (tile.reduced (0.5f), sidebarLogoSize * 52.0f / 224.0f, 1.0f);
+        brand.removeFromLeft (10);
+    }
+
     g.setColour (theme().text);
     g.setFont (fonts::uiBold (textSize::md));
-    g.drawText ("Ikaros Studio", sidebar.reduced (20, 0).withHeight (headerHeight).withY (sidebar.getY()),
-                juce::Justification::centredLeft);
+    g.drawText ("Ikaros Studio", brand, juce::Justification::centredLeft);
 
-    auto title = header.reduced (24, 0);
+    auto title = header.reduced (contentPadding, 0);
     g.setFont (fonts::uiBold (textSize::display));
     g.drawText (page == Page::newSession ? "Choose a template" : "Recent sessions", title, juce::Justification::centredLeft);
 
@@ -492,20 +519,21 @@ void SessionChooser::paint (juce::Graphics& g)
 
         auto label = [&g] (const juce::String& text, juce::Component& field)
         {
-            g.drawText (text, field.getBounds().withX (field.getX() - 60).withWidth (54), juce::Justification::centredRight);
+            g.drawText (text, field.getBounds().withX (field.getX() - fieldLabelWidth).withWidth (fieldLabelWidth - 6),
+                        juce::Justification::centredRight);
         };
 
         label ("Tempo", tempoField);
         label ("Time", timeSignatureBox);
         label ("Key", keyRootBox);
-        g.drawText ("bpm", tempoField.getBounds().translated (tempoField.getWidth() + 6, 0).withWidth (40),
+        g.drawText ("bpm", tempoField.getBounds().translated (tempoField.getWidth() + 6, 0).withWidth (30),
                     juce::Justification::centredLeft);
     }
 }
 
 void SessionChooser::resized()
 {
-    panel = getLocalBounds().withSizeKeepingCentre (juce::jmin (1060, getWidth() - 64),
+    panel = getLocalBounds().withSizeKeepingCentre (juce::jmin (panelWidth, getWidth() - 64),
                                                     juce::jmin (700, getHeight() - 64));
     auto r = panel;
     sidebar = r.removeFromLeft (sidebarWidth);
@@ -519,22 +547,23 @@ void SessionChooser::resized()
 
     header = r.removeFromTop (headerHeight);
     footer = r.removeFromBottom (footerHeight);
-    viewport.setBounds (r.reduced (24, 0).withTrimmedBottom (12));
+    viewport.setBounds (r.reduced (contentPadding, 0).withTrimmedBottom (12)
+                         .withTrimmedRight (-(scrollbarGap + size::scrollbarWidth)));
 
-    auto f = footer.reduced (24, 18);
-    chooseButton.setBounds (f.removeFromRight (110));
-    f.removeFromRight (10);
-    cancelButton.setBounds (f.removeFromRight (100));
+    auto f = footer.reduced (contentPadding, 18);
+    chooseButton.setBounds (f.removeFromRight (90));
+    f.removeFromRight (8);
+    cancelButton.setBounds (f.removeFromRight (84));
 
     // Tempo [120] bpm   Time [4/4]   Key [C] [Major]
-    f.removeFromLeft (60);
-    tempoField.setBounds (f.removeFromLeft (56));
-    f.removeFromLeft (40 + 60);
-    timeSignatureBox.setBounds (f.removeFromLeft (80));
-    f.removeFromLeft (60);
-    keyRootBox.setBounds (f.removeFromLeft (70));
-    f.removeFromLeft (8);
-    keyModeBox.setBounds (f.removeFromLeft (100));
+    f.removeFromLeft (fieldLabelWidth);
+    tempoField.setBounds (f.removeFromLeft (52));
+    f.removeFromLeft (32 + fieldLabelWidth);
+    timeSignatureBox.setBounds (f.removeFromLeft (64));
+    f.removeFromLeft (fieldLabelWidth);
+    keyRootBox.setBounds (f.removeFromLeft (56));
+    f.removeFromLeft (6);
+    keyModeBox.setBounds (f.removeFromLeft (84));
 
     layoutTiles();
 }

@@ -1,4 +1,5 @@
 #include "ui/widgets/MeterSlider.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
 
@@ -28,6 +29,7 @@ void MeterSlider::setLevel (StereoLevel level)
 
 void MeterSlider::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("MeterSlider");
     // juce::Slider normally asks the LookAndFeel to draw it. This draws it
     // itself: the meter bars across the handle's travel, then the handle.
     // getPositionOfValue gives the handle's x for a value, so the bars line

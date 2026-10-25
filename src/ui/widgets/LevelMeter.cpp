@@ -1,4 +1,5 @@
 #include "ui/widgets/LevelMeter.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Tokens.h"
 
 namespace ikaros
@@ -74,6 +75,7 @@ void LevelMeter::paintBar (juce::Graphics& g, juce::Rectangle<float> r, float va
 
 void LevelMeter::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LevelMeter");
     auto r = getLocalBounds().toFloat();
 
     if (orientation == Orientation::horizontal)

@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementLane.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/arrangement/ArrangementRegionDrag.h"
 #include "engine/LiveWaveform.h"
@@ -155,6 +156,7 @@ void ArrangementView::Lane::setRecordingRange (double startBeat, double endBeat)
 
 void ArrangementView::Lane::paintOverChildren (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Lane::paintOverChildren");
     if (recordEnd > recordStart)
     {
         // A red region that grows with the playhead while recording.
@@ -235,6 +237,7 @@ void ArrangementView::Lane::paintLiveWaveform (juce::Graphics& g, juce::Rectangl
 
 void ArrangementView::Lane::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Lane");
     auto r = getLocalBounds();
 
     if (selected)

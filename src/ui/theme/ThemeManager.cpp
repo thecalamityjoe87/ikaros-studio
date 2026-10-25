@@ -1,5 +1,4 @@
 #include "ui/theme/ThemeManager.h"
-#include "platform/SystemAppearance.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Theme.h"
 
@@ -8,8 +7,6 @@ namespace ikaros
 
 namespace
 {
-    constexpr int systemCheckMs = 2000;   // how often Match system asks the desktop (Linux)
-
     /** A TextEditor keeps the colour each piece of its text was typed in,
         and the colour of its "Search..." placeholder, so after a theme change
         they're given the new colours. Walks the component and its children. */
@@ -50,20 +47,12 @@ void ThemeManager::preferenceChanged (const juce::String& key)
 }
 
 void ThemeManager::darkModeSettingChanged()   { update(); }
-void ThemeManager::timerCallback()            { update(); }
 
 void ThemeManager::update()
 {
     const int choice = preferences.get (settings::themeChoice);
     const bool matchSystem = choice != settings::ThemeChoice::light && choice != settings::ThemeChoice::dark;
-    const bool dark = matchSystem ? platform::systemPrefersDark() : choice == settings::ThemeChoice::dark;
-
-    // Only Match system needs to keep checking: JUCE tells us about changes
-    // on macOS and Windows, but on Linux the portal is asked every so often.
-    if (matchSystem)
-        startTimer (systemCheckMs);
-    else
-        stopTimer();
+    const bool dark = matchSystem ? systemAppearance.prefersDark() : choice == settings::ThemeChoice::dark;
 
     const auto& wanted = dark ? darkPalette() : lightPalette();
 

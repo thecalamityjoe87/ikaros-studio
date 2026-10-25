@@ -11,8 +11,9 @@ namespace ikaros
     Plays an audio file on its own, outside the session, so the user can
     hear a loop or file in the library before using it.
 
-    It adds itself to the audio device as an extra callback; JUCE mixes it
-    with the session's output. Call from the message thread.
+    While a file plays it adds itself to the audio device as an extra
+    callback; JUCE mixes it with the session's output. Call from the message
+    thread.
 */
 class AudioPreview  : private juce::ChangeListener
 {
@@ -31,6 +32,9 @@ public:
     /** The file playing now, or an empty File. */
     juce::File getPlayingFile() const;
 
+    /** For tests: whether the player is on the audio device now. */
+    bool isAttached() const noexcept    { return attached; }
+
 private:
     juce::AudioDeviceManager& deviceManager;
     juce::AudioFormatManager& formats;
@@ -40,7 +44,10 @@ private:
     juce::AudioTransportSource transport;
     juce::AudioSourcePlayer player;
     juce::File file;
+    bool attached = false;      // whether player is one of the device's callbacks
 
+    void attach();
+    void detach();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;   // playback reached the end
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPreview)

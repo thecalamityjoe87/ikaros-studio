@@ -73,6 +73,7 @@ private:
     IconButton cancelButton { "Cancel", std::nullopt, "Cancel" };
     IconButton chooseButton { "Choose", std::nullopt, "Choose" };
 
+    juce::Image logo;   // the app icon, drawn beside the name at the top of the sidebar
     juce::Rectangle<int> panel, sidebar, header, footer;
 
     void showPage (Page);

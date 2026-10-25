@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -46,7 +46,7 @@ struct AlertWindowHelpers
         public:
             explicit AlertWindowImpl (const MessageBoxOptions& opts) : options (opts) {}
 
-            void runAsync (std::function<void (int)> recipient) override
+            void runAsync (std::function<void (std::optional<int>)> recipient) override
             {
                 if (auto* comp = setUpAlert())
                     comp->enterModalState (true, ModalCallbackFunction::create (std::move (recipient)), true);
@@ -54,7 +54,7 @@ struct AlertWindowHelpers
                     NullCheckedInvocation::invoke (recipient, 0);
             }
 
-            int runSync() override
+            std::optional<int> runSync() override
             {
                #if JUCE_MODAL_LOOPS_PERMITTED
                 if (auto comp = rawToUniquePtr (setUpAlert()))
@@ -82,14 +82,7 @@ struct AlertWindowHelpers
                 auto& lf = component != nullptr ? component->getLookAndFeel()
                                                 : LookAndFeel::getDefaultLookAndFeel();
 
-                alert = lf.createAlertWindow (options.getTitle(),
-                                              options.getMessage(),
-                                              options.getButtonText (0),
-                                              options.getButtonText (1),
-                                              options.getButtonText (2),
-                                              options.getIconType(),
-                                              options.getNumButtons(),
-                                              component);
+                alert = lf.createAlertWindowForOptions (options).release();
 
                 if (alert == nullptr)
                 {

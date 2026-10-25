@@ -1,4 +1,5 @@
 #include "ui/arrangement/RegionComponent.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -18,10 +19,13 @@ namespace
     constexpr float fadeHandleInset = 7.0f;   // a fade handle stays this far inside the edge, so it can be grabbed
     constexpr int fadeHandleReach = 7;        // how close the mouse has to be to grab one
     constexpr float repeatAlpha = 0.45f;   // repeats are drawn fainter than the original
+
+    juce::Font nameFont()   { return fonts::uiBold (textSize::xs); }
 }
 
 RegionComponent::RegionComponent (const RegionInfo& r, Family f)
-    : info (r), family (f)
+    : info (r), family (f),
+      nameWidth (juce::GlyphArrangement::getStringWidth (nameFont(), r.name))
 {
     setWantsKeyboardFocus (true);
     setTitle (r.name + " region");
@@ -46,6 +50,9 @@ void RegionComponent::update (const RegionInfo& r, Family f, bool isSelected, Ou
     // track's knob was turned).
     if (r == info && f == family && isSelected == selected && newOutline == outline)
         return;
+
+    if (r.name != info.name)
+        nameWidth = juce::GlyphArrangement::getStringWidth (nameFont(), r.name);
 
     info = r;
     family = f;
@@ -202,16 +209,33 @@ void RegionComponent::resized()
 //==============================================================================
 void RegionComponent::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("RegionComponent");
     auto r = getLocalBounds().toFloat();
+
+    // While playing, the playhead moving over a region repaints only a thin
+    // strip of it, ~30 times a second for every region it crosses. So the
+    // costly parts (the shaped clip, text, icons, notes) are only drawn where
+    // they meet the area being repainted. Anti-aliased edges can reach a
+    // pixel or so past a part's area, hence the margin.
+    const auto clip = g.getClipBounds();
+    auto shows = [visible = clip.toFloat()] (juce::Rectangle<float> area) { return visible.intersects (area.expanded (2.0f)); };
 
     // Clip everything to the rounded shape so the strip gets rounded top corners.
     juce::Path shape;
     shape.addRoundedRectangle (r, corner);
 
+    // Away from the corners the shape is the plain rectangle, which the
+    // component's own bounds already clip to.
+    const int c = (int) std::ceil (corner);
+    const bool clipReachesCorner = (clip.getX() < c || clip.getRight() > getWidth() - c)
+                                && (clip.getY() < c || clip.getBottom() > getHeight() - c);
+
     {
         // ScopedSaveState restores the clip region when it goes out of scope (RAII).
         juce::Graphics::ScopedSaveState save (g);
-        g.reduceClipRegion (shape);
+
+        if (clipReachesCorner)
+            g.reduceClipRegion (shape);
 
         // The body is a faint tint of the track's family colour, the header
         // strip the full colour, with dark or white text to suit it.
@@ -240,15 +264,21 @@ void RegionComponent::paint (juce::Graphics& g)
         // A Drummer region has a small drummer before its name.
         if (info.isDrummer && nameArea.getWidth() >= 30.0f)
         {
-            icons::draw (g, Icon::drummer, nameArea.removeFromLeft (13.0f), label, 13.0f, 1.9f);
+            if (const auto icon = nameArea.removeFromLeft (13.0f); shows (icon))
+                icons::draw (g, Icon::drummer, icon, label, 13.0f, 1.9f);
+
             nameArea.removeFromLeft (4.0f);
         }
 
-        g.setColour (label);
-        g.setFont (fonts::uiBold (textSize::xs));
-        g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+        // The name is drawn from the left of its area (cut short if it doesn't fit).
+        if (shows (nameArea.withWidth (juce::jmin (nameArea.getWidth(), nameWidth))))
+        {
+            g.setColour (label);
+            g.setFont (nameFont());
+            g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+        }
 
-        if (! badge.isEmpty())
+        if (! badge.isEmpty() && shows (badge))
         {
             const bool full = getWidth() >= fullTakeBadgeMinWidth;
             g.setColour (label.withAlpha (hoveringTakeBadge ? 0.32f : 0.18f));
@@ -297,7 +327,8 @@ void RegionComponent::paint (juce::Graphics& g)
                 g.fillRect (handle);
             }
 
-            icons::draw (g, Icon::loop, handle, label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
+            if (shows (handle))
+                icons::draw (g, Icon::loop, handle, label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.6f);
         }
 
         // The trim handle: the same, in the bottom-right corner, with a resize arrow.
@@ -309,12 +340,27 @@ void RegionComponent::paint (juce::Graphics& g)
             g.fillRect (trimHandle);
 
             // Shifted half a pixel and stroked 1 px wide, so the shaft sits on one pixel row instead of straddling two.
-            icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
-                         label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
+            if (shows (trimHandle))
+                icons::draw (g, Icon::trim, trimHandle.translated (0.0f, 0.5f),
+                             label.withAlpha (active ? 1.0f : 0.55f), 16.0f, 1.5f);
         }
     }
 
-    if (outline == Outline::normal)
+    // Away from the corners, the outline in the clip is just its top and
+    // bottom edges: filled as two strips, the same pixels as stroking the
+    // whole shape. (Half of the normal 1px stroke shows, since it's centred
+    // on the edge; the selected 1.5px one is inset, so all of it does.)
+    const float outlineWidth = outline == Outline::normal ? 0.5f : 1.5f;
+
+    if (! clipReachesCorner)
+    {
+        g.setColour (outline == Outline::normal ? trackColour().withAlpha (0.4f)
+                                                : theme().arrangement.selectionOutline.withAlpha (outline == Outline::selectedTrack ? 1.0f : 0.35f));
+        const auto span = getLocalBounds().toFloat().withLeft ((float) clip.getX()).withRight ((float) clip.getRight());
+        g.fillRect (span.withHeight (outlineWidth));
+        g.fillRect (span.withTop (span.getBottom() - outlineWidth));
+    }
+    else if (outline == Outline::normal)
     {
         g.setColour (trackColour().withAlpha (0.4f));
         g.strokePath (shape, juce::PathStrokeType (1.0f));
@@ -392,6 +438,10 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
     const float noteH = juce::jlimit (2.0f, 4.0f, rowH);
     const float pxPerBeat = area.getWidth() / (float) range.getLength();
 
+    // The pitch range above comes from all the notes on show, so the rows
+    // don't move; only the notes in the strip being repainted are drawn.
+    const auto clip = g.getClipBounds().toFloat();
+
     for (size_t i = 0; i < cycleStarts.size(); ++i)
     {
         // The first pass is the original; the repeats are fainter.
@@ -404,8 +454,24 @@ void RegionComponent::paintMidiNotes (juce::Graphics& g, juce::Rectangle<float> 
 
             auto x = area.getX() + (float) (cycleStarts[i] + n.startBeat + shift) * pxPerBeat;
             auto w = juce::jmax (2.0f, (float) n.lengthBeats * pxPerBeat - 1.0f);
+
+            if (x + w + 1.0f < clip.getX() || x - 1.0f > clip.getRight())
+                continue;
+
             auto y = area.getY() + (float) (hi - n.pitch) * rowH + (rowH - noteH) * 0.5f;
-            g.fillRoundedRectangle (x, y, w, noteH, noteH * 0.5f);
+
+            // Between its rounded ends a note is a plain rectangle, far cheaper
+            // to fill than the rounded shape (the playhead strip usually
+            // crosses long notes there).
+            const float radius = noteH * 0.5f;
+
+            if (clip.getX() >= x + radius + 1.0f && clip.getRight() <= x + w - radius - 1.0f)
+            {
+                g.fillRect (juce::Rectangle<float> (x, y, w, noteH).withLeft (clip.getX()).withRight (clip.getRight()));
+                continue;
+            }
+
+            g.fillRoundedRectangle (x, y, w, noteH, radius);
         }
     }
 }
@@ -418,6 +484,7 @@ void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area
         return;
 
     const float pixelsPerBeat = area.getWidth() / (float) range.getLength();
+    const auto clip = g.getClipBounds().toFloat();
 
     for (bool fadeIn : { true, false })
     {
@@ -425,12 +492,12 @@ void RegionComponent::paintFades (juce::Graphics& g, juce::Rectangle<float> area
         // the part it turns down shaded. The automatic edge fades are less
         // than a pixel, so they don't show.
         const float length = juce::jmin (area.getWidth(), (float) getFadeLength (fadeIn) * pixelsPerBeat);
+        const float edge = fadeIn ? area.getX() : area.getRight();
+        const float end = fadeIn ? edge + length : edge - length;
 
-        if (length >= 1.0f)
+        // (Skipped when it's nowhere near the strip being repainted.)
+        if (length >= 1.0f && clip.intersects (area.withLeft (juce::jmin (edge, end)).withRight (juce::jmax (edge, end)).expanded (2.0f)))
         {
-            const float edge = fadeIn ? area.getX() : area.getRight();
-            const float end = fadeIn ? edge + length : edge - length;
-
             juce::Path faded;
             faded.startNewSubPath (edge, area.getY());
             faded.lineTo (end, area.getY());

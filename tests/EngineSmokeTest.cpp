@@ -13,6 +13,9 @@
 #include "engine/SessionViews.h"
 #include "engine/RecordingGuard.h"
 #include "engine/TestAudioDevice.h"
+#include "engine/AudioPreview.h"
+#include "engine/AudioLoadMeter.h"
+#include "engine/RealtimeAudioThread.h"            // which render workers it looks after
 #include "engine/Tuner.h"
 #include "engine/PedalStyles.h"
 #include "engine/PortedPedals.h"                     // the ported pedals' type names
@@ -26,6 +29,7 @@
 #include "engine/FlexHelpers.h"                   // ...and their warp markers
 #include "engine/TakeHelpers.h"                   // splitIntoPassTakes, to make takes without recording
 #include "engine/TunePlugin.h"                    // the Tune effect, driven directly
+#include "engine/SfzPlugin.h"                     // to point an SFZ instrument at a test file
 #include "engine/PitchAnalysis.h"                 // Pitch mode's analysis, and re-analysing renders
 #include "engine/PitchRender.h"
 #include "platform/AppFolders.h"
@@ -2241,6 +2245,29 @@ static void runPreferencesSection (const juce::File& dir)
             check (record (1.0) && regionCount() == before + 2 && tracks.inputs().getArmedTrack() == 0,
                    "with it on again, Record arms the selected track for its take, as before");
             engine.takeRecordingReport();
+        }
+
+        std::cout << "Previewing library files\n";
+        {
+            auto& preview = engine.getPreview();
+            const auto clip = folder.getChildFile ("Preview Click.wav");
+            writeClickWav (clip, 44100.0, 0.5, { 0.1 }, 0.5f);
+
+            check (! preview.isAttached(), "with nothing previewing, the preview player isn't on the audio device");
+            check (preview.play (clip) && preview.isAttached() && preview.getPlayingFile() == clip,
+                   "playing a file puts it on the device");
+            check (peakOf (device->process (24000)) > 0.2f, "and it's heard (resampled to the device's rate)");
+            runAudio (*device, 0.5);
+            pumpMessages();
+            check (preview.getPlayingFile() == juce::File() && ! preview.isAttached(),
+                   "when the file ends, the player leaves the device again");
+
+            preview.play (clip);
+            preview.stop();
+            device->close();
+            device->reopen();       // reorders the device's callbacks (see AudioEngine::reattachAudioCallbacks)
+            check (! preview.isAttached() && peakOf (device->process (24000)) == 0.0f,
+                   "stopping it does too, and it stays off (silent) when the device reopens");
         }
 
         prefs.resetAll();
@@ -4807,6 +4834,92 @@ static void runPedalsSection (const juce::File& dir)
         }
     }
 
+    std::cout << "Mono guitar goes through a pedal once, and stereo stays stereo\n";
+    {
+        // Mono guitar arrives the same on both channels, so a pedal runs its
+        // mono DSPs on the left only and copies the result. When the channels
+        // start to differ, the right channel's DSP takes over from the left
+        // one's state. Here the right channel is the guitar for the first
+        // second, then a quieter, shifted copy of it: from then on, it must
+        // sound exactly as that same input does through the left channel,
+        // which never stopped (no click, the Jet Flanger's sweep in step).
+        juce::AudioBuffer<float> guitar (1, 96000);
+        guitar.clear();
+        juce::WavAudioFormat wav;
+        const auto fixture = juce::File (IKAROS_TEST_FIXTURES).getChildFile ("pedals/di_guitar.wav");
+
+        if (std::unique_ptr<juce::AudioFormatReader> reader { wav.createReaderFor (fixture.createInputStream().release(), true) })
+            reader->read (&guitar, 0, 96000, 0, true, false);
+
+        constexpr int length = 96000, split = 48000, blockSize = 512;
+        const float* g = guitar.getReadPointer (0);
+        auto rightInput = [&] (int i) { return i < split ? g[i] : 0.5f * g[(i + 4801) % length]; };
+
+        // Plays left/right inputs through the plugin, in blocks.
+        auto render = [&] (tracktion::Plugin& plugin, const std::function<float (int)>& left, const std::function<float (int)>& right)
+        {
+            plugin.initialise ({ tracktion::TimePosition(), 48000.0, blockSize });
+            plugin.reset();
+            juce::AudioBuffer<float> buffer (2, length);
+
+            for (int i = 0; i < length; ++i)
+            {
+                buffer.setSample (0, i, left (i));
+                buffer.setSample (1, i, right (i));
+            }
+
+            for (int start = 0; start < length; start += blockSize)
+            {
+                tracktion::PluginRenderContext context (&buffer, start, std::min (blockSize, length - start),
+                                                        nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            return buffer;
+        };
+
+        auto maxDifference = [] (const float* a, const float* b, int from, int to)
+        {
+            float most = 0.0f;
+
+            for (int i = from; i < to; ++i)
+                most = std::max (most, std::abs (a[i] - b[i]));
+
+            return most;
+        };
+
+        auto* edit = TestAudioDevice::getEditOf (engine);
+        int tested = 0;
+
+        for (auto& style : getPedalStyles())
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = edit->getPluginCache().createNewPlugin (style.pluginType, {});
+
+            // Ours with mono DSPs (Spring Tank's is stereo).
+            if (dynamic_cast<GxPedalPlugin*> (plugin.get()) == nullptr || style.pluginType == SpringTankPlugin::xmlTypeName)
+                continue;
+
+            ++tested;
+            const auto name = plugin->getName();
+            const auto mixed = render (*plugin, [&] (int i) { return g[i]; }, rightInput);
+            const auto reference = render (*plugin, rightInput, rightInput);   // the right input, mono throughout
+
+            const auto* left = mixed.getReadPointer (0);
+            const auto* right = mixed.getReadPointer (1);
+            const auto copied = maxDifference (left, right, 0, split);
+            const auto takenOver = maxDifference (right, reference.getReadPointer (0), 0, length);
+            const auto stereo = maxDifference (left, right, split + blockSize, length);
+
+            check (copied == 0.0f, (name + ": mono in, the same out on both channels").toRawUTF8());
+            check (takenOver <= 1.0e-6f, (name + ": when the channels start to differ, the right one carries on without a jump (largest difference "
+                                          + juce::String (takenOver, 9) + ")").toRawUTF8());
+            check (stereo > 1.0e-3f, (name + ": stereo in, stereo out").toRawUTF8());
+        }
+
+        check (tested == 11, "(all eleven pedals with mono DSPs were tried)");
+    }
+
     std::cout << "All twenty pedals at once\n";
     {
         // How much of the computer's time the pedals need: two seconds of
@@ -4924,6 +5037,83 @@ static void runPedalsSection (const juce::File& dir)
         t = tracks.getTracks().back().id;
         check (types.size() == 12 && typesOn (t) == before, "twelve of them on a track come back, in order");
         check (knobs() == knobsBefore, "with their knobs");
+    }
+
+    std::cout << "Effects rest during silence, but never cut sound off\n";
+    {
+        // Our effects stop processing once their input has been silent for
+        // longer than their tail (SilenceSkip). Sound that comes back must be
+        // processed from its first block, just as after a short pause.
+        constexpr double sampleRate = 48000.0;
+        constexpr int blockSize = 512;
+        const int toneLength = (int) sampleRate;   // a second of A440
+
+        juce::AudioBuffer<float> tone (2, toneLength);
+
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < toneLength; ++i)
+                tone.setSample (ch, i, 0.3f * std::sin (juce::MathConstants<float>::twoPi * 440.0f * (float) i / (float) sampleRate));
+
+        // `pause` seconds of silence, then the tone: what the tone came out as.
+        auto play = [&] (te::Plugin& plugin, double pause)
+        {
+            plugin.initialise ({ te::TimePosition(), sampleRate, blockSize });
+            plugin.reset();
+
+            const int silent = (int) (pause * sampleRate);
+            juce::AudioBuffer<float> buffer (2, silent + toneLength);
+            buffer.clear();
+
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.copyFrom (ch, silent, tone, ch, 0, toneLength);
+
+            for (int start = 0; start < buffer.getNumSamples(); start += blockSize)
+            {
+                te::PluginRenderContext context (&buffer, start, std::min (blockSize, buffer.getNumSamples() - start),
+                                                 nullptr, 0.0, {}, true, false, true, false);
+                plugin.applyToBuffer (context);
+            }
+
+            juce::AudioBuffer<float> played (2, toneLength);
+
+            for (int ch = 0; ch < 2; ++ch)
+                played.copyFrom (ch, 0, buffer, ch, silent, toneLength);
+
+            return played;
+        };
+
+        auto db = [] (const juce::AudioBuffer<float>& b, int start, int num)
+        {
+            return juce::Decibels::gainToDecibels (b.getRMSLevel (0, start, num), -200.0f);
+        };
+
+        const char* types[] { AmpPlugin::xmlTypeName, TunePlugin::xmlTypeName, SpringTankPlugin::xmlTypeName,
+                              YellowDrivePlugin::xmlTypeName, GoldenBoostPlugin::xmlTypeName, LimiterPlugin::xmlTypeName,
+                              NoiseGatePlugin::xmlTypeName, DistortionPlugin::xmlTypeName, TremoloPlugin::xmlTypeName };
+
+        for (auto* type : types)
+        {
+            // (The Plugin::Ptr must be let go before the Edit goes.)
+            auto plugin = TestAudioDevice::getEditOf (engine)->getPluginCache().createNewPlugin (type, {});
+
+            if (plugin == nullptr)
+            {
+                check (false, (juce::String (type) + " can be made").toRawUTF8());
+                continue;
+            }
+
+            // 12 s more is longer than any of their tails (Spring Tank's is
+            // 4 s), and a whole number of cycles of the Tremolo's 5 Hz pulse.
+            const auto afterShortPause = play (*plugin, 0.1);
+            const auto afterLongPause = play (*plugin, 12.1);
+            const int firstPart = (int) (0.1 * sampleRate);
+            const auto name = plugin->getName();
+
+            check (std::abs (db (afterLongPause, 0, firstPart) - db (afterShortPause, 0, firstPart)) < 1.0f,
+                   (name + ": its first tenth of a second after a long silence sounds as after a short one").toRawUTF8());
+            check (std::abs (db (afterLongPause, 0, toneLength) - db (afterShortPause, 0, toneLength)) < 1.0f,
+                   (name + ": and the whole second does").toRawUTF8());
+        }
     }
 
     device.reset();
@@ -8485,6 +8675,31 @@ int main (int argc, char* argv[])
 
             check (tracks.effects().getSoundId (st) == sfzSound && engine.renderPeak (0.0, 1.5) > 0.05f,
                    "an SFZ instrument survives save and reopen, and still plays");
+
+            // The key range comes from the file's regions, not from playing
+            // each key: soft-only regions (which a loud test note would miss),
+            // moved up an octave by note_offset, cover 52 to 62.
+            auto keys = tracks.effects().getInstrumentKeyRange (st);
+            check (keys && keys->first == 0 && keys->second == 127, "(the test instrument covers every key)");
+
+            const auto softOnly = dir.getChildFile ("Soft Only.sfz");
+            softOnly.replaceWithText ("<control> default_path=" + juce::File (IKAROS_TEST_FIXTURES)
+                                          .getChildFile ("Test Pack/Instruments/Test Keys").getFullPathName() + "/\n"
+                                      "note_offset=12\n"
+                                      "<region> lokey=40 hikey=45 hivel=50 sample=soft.wav\n"
+                                      "<region> lokey=46 hikey=50 hivel=50 sample=soft.wav\n");
+
+            if (auto* t = detail::findTrack (TestAudioDevice::getEditOf (engine), st))
+                for (auto* p : t->pluginList)
+                    if (auto* sfz = dynamic_cast<SfzPlugin*> (p))
+                        sfz->state.setProperty (SfzPlugin::sfzFileProp, softOnly.getFullPathName(), nullptr);
+
+            for (int i = 0; i < 100 && ! tracks.effects().isInstrumentReady (st); ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+            keys = tracks.effects().getInstrumentKeyRange (st);
+            check (keys && keys->first == 52 && keys->second == 62,
+                   "an SFZ instrument's key range is read from its regions, whatever their velocities");
         }
 
         std::cout << "Sound knobs for sampled instruments\n";
@@ -8852,6 +9067,61 @@ int main (int argc, char* argv[])
 
     if (runs ("main"))
     {
+        // The toolbar's busiest block and xrun count. There's no real device
+        // here, so its callbacks' parts are driven directly.
+        std::cout << "Load meter\n";
+        juce::AudioDeviceManager deviceManager;
+        AudioLoadMeter meter (deviceManager, true);
+        const double blockSeconds = 256.0 / 48000.0;
+
+        meter.deviceStarting (48000.0);
+        meter.blockDone (0.3 * blockSeconds, 256);
+        meter.blockDone (1.25 * blockSeconds, 256);   // one slow block among quick ones
+        meter.blockDone (0.4 * blockSeconds, 256);
+        check (std::abs (meter.takePeak() - 1.25f) < 0.001f, "the busiest block shows, though the others were quick");
+        check (meter.takePeak() == 0.0f, "...and only until it's been read");
+
+        check (meter.addXruns (2) == 0, "xruns in the device's first second don't count");
+        juce::Thread::sleep (1100);
+        check (meter.addXruns (3) == 1, "later ones do");
+        check (meter.addXruns (3) == 1, "each one once");
+
+        meter.deviceStarting (48000.0);                // JUCE counts from zero again
+        check (meter.addXruns (1) == 1, "nor after the device restarts");
+        juce::Thread::sleep (1100);
+        check (meter.addXruns (2) == 2, "then they count again, from JUCE's new count");
+    }
+
+   #if JUCE_LINUX
+    if (runs ("main"))
+    {
+        // Tracktion's render workers are noted as they start and stop, so
+        // RealtimeAudioThread can make them real-time like the audio thread.
+        // (Whether the system then grants real-time is up to the system.)
+        std::cout << "Render workers\n";
+        auto threadName = [] (std::int64_t tid)
+        {
+            return juce::File ("/proc/self/task/" + juce::String (tid) + "/comm").loadFileAsString().trim();
+        };
+
+        {
+            AudioEngine engine { testSettings, false };
+            TestAudioDevice device (engine, {});
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2500);
+            runAudio (device, 0.5);
+
+            const auto workers = RealtimeAudioThread::getRenderThreadIds();
+            check (workers.size() == 1, "a session renders on the audio thread and one worker");
+            check (! workers.empty() && threadName (workers.front()) == "Render worker",
+                   "the worker is noted by its kernel thread ID");
+        }
+
+        check (RealtimeAudioThread::getRenderThreadIds().empty(), "...and forgotten once it's gone");
+    }
+   #endif
+
+    if (runs ("main"))
+    {
         std::cout << "Automation\n";
         auto automationSession = AudioEngine::getSessionFileFor (dir.getChildFile ("Automation"));
         const std::vector<AutomationPoint> ramp { { 4.0, 0.2f }, { 8.0, 0.9f } };
@@ -9186,6 +9456,50 @@ int main (int argc, char* argv[])
         std::cout << "  (MP3 " << seconds (mp3) << " s, " << exportDir.getChildFile ("Song.mp3").getSize() / 1024 << " KB)\n";
         check (std::abs (seconds (mp3) - seconds (mix)) < 0.5 && peakIn (mp3, 4.2, 11.8) > 0.01f,
                "MP3 exports (with LAME)");
+
+       #if JUCE_LINUX
+        // An export renders as fast as it can, so its workers stay at ordinary
+        // priority: a real-time one running flat out would trip the CPU limit,
+        // which takes real-time from the live audio thread too (see RealtimeAudioThread).
+        {
+            auto namesOf = [] (const std::vector<std::int64_t>& ids)
+            {
+                juce::StringArray names;
+
+                for (auto id : ids)
+                    names.add (juce::File ("/proc/self/task/" + juce::String (id) + "/comm").loadFileAsString().trim());
+
+                return names;
+            };
+
+            auto allThreads = []
+            {
+                std::vector<std::int64_t> ids;
+
+                for (auto& d : juce::File ("/proc/self/task").findChildFiles (juce::File::findDirectories, false))
+                    ids.push_back (d.getFileName().getLargeIntValue());
+
+                return ids;
+            };
+
+            settings.format = ExportFormat::wav;
+            settings.destination = exportDir.getChildFile ("Workers.wav");
+            bool done = false, sawOfflineWorker = false, trackedOfflineWorker = false;
+
+            if (exporter.start (settings, [&] (const ExportResult&) { done = true; }).wasOk())
+            {
+                for (int i = 0; i < 3000 && ! done; ++i)
+                {
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                    sawOfflineWorker = sawOfflineWorker || namesOf (allThreads()).contains ("Offline worker");
+                    trackedOfflineWorker = trackedOfflineWorker
+                                            || namesOf (RealtimeAudioThread::getRenderThreadIds()).contains ("Offline worker");
+                }
+            }
+
+            check (done && sawOfflineWorker && ! trackedOfflineWorker, "an export's workers aren't made real-time");
+        }
+       #endif
 
         // Cancel: nothing is left behind, and the song still plays.
         settings.format = ExportFormat::wav;

@@ -144,7 +144,7 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
     }
     else if (icon.has_value())
     {
-        icons::draw (g, *icon, r, iconColour.value_or (fg), iconSize);
+        paintIcon (g, r, iconColour.value_or (fg));
     }
     else
     {
@@ -155,6 +155,11 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
 
     if (hasKeyboardFocus (false))
         IkarosLookAndFeel::drawFocusRing (g, r, cornerRadius);
+}
+
+void IconButton::paintIcon (juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    icons::draw (g, *icon, area, colour, iconSize);
 }
 
 } // namespace ikaros

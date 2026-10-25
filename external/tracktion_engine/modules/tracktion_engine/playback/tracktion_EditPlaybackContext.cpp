@@ -186,6 +186,7 @@ struct EditPlaybackContext::NodePlaybackContext
                #endif
             };
 
+        player.setRendersLive (true);   // before its workers start (see renderThreadObserver)
         setNumThreads (numThreads);
         player.enablePooledMemoryAllocations (EditPlaybackContextInternal::getPooledMemoryFlag());
         player.enableNodeMemorySharing (EditPlaybackContextInternal::getNodeMemorySharingFlag());

@@ -1,8 +1,8 @@
 diff --git a/modules/juce_gui_basics/native/juce_XWindowSystem_linux.cpp b/modules/juce_gui_basics/native/juce_XWindowSystem_linux.cpp
-index 98e5e3c..b35f44d 100644
+index 04ad44d..6cb6c35 100644
 --- a/modules/juce_gui_basics/native/juce_XWindowSystem_linux.cpp
 +++ b/modules/juce_gui_basics/native/juce_XWindowSystem_linux.cpp
-@@ -413,7 +413,9 @@ namespace Keys
+@@ -420,7 +420,9 @@ namespace Keys
          WheelUp = 4,
          WheelDown = 5,
          BackButton = 6,
@@ -13,7 +13,7 @@ index 98e5e3c..b35f44d 100644
      };
  
      static int AltMask = 0;
-@@ -3096,8 +3098,8 @@ void XWindowSystem::initialisePointerMap()
+@@ -3353,8 +3355,8 @@ void XWindowSystem::initialisePointerMap()
                                              Keys::RightButton,
                                              Keys::WheelUp,
                                              Keys::WheelDown,
@@ -24,12 +24,12 @@ index 98e5e3c..b35f44d 100644
                                              Keys::BackButton,
                                              Keys::ForwardButton };
      static_assert (std::size (moreButtons) >= std::size (decltype (pointerMap){}));
-@@ -3591,11 +3593,11 @@ void XWindowSystem::handleKeyReleaseEvent (LinuxComponentPeer* peer, const XKeyE
+@@ -3842,11 +3844,11 @@ void XWindowSystem::handleKeyReleaseEvent (LinuxComponentPeer* peer, const XKeyE
      }
  }
  
--void XWindowSystem::handleWheelEvent (LinuxComponentPeer* peer, const XButtonPressedEvent& buttonPressEvent, float amount) const
-+void XWindowSystem::handleWheelEvent (LinuxComponentPeer* peer, const XButtonPressedEvent& buttonPressEvent, float deltaX, float deltaY) const
+-void XWindowSystem::handleWheelEvent (LinuxComponentPeer* peer, int64 eventTime, Point<float> logicalMousePos, float amount) const
++void XWindowSystem::handleWheelEvent (LinuxComponentPeer* peer, int64 eventTime, Point<float> logicalMousePos, float deltaX, float deltaY) const
  {
      MouseWheelDetails wheel;
 -    wheel.deltaX = 0.0f;
@@ -39,29 +39,29 @@ index 98e5e3c..b35f44d 100644
      wheel.isReversed = false;
      wheel.isSmooth = false;
      wheel.isInertial = false;
-@@ -3623,8 +3625,10 @@ void XWindowSystem::handleButtonPressEvent (LinuxComponentPeer* peer, const XBut
-     {
+@@ -3876,8 +3878,10 @@ void XWindowSystem::handleButtonPressEvent (LinuxComponentPeer* peer, int state,
+ 
          switch (pointerMap[mapIndex])
          {
--            case Keys::WheelUp:         handleWheelEvent (peer, buttonPressEvent,  50.0f / 256.0f); break;
--            case Keys::WheelDown:       handleWheelEvent (peer, buttonPressEvent, -50.0f / 256.0f); break;
-+            case Keys::WheelUp:         handleWheelEvent (peer, buttonPressEvent, 0.0f,  50.0f / 256.0f); break;
-+            case Keys::WheelDown:       handleWheelEvent (peer, buttonPressEvent, 0.0f, -50.0f / 256.0f); break;
-+            case Keys::WheelLeft:       handleWheelEvent (peer, buttonPressEvent,  50.0f / 256.0f, 0.0f); break;
-+            case Keys::WheelRight:      handleWheelEvent (peer, buttonPressEvent, -50.0f / 256.0f, 0.0f); break;
-             case Keys::LeftButton:      handleButtonPressEvent (peer, buttonPressEvent, ModifierKeys::leftButtonModifier); break;
-             case Keys::RightButton:     handleButtonPressEvent (peer, buttonPressEvent, ModifierKeys::rightButtonModifier); break;
-             case Keys::MiddleButton:    handleButtonPressEvent (peer, buttonPressEvent, ModifierKeys::middleButtonModifier); break;
+-            case Keys::WheelUp:         handleWheelEvent (peer, eventTime, eventPos,  50.0f / 256.0f); break;
+-            case Keys::WheelDown:       handleWheelEvent (peer, eventTime, eventPos, -50.0f / 256.0f); break;
++            case Keys::WheelUp:         handleWheelEvent (peer, eventTime, eventPos, 0.0f,  50.0f / 256.0f); break;
++            case Keys::WheelDown:       handleWheelEvent (peer, eventTime, eventPos, 0.0f, -50.0f / 256.0f); break;
++            case Keys::WheelLeft:       handleWheelEvent (peer, eventTime, eventPos,  50.0f / 256.0f, 0.0f); break;
++            case Keys::WheelRight:      handleWheelEvent (peer, eventTime, eventPos, -50.0f / 256.0f, 0.0f); break;
+             case Keys::LeftButton:      handleButtonPressEvent (peer, eventTime, eventPos, ModifierKeys::leftButtonModifier); break;
+             case Keys::RightButton:     handleButtonPressEvent (peer, eventTime, eventPos, ModifierKeys::rightButtonModifier); break;
+             case Keys::MiddleButton:    handleButtonPressEvent (peer, eventTime, eventPos, ModifierKeys::middleButtonModifier); break;
 diff --git a/modules/juce_gui_basics/native/juce_XWindowSystem_linux.h b/modules/juce_gui_basics/native/juce_XWindowSystem_linux.h
-index 4271f06..d7bc614 100644
+index 625a42e..b727737 100644
 --- a/modules/juce_gui_basics/native/juce_XWindowSystem_linux.h
 +++ b/modules/juce_gui_basics/native/juce_XWindowSystem_linux.h
-@@ -314,7 +314,7 @@ private:
+@@ -324,7 +324,7 @@ private:
      //==============================================================================
      void handleKeyPressEvent        (LinuxComponentPeer*, XKeyEvent&) const;
      void handleKeyReleaseEvent      (LinuxComponentPeer*, const XKeyEvent&) const;
--    void handleWheelEvent           (LinuxComponentPeer*, const XButtonPressedEvent&, float) const;
-+    void handleWheelEvent           (LinuxComponentPeer*, const XButtonPressedEvent&, float, float) const;
-     void handleButtonPressEvent     (LinuxComponentPeer*, const XButtonPressedEvent&, int) const;
+-    void handleWheelEvent           (LinuxComponentPeer*, int64, Point<float>, float) const;
++    void handleWheelEvent           (LinuxComponentPeer*, int64, Point<float>, float, float) const;
+     void handleButtonPressEvent     (LinuxComponentPeer*, int64, Point<float>, int) const;
+     void handleButtonPressEvent     (LinuxComponentPeer*, int, int, ::Time, Point<double>) const;
      void handleButtonPressEvent     (LinuxComponentPeer*, const XButtonPressedEvent&) const;
-     void handleButtonReleaseEvent   (LinuxComponentPeer*, const XButtonReleasedEvent&) const;

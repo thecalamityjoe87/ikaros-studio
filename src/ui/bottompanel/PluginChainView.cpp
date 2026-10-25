@@ -1,4 +1,5 @@
 #include "ui/bottompanel/PluginChainView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -330,6 +331,7 @@ int PluginChainView::getIdealHeight() const
 
 void PluginChainView::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("PluginChainView");
     if (trackId == 0)
     {
         g.setColour (theme().textSecondary);

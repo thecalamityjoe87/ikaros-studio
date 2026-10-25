@@ -12,14 +12,17 @@ class AudioEngine;
 //==============================================================================
 /**
     Tune's settings that aren't knobs, and its readout, laid out like the
-    design's Tune panel. PluginEditor shows them with Tune's knobs:
+    design's Tune panel. PluginEditor shows them with Tune's knobs, in its
+    bordered box:
 
-        ● TUNE                       [Key A minor · song ⌄] [Lock to Key]   Done
-         (Correction) (Speed) (Fine Tune)                    INPUT → TARGET
-                                                       ┌ A4 -18   →    A4 ┐
-                                                       └ SUNG      SOUNDS ┘
-        NOTES IT CAN LAND ON
-        ┌C┬D┬E┬F┬G┬A┬B┐                                [Follow MIDI Off ⌄]
+        ╭───────────────────────────────────────────────────────────────╮
+        │ ⏻ TUNE                     [Key A minor · song ⌄] [Lock to Key] │  Done
+        │ (Correction) (Speed) (Fine Tune)                 INPUT → TARGET │
+        │                                            ┌ A4 -18   →    A4 ┐ │
+        │                                            └ SUNG      SOUNDS ┘ │
+        │ NOTES IT CAN LAND ON                                            │
+        │ ┌C┬D┬E┬F┬G┬A┬B┐                             [Follow MIDI Off ⌄] │
+        ╰───────────────────────────────────────────────────────────────╯
 
     The keys are one octave, drawn like the on-screen keyboard's: the notes
     Tune can land on are lit (with the track's colour along the bottom), the
@@ -44,12 +47,13 @@ public:
     /** Re-reads the settings (after an edit or an undo). */
     void refresh();
 
-    /** Places everything: `header` is the free part of the editor's header
-        row (Key and Lock to Key go at its right), `body` the panel under it.
-        Returns where the three knobs go. */
+    /** Places everything: `header` is the free part of the box's top row,
+        after the name (Key and Lock to Key go at its right), `body` the
+        part under it. Returns where the three knobs go. */
     juce::Rectangle<int> layOut (juce::Rectangle<int> header, juce::Rectangle<int> body);
 
-    /** The panel's width and the height of its body (under the header). */
+    /** The panel's width (the editor's box, border included) and the
+        height of its body (under the top row). */
     static constexpr int panelWidth = 560;
     static int getBodyHeight();
 

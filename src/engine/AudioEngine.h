@@ -34,6 +34,7 @@ class AudioDeviceWatcher;
 class Tuner;
 class ControllerMap;
 class LiveWaveform;
+class PerfMonitor;
 struct LiveRecording;
 
 //==============================================================================
@@ -265,6 +266,12 @@ public:
     void setLoopRangeBeats (double startBeat, double endBeat);
     void setMetronomeEnabled (bool);
 
+    /** The click's level, 0.2 to 1 (Tracktion's range; off is
+        setMetronomeEnabled). Kept in the session without an undo step, and
+        remembered as the level new sessions start with. */
+    void setMetronomeVolume (float gain);
+    float getMetronomeVolume() const;
+
     /** MIDI cycle recording: keep each pass as a take of one region (true),
         or merge every pass's notes into the region (false, the default).
         An app preference (Preferences, settings::midiCycleTakes). Audio
@@ -362,7 +369,10 @@ public:
     //==============================================================================
     // Meters and stats, polled by the UI at ~30 Hz
     StereoLevel getMasterLevel();
-    SystemStats getSystemStats() const;
+    SystemStats getSystemStats();   // not const: its peak is "since the last call"
+
+    /** The debug performance monitor, or nullptr unless IKAROS_PERF=1 (see PerfMonitor). */
+    PerfMonitor* getPerfMonitor() const noexcept;
 
     /** After a take ends: why it stopped, whether the input clipped, and how
         many dropouts it had. Each report is returned once (then nullopt).

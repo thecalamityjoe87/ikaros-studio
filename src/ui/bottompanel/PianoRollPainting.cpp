@@ -1,6 +1,7 @@
 // The piano roll's drawing: toolbar, keys, grid, notes and velocity lane.
 
 #include "ui/bottompanel/PianoRoll.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/bottompanel/PianoRollLayout.h"
 #include "ui/widgets/Icons.h"
 #include "ui/theme/Fonts.h"
@@ -16,6 +17,7 @@ using namespace pianoroll;
 // Painting
 void PianoRoll::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("PianoRoll");
     // The note grid is part of the arrangement: dark in both themes.
     g.fillAll (theme().arrangement.laneBg);
 

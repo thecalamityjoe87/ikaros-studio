@@ -23,5 +23,5 @@ namespace ikaros::gx::slowgear
     static_assert (DOWNTIME == downtime && TRESHOLD == threshold && UPTIME == uptime,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return slowgear::plugin(); }
+    const DspType dsp { slowgear::plugin, copyStateOf<slowgear::Dsp> };
 }

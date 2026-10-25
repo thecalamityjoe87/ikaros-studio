@@ -24,5 +24,5 @@ namespace ikaros::gx::sd1
 
     static_assert (DRIVE == drive && LEVEL == level && TONE == tone, "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return sd1sim::plugin(); }
+    const DspType dsp { sd1sim::plugin, copyStateOf<sd1sim::Dsp> };
 }

@@ -16,6 +16,8 @@
 #include "engine/Tuner.h"
 #include "ui/theme/Tokens.h"
 #include "ui/widgets/AutomationHint.h"
+#include "ui/widgets/PaintProbe.h"
+#include "ui/widgets/PerfOverlay.h"
 
 namespace ikaros
 {
@@ -96,6 +98,9 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
 
     refreshAll();
     startTimerHz (30);   // playhead, meters, CPU
+
+    if (auto* perf = engine.getPerfMonitor())
+        setUpPerfMonitor (*perf);
     setSize (1440, 900);
 
     // Like GarageBand, start with the session chooser: recent sessions if
@@ -145,6 +150,9 @@ MainComponent::~MainComponent()
     stopTimer();
     engine.removeListener (this);
     engine.getPreferences().removeListener (this);
+
+    if (perfKeys != nullptr)
+        removeKeyListener (perfKeys.get());
     selection.removeChangeListener (this);
     engine.setPluginWindowFactory (nullptr);
     engine.getPlugins().cancelScan();
@@ -157,7 +165,63 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("MainComponent");
     g.fillAll (theme().windowBg);
+}
+
+void MainComponent::paintOverChildren (juce::Graphics&)
+{
+    // Everything in this repaint has been drawn by now (see PaintProbe).
+    paintprobe::frameEnd();
+}
+
+//==============================================================================
+// Debug only (IKAROS_PERF=1, see engine/PerfMonitor.h).
+void MainComponent::setUpPerfMonitor (PerfMonitor& perf)
+{
+    perf.setUiSampler ([] { return paintprobe::takeSample(); });
+
+    // Always on top of the other children, dialogs included; showing unless
+    // IKAROS_PERF_OVERLAY=0.
+    perfOverlay = std::make_unique<PerfOverlay> (perf);
+    perfOverlay->setAlwaysOnTop (true);
+    addChildComponent (*perfOverlay);
+    perfOverlay->setVisible (juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_OVERLAY", "1") != "0");
+
+    // A KeyListener sees key presses that reach this component (from it or
+    // any child that doesn't use them) before the command shortcuts do.
+    struct ToggleKey  : juce::KeyListener
+    {
+        juce::Component& overlay;
+        explicit ToggleKey (juce::Component& o) : overlay (o) {}
+
+        bool keyPressed (const juce::KeyPress& key, juce::Component*) override
+        {
+            const auto mods = key.getModifiers();
+
+            if (juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key.getKeyCode()) != 'P'
+                 || ! mods.isCtrlDown() || ! mods.isShiftDown())
+                return false;
+
+            overlay.setVisible (! overlay.isVisible());
+            return true;
+        }
+    };
+
+    perfKeys = std::make_unique<ToggleKey> (*perfOverlay);
+    addKeyListener (perfKeys.get());
+}
+
+void MainComponent::scrollTimelineForPerf (double beats)
+{
+    auto position = arrangement.getViewPosition();
+    position.scrollBeats = std::fmod (position.scrollBeats + beats, 64.0);
+    arrangement.setViewPosition (position);
+}
+
+void MainComponent::closeSessionChooserForPerf()
+{
+    SessionChooser::dismiss (*this);
 }
 
 void MainComponent::resized()
@@ -173,6 +237,9 @@ void MainComponent::resized()
     auto r = getLocalBounds();
     menuBar.setBounds (r.removeFromTop (size::menuBarHeight));
     toolbar.setBounds (r.removeFromTop (size::toolbarHeight));
+
+    if (perfOverlay != nullptr)
+        perfOverlay->setTopRightPosition (getWidth() - 12, r.getY() + 12);
 
     library.setVisible (libraryVisible);
 
@@ -553,7 +620,9 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                                    CommandIDs::makeInstrumentFromRegion,
                                    CommandIDs::togglePlay, CommandIDs::toggleRecord, CommandIDs::goToStart, CommandIDs::toggleLoop,
                                    CommandIDs::toggleMetronome, CommandIDs::countInOff, CommandIDs::countInOneBar,
-                                   CommandIDs::countInTwoBars, CommandIDs::toggleMidiCycleTakes,
+                                   CommandIDs::countInTwoBars, CommandIDs::metronomeVolume20, CommandIDs::metronomeVolume40,
+                                   CommandIDs::metronomeVolume60, CommandIDs::metronomeVolume80, CommandIDs::metronomeVolume100,
+                                   CommandIDs::toggleMidiCycleTakes,
                                    CommandIDs::toggleLibrary, CommandIDs::toggleBottomPanel, CommandIDs::zoomIn, CommandIDs::zoomOut, CommandIDs::zoomReset,
                                    CommandIDs::snapToBar, CommandIDs::snapToBeat, CommandIDs::snapOff,
                                    CommandIDs::showSoundTab, CommandIDs::showEditorTab, CommandIDs::showEqTab,
@@ -786,6 +855,19 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("2 Bars", "Play two bars of clicks before recording starts", "Transport", 0);
             info.setTicked (engine.getCountInBars() == 2);
             break;
+
+        // The Metronome Volume submenu: the step matching the click's level is ticked.
+        case CommandIDs::metronomeVolume20:
+        case CommandIDs::metronomeVolume40:
+        case CommandIDs::metronomeVolume60:
+        case CommandIDs::metronomeVolume80:
+        case CommandIDs::metronomeVolume100:
+        {
+            const int percent = 20 * (id - CommandIDs::metronomeVolume20 + 1);
+            info.setInfo (juce::String (percent) + "%", "Set how loud the metronome clicks", "Transport", 0);
+            info.setTicked (juce::roundToInt (engine.getMetronomeVolume() * 100.0f) == percent);
+            break;
+        }
 
         case CommandIDs::toggleMidiCycleTakes:
             info.setInfo ("Keep MIDI Loop Passes as Takes",
@@ -1070,6 +1152,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::countInOff:      engine.setCountInBars (0); break;
         case CommandIDs::countInOneBar:   engine.setCountInBars (1); break;
         case CommandIDs::countInTwoBars:  engine.setCountInBars (2); break;
+        case CommandIDs::metronomeVolume20:
+        case CommandIDs::metronomeVolume40:
+        case CommandIDs::metronomeVolume60:
+        case CommandIDs::metronomeVolume80:
+        case CommandIDs::metronomeVolume100:
+            engine.setMetronomeVolume (0.2f * (float) (info.commandID - CommandIDs::metronomeVolume20 + 1));
+            break;
         case CommandIDs::toggleMidiCycleTakes: engine.setMidiCycleTakes (! engine.getMidiCycleTakes()); break;
 
         case CommandIDs::zoomIn:          arrangement.zoomIn(); break;
@@ -1189,9 +1278,9 @@ void MainComponent::confirmDiscardChanges (std::function<void()> thenDo)
     auto options = juce::MessageBoxOptions()
                        .withTitle ("Save changes?")
                        .withMessage ("Do you want to save the changes to \"" + engine.getSessionName() + "\"?")
-                       .withButton ("Save")
-                       .withButton ("Don't Save")
-                       .withButton ("Cancel")
+                       .withButton ("Save", 1)
+                       .withButton ("Don't Save", 2)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (this);
 
     // The callback gets 1 for the first button, 2 for the second, and
@@ -1373,8 +1462,8 @@ void MainComponent::saveSessionAs (std::function<void (bool)> afterSave)
                            .withMessage ("A session named \"" + target.getFileNameWithoutExtension()
                                            + "\" already exists in " + target.getParentDirectory().getFullPathName()
                                            + ". Replace it?")
-                           .withButton ("Replace")
-                           .withButton ("Cancel")
+                           .withButton ("Replace", 1)
+                           .withButton ("Cancel", 0)
                            .withAssociatedComponent (this);
 
         AlertDialog::show (options, [save, afterSave] (int result)
@@ -1453,7 +1542,7 @@ void MainComponent::setInterfaceScale (float requested)
     // size, so settle for the biggest scale where that still fits.
     if (auto* display = desktop.getDisplays().getPrimaryDisplay())
     {
-        const auto area = display->userArea;   // in the units of the scale just set
+        const auto area = display->userBounds.toNearestInt();   // in the units of the scale just set
         const float fits = juce::jmin ((float) area.getWidth() / (float) minWindowWidth,
                                        (float) area.getHeight() / (float) minWindowHeight);
 
@@ -1559,7 +1648,7 @@ void MainComponent::showError (const juce::String& title, const juce::String& me
     AlertDialog::show (juce::MessageBoxOptions()
                        .withTitle (title)
                        .withMessage (message)
-                       .withButton ("OK")
+                       .withButton ("OK", 0)
                        .withAssociatedComponent (this));
 }
 

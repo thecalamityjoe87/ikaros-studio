@@ -25,5 +25,5 @@ namespace ikaros::gx::hotbox
     static_assert (BASS == bass && GAIN == gain && TREBLE == treble && VOLUME == volume,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return hotbox::plugin(); }
+    const DspType dsp { hotbox::plugin, copyStateOf<hotbox::Dsp> };
 }

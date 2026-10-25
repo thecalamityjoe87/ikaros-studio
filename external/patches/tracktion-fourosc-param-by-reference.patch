@@ -1,0 +1,37 @@
+diff --git a/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.cpp b/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.cpp
+index 5285ed68172..2cd53ee4191 100644
+--- a/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.cpp
++++ b/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.cpp
+@@ -690,7 +690,9 @@ public:
+     void noteKeyStateChanged() override     {}
+ 
+ private:
+-    float paramValue (AutomatableParameter::Ptr param)
++    // By reference: a copy of the Ptr is two atomic reference-count changes, and
++    // updateParams calls this ~50 times per voice every 32 samples on the audio thread.
++    float paramValue (const AutomatableParameter::Ptr& param)
+     {
+         jassert (param != nullptr);
+         if (param == nullptr)
+@@ -1792,7 +1794,7 @@ void FourOscPlugin::clearModulation (ModSource src, AutomatableParameter::Ptr pa
+     jassertfalse;
+ }
+ 
+-float FourOscPlugin::paramValue (AutomatableParameter::Ptr param)
++float FourOscPlugin::paramValue (const AutomatableParameter::Ptr& param)
+ {
+     jassert (param != nullptr);
+     if (param == nullptr)
+diff --git a/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.h b/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.h
+index 6e05c7a0663..0a6bd4f9d0f 100644
+--- a/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.h
++++ b/modules/tracktion_engine/plugins/effects/tracktion_FourOscPlugin.h
+@@ -374,7 +374,7 @@ private:
+     void applyToBuffer (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
+     void updateParams (juce::AudioBuffer<float>& buffer);
+     void applyEffects (juce::AudioBuffer<float>& buffer);
+-    float paramValue (AutomatableParameter::Ptr param);
++    float paramValue (const AutomatableParameter::Ptr& param);
+ 
+     tempo::Sequence::Position currentPos { createPosition (edit.tempoSequence) };
+     juce::Reverb reverb;

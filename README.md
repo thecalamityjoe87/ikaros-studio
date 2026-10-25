@@ -33,7 +33,7 @@ On Debian/Ubuntu:
 sudo apt install build-essential cmake ninja-build pkg-config \
     libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
     libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
-    libxrandr-dev libxrender-dev libgl1-mesa-dev
+    libxrandr-dev libxrender-dev libgl1-mesa-dev libcurl4-openssl-dev libsystemd-dev
 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -55,13 +55,15 @@ cmake --build build --config Release
 
 ### macOS
 
-Xcode, plus CMake (`brew install cmake`):
+Xcode, plus CMake (`brew install cmake`). The app runs on macOS 12 and later.
 
 ```sh
 cmake -B build -G Xcode
 cmake --build build --config Release
 open "build/IkarosStudio_artefacts/Release/Ikaros Studio.app"
 ```
+
+That builds for your Mac's own processor. sfizz can't be built for Apple Silicon and Intel at once, so `packaging/macos/build-dmg.sh` builds each separately and joins them into one app.
 
 ### Tests
 
@@ -79,6 +81,14 @@ Add `-DIKAROS_BUILD_TEST_PLUGINS=ON` to also build a few tiny VST3/LV2 plug-ins 
 
 The manifest in `packaging/flatpak` is a starting point, not ready for Flathub yet.
 
+### Release builds
+
+Pushing a version tag (`git tag v0.13.0 && git push origin v0.13.0`) makes GitHub build an AppImage, a Windows zip and a macOS disk image, and put them in a draft release to check and publish. The workflow is in `.github/workflows/release.yml`, and it can also be started by hand from the Actions tab. Each package has its own script in `packaging/`, to make one yourself on that system.
+
+The Mac app is signed ad hoc, not with an Apple Developer ID, so macOS asks before opening it the first time: open it once, then choose Open Anyway in System Settings > Privacy & Security. Windows may show a SmartScreen warning for the same reason (More info > Run anyway).
+
 ## License
 
-Not decided yet. JUCE and Tracktion Engine are GPLv3 for open-source projects, so it'll likely be GPL. Figtree and JetBrains Mono are under the SIL Open Font License (see `resources/fonts`). Some instrument icons are from [Lucide](https://lucide.dev) (ISC License; the notice is in `src/ui/widgets/Icons.cpp`).
+Ikaros Studio is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. The full text is in `LICENSE`.
+
+It's built on Tracktion Engine (GPLv3 or later) and JUCE (AGPLv3), and the other projects listed in `CREDITS`, each under its own license. Sound packs carry their own licenses, listed in each pack's `pack.json`. Figtree and JetBrains Mono are under the SIL Open Font License (see `resources/fonts`). Some instrument icons are from [Lucide](https://lucide.dev) (ISC License; the notice is in `src/ui/widgets/Icons.cpp`).

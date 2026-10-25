@@ -107,7 +107,7 @@ void StartupSplash::paint (juce::Graphics& g)
 
     g.setColour (subtitle);
     g.setFont (fonts::ui (13.0f));
-    g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha)",
+    g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (" IKAROS_STAGE ")",
                 area.removeFromTop (20), juce::Justification::centred);
 
     g.setColour (subtitle);

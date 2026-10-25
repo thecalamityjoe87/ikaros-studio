@@ -25,5 +25,5 @@ namespace ikaros::gx::bottlerocket
     static_assert (BASS == bass && GAIN == gain && TREBLE == treble && VOLUME == volume,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return bottlerocket::plugin(); }
+    const DspType dsp { bottlerocket::plugin, copyStateOf<bottlerocket::Dsp> };
 }

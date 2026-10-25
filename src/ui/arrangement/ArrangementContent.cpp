@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementContent.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 
 namespace ikaros
@@ -200,6 +201,7 @@ int ArrangementView::Content::getIdealHeight() const
 
 void ArrangementView::Content::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Content");
     // The lanes are part of the arrangement (dark in both themes); the
     // track headers column on the left is chrome.
     g.fillAll (theme().arrangement.laneBg);

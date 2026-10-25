@@ -28,6 +28,28 @@ namespace
         tracktion::core::pause();
         tracktion::core::pause();
     }
+
+    // Names a worker thread and, for a live player, tells the app's
+    // renderThreadObserver when it starts and ends.
+    struct RenderThreadScope
+    {
+        explicit RenderThreadScope (const LockFreeMultiThreadedNodePlayer& player)
+            : live (player.isRenderingLive())
+        {
+            juce::Thread::setCurrentThreadName (live ? "Render worker" : "Offline worker");
+
+            if (auto observer = renderThreadObserver.load(); observer && live)
+                observer (true);
+        }
+
+        ~RenderThreadScope()
+        {
+            if (auto observer = renderThreadObserver.load(); observer && live)
+                observer (false);
+        }
+
+        const bool live;
+    };
 }
 
 
@@ -151,6 +173,8 @@ private:
 
     void runThread()
     {
+        const RenderThreadScope renderThreadScope (player);
+
         juce::WorkgroupToken token;
         workgroup.join (token);
 
@@ -255,6 +279,8 @@ private:
 
     void runThread()
     {
+        const RenderThreadScope renderThreadScope (player);
+
         juce::WorkgroupToken token;
         workgroup.join (token);
 
@@ -415,6 +441,8 @@ private:
 
     void runThread()
     {
+        const RenderThreadScope renderThreadScope (player);
+
         juce::WorkgroupToken token;
         workgroup.join (token);
 
@@ -522,6 +550,8 @@ private:
 
     void runThread()
     {
+        const RenderThreadScope renderThreadScope (player);
+
         juce::WorkgroupToken token;
         workgroup.join (token);
 
@@ -654,6 +684,8 @@ private:
 
     void runThread()
     {
+        const RenderThreadScope renderThreadScope (player);
+
         juce::WorkgroupToken token;
         workgroup.join (token);
         

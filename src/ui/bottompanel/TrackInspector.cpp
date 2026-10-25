@@ -1,4 +1,5 @@
 #include "ui/bottompanel/TrackInspector.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/Tokens.h"
 
@@ -98,6 +99,7 @@ void TrackInspector::layoutSections()
 
 void TrackInspector::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("TrackInspector");
     g.fillAll (theme().inspectorBg);
     g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));

@@ -8,6 +8,8 @@
 #include "engine/Autosaver.h"
 #include "engine/PluginLibrary.h"
 #include "engine/PackStore.h"
+#include "engine/PerfMonitor.h"
+#include "engine/AudioLoadMeter.h"
 #include "engine/RealtimeAudioThread.h"
 #include "engine/FreesoundStore.h"
 #include "engine/LoopKey.h"
@@ -70,13 +72,26 @@ struct IkarosEngineBehaviour  : public te::EngineBehaviour
     // can ask for a plain stereo setup instead of "every channel available".
     bool autoInitialiseDeviceManager() override     { return false; }
 
-    // Render everything on the audio thread itself. Tracktion's default
-    // hands parts of each block to a worker per CPU core, and with small
-    // buffers (64 samples is 750 blocks a second) waking them costs more than
-    // it saves; worse, the workers run at ordinary priority, so when the
-    // desktop is busy the audio thread sits waiting for them and the sound
-    // breaks up. A session of a beginner's size fits on one core easily.
-    int getNumberOfCPUsToUseForAudio() override     { return 1; }
+    // The audio thread plus one render worker share each block (Tracktion
+    // renders tracks in parallel; only the buses and master wait for the
+    // rest). On one thread, one core was the ceiling: a 32-track session took
+    // 53% of the block on its own, 28% with a worker (docs/perf-report.md,
+    // section 6). Not Tracktion's default of a worker per core: workers spin
+    // while they wait for work, so three cost 2-3 times one's CPU (and
+    // battery) for a few percent more. The worker is made real-time and kept on the
+    // fast cores like the audio thread (RealtimeAudioThread); at ordinary
+    // priority a busy desktop kept it waiting, and the audio thread with it,
+    // which is why Ikaros rendered on one thread from October 2026 until then.
+    int getNumberOfCPUsToUseForAudio() override
+    {
+        // The performance monitor can try other counts (IKAROS_PERF_AUDIO_THREADS=N)
+        // to compare one thread with several on the same session.
+        if (PerfMonitor::isEnabled())
+            if (auto n = juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_AUDIO_THREADS", {}).getIntValue(); n > 0)
+                return n;
+
+        return 2;
+    }
 
     // Takes are recorded straight into the session's working copy (its
     // Audio folder), whether or not it has been saved yet.
@@ -259,11 +274,24 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
         : owner (o),
           engine (settingsName, std::make_unique<IkarosUIBehaviour>(), std::make_unique<IkarosEngineBehaviour>())
     {
+        // Before any Edit starts its render workers, so none is missed. The
+        // performance monitor can leave them at ordinary priority
+        // (IKAROS_PERF_WORKERS_RT=0) to compare.
+        if (! (PerfMonitor::isEnabled() && juce::SystemStats::getEnvironmentVariable ("IKAROS_PERF_WORKERS_RT", {}) == "0"))
+            RealtimeAudioThread::trackRenderThreads();
+
         // 2 inputs, 2 outputs by default. (Tracktion's default of "every
         // channel" crashed PipeWire's ALSA plugin.) The user can change devices
         // in File > Audio & MIDI Settings, and Tracktion remembers the choice.
         if (openAudioDevice)
         {
+            // Before Tracktion's initialise adds its callback (see PerfMonitor).
+            if (PerfMonitor::isEnabled())
+                perfMonitor = std::make_unique<PerfMonitor> (engine, [this] { return edit.get(); });
+
+            // Also before it, and after PerfMonitor's (it times blocks itself only without one).
+            loadMeter = std::make_unique<AudioLoadMeter> (engine.getDeviceManager().deviceManager, perfMonitor == nullptr);
+
             engine.getDeviceManager().initialise (2, 2);
             chooseSmallBufferOnce();
 
@@ -273,6 +301,7 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
         // Our own instrument for SFZ sounds, next to Tracktion's built-in
         // ones, so sessions can create it (and load it back) by type name.
+        SfzPlugin::prepareSfizz();
         engine.getPluginManager().createBuiltInType<SfzPlugin>();
 
         // The hidden plugins behind sampled instruments' Sound tab knobs.
@@ -397,6 +426,12 @@ struct AudioEngine::Impl  : private juce::ValueTree::Listener,
 
     // Declared after `engine`, so it's destroyed (and leaves the device) first.
     std::unique_ptr<RealtimeAudioThread> realtimeThread;
+
+    // Only with IKAROS_PERF=1 (see PerfMonitor). Also after `engine`.
+    std::unique_ptr<PerfMonitor> perfMonitor;
+
+    // The toolbar's busiest block and xruns (see AudioLoadMeter). After `engine` too.
+    std::unique_ptr<AudioLoadMeter> loadMeter;
 
     // The session being edited: its working copy (an unpacked bundle, see
     // AudioEngine.h), the session file inside it that Tracktion reads and
@@ -1047,6 +1082,11 @@ AudioEngine::~AudioEngine()
     preview.reset();
     trackController.reset();
     impl->stopObservingEdit();
+
+    // The autosaver listens to the Edit's undo manager, so it lets go first
+    // (as when a session is replaced). Impl's destructor detaches it too,
+    // but by then the Edit would be gone; the second detach does nothing.
+    impl->autosaver.detach();
     impl->edit.reset();   // closes any plug-in windows
     plugins.reset();
     freesoundStore.reset();   // stops downloads
@@ -2198,6 +2238,16 @@ void AudioEngine::setMetronomeEnabled (bool enabled)
     impl->edit->clickTrackEnabled = enabled;
 }
 
+void AudioEngine::setMetronomeVolume (float gain)
+{
+    impl->edit->setClickTrackVolume (gain);
+}
+
+float AudioEngine::getMetronomeVolume() const
+{
+    return impl->edit != nullptr ? impl->edit->getClickTrackVolume() : 0.6f;
+}
+
 void AudioEngine::setMidiCycleTakes (bool keepAsTakes)
 {
     preferences->set (settings::midiCycleTakes, keepAsTakes);
@@ -2718,7 +2768,12 @@ StereoLevel AudioEngine::getMasterLevel()
     return impl->readMasterLevel();
 }
 
-SystemStats AudioEngine::getSystemStats() const
+PerfMonitor* AudioEngine::getPerfMonitor() const noexcept
+{
+    return impl->perfMonitor.get();
+}
+
+SystemStats AudioEngine::getSystemStats()
 {
     auto& dm = impl->engine.getDeviceManager();
 
@@ -2726,6 +2781,14 @@ SystemStats AudioEngine::getSystemStats() const
     s.cpuPercent = dm.getCpuUsage() * 100.0f;
     s.sampleRate = dm.getSampleRate();
     s.latencyMs = dm.getOutputLatencySeconds() * 1000.0;
+
+    if (auto* meter = impl->loadMeter.get())
+    {
+        // With IKAROS_PERF, PerfMonitor times the blocks (see AudioLoadMeter's constructor).
+        s.peakPercent = impl->perfMonitor != nullptr ? (float) impl->perfMonitor->getSnapshot().callback.maxPercent
+                                                     : meter->takePeak() * 100.0f;
+        s.xruns = meter->getXruns();
+    }
 
     if (impl->realtimeThread != nullptr)
         s.realtimeAudio = impl->realtimeThread->isRealtime();

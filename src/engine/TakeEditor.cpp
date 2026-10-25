@@ -190,28 +190,42 @@ static std::vector<juce::ValueTree> midiTakeListsOf (te::MidiClip& clip)
 }
 
 //==============================================================================
-// Tracktion names a recording "<track> Recording 1" (the first number free
-// on its track). On a region with takes, that number follows the take it
-// plays, so the name agrees with the take badge. A name the user typed
-// (anything not ending in "Recording <number>") is left alone.
-static void numberAfterCurrentTake (te::Clip& clip)
+// Tracktion names a recording "<track> Recording <n>" with the first number
+// free on its track, so deleting "Recording 1" would hand that number to the
+// next take. As in GarageBand, the number counts up on each track instead,
+// even past deleted regions. A region keeps its number when its take changes
+// (the take badge shows which take plays). A name the user typed (anything
+// not ending in "Recording <number>") is left alone.
+static int recordingNumberOf (const juce::String& name)
 {
-    const int current = currentTakeIndex (clip);
-
-    if (countTakes (clip) == 0 || current < 0)
-        return;
-
-    const auto name = clip.getName();
     const juce::String word (" Recording ");
     const int at = name.lastIndexOf (word);
+    const auto number = at >= 0 ? name.substring (at + word.length()) : juce::String();
 
-    if (at < 0)
+    return number.isNotEmpty() && number.containsOnly ("0123456789") ? number.getIntValue() : 0;
+}
+
+static void numberAsNewRecording (te::Clip& clip)
+{
+    auto* track = clip.getClipTrack();
+    const auto name = clip.getName();
+
+    if (track == nullptr || recordingNumberOf (name) == 0)
         return;
 
-    const auto number = name.substring (at + word.length());
+    // Sessions from before the count was kept start after their highest number.
+    int count = track->state[recordingCountProp];
 
-    if (number.isNotEmpty() && number.containsOnly ("0123456789"))
-        clip.setName (name.substring (0, at + word.length()) + juce::String (current + 1));
+    for (auto* other : track->getClips())
+        if (other != &clip)
+            count = juce::jmax (count, recordingNumberOf (other->getName()));
+
+    // Part of the "Record" step: undoing the recording gives its number back
+    // (deleting the region doesn't).
+    track->state.setProperty (recordingCountProp, ++count, undoManagerOf (clip));
+
+    const juce::String word (" Recording ");
+    clip.setName (name.substring (0, name.lastIndexOf (word) + word.length()) + juce::String (count));
 }
 
 TakeEditor::TakeEditor (AudioEngine& o) : owner (o)
@@ -252,7 +266,6 @@ bool TakeEditor::setCurrentTake (RegionId id, int takeIndex)
         playWaveTake (*wave, takeIndex);
     }
 
-    numberAfterCurrentTake (*clip);
     return true;
 }
 
@@ -289,7 +302,6 @@ bool TakeEditor::deleteUnusedTakes (RegionId id)
                 takes.removeChild (i, um);
     }
 
-    numberAfterCurrentTake (*clip);   // the one left is Take 1
     return true;
 }
 
@@ -429,7 +441,6 @@ static void addTakesTo (te::WaveAudioClip& existing, te::WaveAudioClip& recorded
     }
 
     playWaveTake (existing, first + recordedCurrent);
-    numberAfterCurrentTake (existing);
     recorded.removeFromParent();
 }
 
@@ -666,7 +677,6 @@ static void gatherMidi (te::MidiClip& clip, const std::set<RegionId>& recorded)
                 takes.addChild (list.createCopy(), -1, um);
 
             other->setCurrentTake (first + current);
-            numberAfterCurrentTake (*other);
             clip.removeFromParent();
             return;
         }
@@ -700,10 +710,10 @@ void TakeEditor::gatherRecordedTakes (const std::vector<RegionId>& recordedIds, 
                 gatherMidi (*midi, recorded);
         }
 
-        // Still there (it didn't join another region's takes): its takes
-        // are its cycle passes and/or what it recorded over.
+        // Still there (it didn't join another region's takes): a new region,
+        // numbered after the track's last recording.
         if (auto* clip = findClip (edit, id))
-            numberAfterCurrentTake (*clip);
+            numberAsNewRecording (*clip);
     }
 }
 

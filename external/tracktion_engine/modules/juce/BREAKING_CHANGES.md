@@ -1,5 +1,447 @@
 # JUCE breaking changes
 
+# `develop` branch
+
+## Change
+
+NativeMessageBox::show and NativeMessageBox::showAsync have been renamed
+to showForOptions and showForOptionsAsync respectively.
+
+**Possible Issues**
+
+Applications that call these functions will fail to compile.
+
+**Workaround**
+
+Adopt the new function names. When doing so, be aware that the native message box result codes
+will match the result codes specified in the MessageBoxOptions.
+Check the specified result codes in the options that you pass to these functions. Then, update
+your code that handles the message box result code to ensure that it behaves correctly. Instead
+of updating the handler code, you may instead choose to update the options object itself with
+different result codes.
+
+**Rationale**
+
+Previously, the results of NativeMessageBox::show and NativeMessageBox::showAsync indicated
+the index of the activated button. This differed from the behaviour of other functions that
+displayed message boxes and alert windows, such as the static functions in AlertWindow.
+The behaviour of all these functions has been made consistent; they will always return the
+result codes specified in the MessageBoxOptions. The function names have been changed to
+indicate to users that they need to audit their code as they adopt the new behaviour.
+
+
+## Change
+
+MessageBoxOptions::withButton() now requires an integer result-code argument.
+AlertWindow::LookAndFeelMethods::createAlertWindow() has been deleted and
+replaced with createAlertWindowForOptions, which accepts a single
+MessageBoxOptions argument.
+
+**Possible Issues**
+
+Applications that call or override these functions will fail to compile.
+
+**Workaround**
+
+Adapt to the new signature of withButton() by passing an explicit result code
+associated with each button.
+
+Adapt implementations of createAlertWindow() to retrieve button text and
+associated result codes from the MessageBoxOptions argument.
+
+When migrating existing code, be careful to check your result-code handler
+callbacks, and assign appropriate result codes to each button. The old
+convention for AlertWindow::showAsync, AlertWindow::showOkCancelBox, and
+AlertWindow::showYesNoCancelBox was for the button result code to be equal to
+(x + 1) % N, where "x" is the button index, and "N" is total button count. The
+old convention for NativeMessageBox::showAsync was to return the button index
+directly. This discrepancy was the main motivation for making this change.
+
+**Rationale**
+
+This change makes alert window result codes explicit, which in turn should
+make it easier to write callbacks that handle each button correctly.
+
+
+## Change
+
+An AlertWindow created with an associated component is now associated with
+that component using TopLevelWindow::setAssociatedComponent(). This includes
+the alert windows shown by AlertWindow::showAsync() and the other static
+AlertWindow functions.
+
+**Possible Issues**
+
+The alert window is now kept above the window containing the component, and
+is minimised and restored with it. It also moves with that window, where a
+window can position itself. On macOS it takes that window's level, so it may be
+covered by an always-on-top window that would previously have been below it.
+
+**Workaround**
+
+Don't pass an associated component, or call setAssociatedComponent (nullptr)
+on an AlertWindow that you construct yourself.
+
+**Rationale**
+
+An alert should stay with the window it belongs to. This is the only way to
+keep it in front of that window on Wayland, where a window cannot be raised,
+and it matches the behaviour of native alerts on other platforms.
+
+
+## Change
+
+Component::createNewPeer() now takes a DesktopWindowOptions instead
+of separate style flags and native window arguments. Component::addToDesktop()
+is no longer virtual.
+
+**Possible Issues**
+
+Code that overrides createNewPeer() or addToDesktop() will fail to compile.
+
+**Workaround**
+
+Update the createNewPeer() override to take a const DesktopWindowOptions&, and
+read the style flags and native parent from it with getStyleFlags() and the
+getter for the platform's parent type, such as getParentHWND(). Replace an
+addToDesktop() override with an override of the new protected
+Component::createDesktopWindow(), which both addToDesktop() overloads call.
+
+**Rationale**
+
+A desktop window can now be created with the component it was opened from, so
+that temporary windows such as menus and tooltips can be parented to the right
+window. Describing the window with a DesktopWindowOptions needed a second
+addToDesktop() overload, and a single customisation point with its own name
+avoids having two virtual overloads that can hide or call each other.
+
+
+# Version 9.0.3
+
+## Change
+
+SystemStats::isOperatingSystem64Bit() now reports whether the operating system
+is 64-bit rather than whether the current process is, matching the
+documentation. It can return true from a 32-bit build running on a 64-bit Linux
+or Android system, or on Windows on ARM.
+
+**Possible Issues**
+
+Code that used this function to determine the architecture of the current
+process may now behave differently when built for iOS, for 32-bit Linux or
+Android targets, or for 32-bit Windows targets running on ARM64.
+
+**Workaround**
+
+Use the JUCE_64BIT and JUCE_32BIT macros to determine how the current process
+was built.
+
+**Rationale**
+
+The function is documented as describing the operating system, and the macOS
+implementation has always done so, but the iOS, Linux and Android
+implementations were out of step, and the Windows implementation did not detect
+64-bit Windows on ARM from a 32-bit process.
+
+
+# Version 9.0.2
+
+## Change
+
+ThreadPool::addJob no longer provides separate std::function overloads for
+void and ThreadPoolJob::JobStatus return types. It now accepts a single
+callable template parameter that must return exactly void or
+ThreadPoolJob::JobStatus.
+
+**Possible Issues**
+
+Code that previously passed a callable returning a type other than void or
+ThreadPoolJob::JobStatus (for example int or bool) will fail to compile. The
+return value was previously discarded via conversion to std::function<void()>.
+
+**Workaround**
+
+Change the callable so that it returns void, or returns a
+ThreadPoolJob::JobStatus to control whether the job should run again.
+
+**Rationale**
+
+The previous overloads were ambiguous for lambdas returning
+ThreadPoolJob::JobStatus, because std::function<void()> can be constructed from
+callables with non-void return types. Constraining the accepted return types
+removes that ambiguity and rejects accidental misuse at compile time.
+
+
+## Change
+
+The AudioDeviceSelectorComponent::getMidiInputSelectorListBox function has been
+removed.
+
+**Possible Issues**
+
+Code using the removed function will fail to compile.
+
+**Workaround**
+
+There is no workaround.
+
+**Rationale**
+
+Prior to this change the MidiInputSelectorListBox was not accessible when using
+screen reader software. Even if we reworked the component and kept the ListBox
+base class, it would've been a poor fit conceptually for the MidiInputSelector,
+and it would have made the interaction with screen readers unnecessarily
+complex. Hence the ListBox base class was removed, and it's no longer possible
+to return a ListBox pointer to the new MidiInputSelector object.
+
+
+# Version 9.0.1
+
+## Change
+
+OpenGLImageType::create() now honours a request for an Image::SingleChannel
+image. Previously the requested format was ignored, and the returned image was
+always an Image::ARGB image backed by an OpenGL framebuffer.
+
+**Possible Issues**
+
+OpenGLImageType::getFrameBufferFrom() returns nullptr for single channel
+images, where it previously returned a valid framebuffer. Such images also
+report Image::SingleChannel rather than Image::ARGB from Image::getFormat().
+
+**Workaround**
+
+Request an Image::ARGB image explicitly if a framebuffer-backed image is
+required.
+
+**Rationale**
+
+The format requested when creating an image was previously ignored, so an image
+could report a different format to the one that was asked for. This caused
+rendering issues in places where a real single channel image was needed, and
+OpenGLImageType was the only JUCE image type that did not produce a real single
+channel format.
+
+
+## Change
+
+OpenGLContext::setImageCacheSize() now interprets its argument as a number of
+bytes, as documentated. Previously the value was compared against a pixel count,
+so the effective cache was four times larger than requested. The default cache
+size has been raised from 8 MB to 32 MB so that the default behaviour is
+unchanged.
+
+**Possible Issues**
+
+Code calling setImageCacheSize() with an explicit value will end up with an
+image cache four times smaller than before.
+
+**Workaround**
+
+Multiply the previously-passed value by four.
+
+**Rationale**
+
+The documented contract was expressed in bytes, but the implementation applied
+the value as a number of pixels.
+
+
+## Change
+
+zlib, libjpeg, libpng, and libflac are now built in C language mode, instead
+of as C++.
+
+**Possible Issues**
+
+Symbols in these libraries are no longer wrapped in C++ namespaces. If JUCE is
+linked into a binary that separately includes/links zlib, libjpeg, libpng,
+and/or libflac, then the internal symbols in JUCE may conflict with the symbols
+from the external copy of the library. This will result in ODR violations, and
+potentially linker errors.
+
+**Workaround**
+
+If your project already includes external copies of these libraries, set the
+preprocessor definitions JUCE_INCLUDE_ZLIB_CODE, JUCE_INCLUDE_JPEGLIB_CODE,
+JUCE_INCLUDE_PNGLIB_CODE, and/or JUCE_INCLUDE_FLAC_CODE to 0 in order to
+disable the copies bundled in JUCE. You may also set the definitions
+JUCE_ZLIB_INCLUDE_PATH, JUCE_JPEGLIB_INCLUDE_PATH, JUCE_PNGLIB_INCLUDE_PATH,
+and/or JUCE_FLAC_INCLUDE_PATH to set custom include paths for the library
+headers.
+
+**Rationale**
+
+Building these libraries as C code means that the copies vendored by JUCE
+require fewer intrusive changes. Building them as C++ historically required
+internal changes due to (for example) C++'s stricter type-checking rules.
+Building as C should allow for quicker, smoother upgrades of vendored
+dependencies in the future. Another consideration is that the C language has
+different semantics to C++ in some respects, so building as C is more likely to
+produce a binary that has the behaviour intended by the authors.
+
+
+## Change
+
+The WebBrowserComponent native integrations package location changed from
+modules/juce_gui_extra/native/javascript to
+modules/juce_gui_extra/native/typescript/webview-interop.
+
+**Possible Issues**
+
+Applications linking directly to the original in-source package location will
+fail to load the library.
+
+**Workaround**
+
+The package location should be upgraded to reflect the new in-source location.
+Alternatively, projects using a package manager can use the
+@juce-framework/webview package from npm.
+
+Javascript projects relying on the original index.js file can directly import
+webview-interop/dist/index.js instead.
+
+**Rationale**
+
+The WebBrowserComponent native integrations package has been translated to
+TypeScript and prepared to be published as a public npm package. This provides
+type information for projects consuming this package, but it imposes new
+requirements on the directory structure.
+
+
+# Version 9.0.0
+
+## Change
+
+libxi-dev is now a required dependency for building JUCE on Linux, unless the
+JUCE_USE_XINPUT=0 preprocessor definition is set.
+
+**Possible Issues**
+
+Applications that don't disable XInput will fail to compile unless the
+dependency is met.
+
+**Workaround**
+
+Install libxi-dev.
+
+**Rationale**
+
+In order to add multi-touch support on Linux, the XInput2 extension is
+required. The libxi-dev package provides the necessary headers and libraries
+for this extension.
+
+
+## Change
+
+Multi-touch is now disabled on Windows by default.
+
+**Possible Issues**
+
+Applications that rely on multi-touch input on Windows will no longer receive
+multi-touch events.
+
+**Workaround**
+
+To explicitly enable multi-touch support on Windows, call
+`TopLevelWindow::setUsingWindowsMultiTouch (true)` in desktop applications, or
+override `PluginEditor::usesWindowsMultiTouch()` in plugins and return `true`.
+
+**Rationale**
+
+Enabling multi-touch on Windows means the app cannot respond to built-in
+gestures, such as pinch-to-zoom. This is likely to be an unwanted default. The
+reason is that if `registerTouchWindow()` is called for an HWND its
+`DefWindowProc` will no longer emit gesture events. This means that `WM_GESTURE`
+messages aren't sent, and no callbacks will be made to
+e.g. `Component::mouseMagnify()`.
+
+
+## Change
+
+The function Drawable::createFromSVG (const XmlElement& svgDocument) has been
+removed.
+
+**Possible Issues**
+
+Code that calls the function will fail to compile.
+
+**Workaround**
+
+Use the createFromSVGFile() or createFromSVGString() functions instead.
+
+**Rationale**
+
+The SVG parsing features in JUCE have been fundamentally reworked, and they now
+depend on the lunasvg library. Lunasvg does its own XML parsing, and is not
+compatible with the juce::XmlElement type.
+
+
+## Change
+
+The return types of `DrawableShape::getStrokeType()` and
+`DrawableShape::getDashLengths()` changed from `const PathStrokeType&` to
+`PathStrokeType`, and from `const Array<float>&` to `Span<const float>`
+respectively. The parameter type to
+`DrawableShape::setDashLengths (const Array<float>&)` was changed to
+`Span<const float>`.
+
+**Possible Issues**
+
+Code that calls these functions may fail to compile.
+
+**Workaround**
+
+It should be easy to adjust the calling code to handle the new return and
+parameter types.
+
+**Rationale**
+
+The stroke options were extended and generalised to text rendering. The new
+types are a better fit for the adjusted design.
+
+
+## Change
+
+The `Drawable` class no longer inherits from `Component`.
+
+**Possible Issues**
+
+Code that depended on `Drawable` objects inheriting from `Component` will fail
+to compile.
+
+**Workaround**
+
+Affected code can use the new `DrawableComponent` class to wrap `Drawable`
+objects in a `Component` if necessary. There are many examples in the JUCE
+codebase where this transition has already been made.
+
+**Rationale**
+
+This change prepares the way for moving the `Drawable` classes together with the
+SVG parser into the juce_graphics module. This allows us to avoid a dependency
+on the heavyweight `Component` class and juce_gui_basics module, and enables
+using the `Drawable` classes and SVG parser in headless use-cases.
+
+
+## Change
+
+JUCE now uses EGL, rather than GLX, to create an OpenGL context on Linux.
+
+**Possible Issues**
+
+EGL is a new dependency, and it may need to be added to your operating system.
+
+**Workaround**
+
+Install the libegl-dev package (Debian) or the equivalent for your operating
+system.
+
+**Rationale**
+
+Using EGL, rather than GLX, broadens the range of hardware we can deploy JUCE
+on.
+
+
 # Version 8.0.13
 
 ## Change
@@ -939,7 +1381,7 @@ RFC 8259 states
 MUST be encoded using UTF-8 [RFC3629].
 >
 > Previous specifications of JSON have not required the use of UTF-8 when
-transmitting JSON text.  However, the vast majority of JSON-based software
+transmitting JSON text. However, the vast majority of JSON-based software
 implementations have chosen to use the UTF-8 encoding, to the extent that it is
 the only encoding that achieves interoperability.
 
@@ -2688,9 +3130,11 @@ overall latency does not change when enabling/disabling bypass.
 **Rationale**
 
 The documentation for AudioProcessor::getBypassParameter() says
+
 > if this method returns a non-null value, you should never call
-  processBlockBypassed but use the returned parameter to control the bypass
-  state instead.
+processBlockBypassed but use the returned parameter to control the bypass
+state instead.
+
 Some plugin wrappers were not following this rule. After this change, the
 behaviour of all plugin wrappers is consistent with the documented behaviour.
 

@@ -15,6 +15,7 @@ enum class Icon
     power, more, chevronDown, chevronRight, chevronUp, headphones, waveform, mute,
     plugin, folder, stop, warning, openWindow, chevronLeft, clock, download, automation, trim, trash,
     speaker, timer, package, flag, reset, zoomIn, zoomOut, tuningFork,
+    metronomeBody,   // the metronome without its arm (MetronomeButton draws the arm swinging)
     drummer, hihat, cymbal, tom   // the Drummer: its track icon and its piece buttons
 };
 

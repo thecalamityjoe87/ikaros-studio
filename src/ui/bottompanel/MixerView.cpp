@@ -1,4 +1,5 @@
 #include "ui/bottompanel/MixerView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -201,6 +202,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        IKAROS_PERF_PAINT ("MixerView::Strip");
         auto r = getLocalBounds().toFloat();
         g.setColour (selected ? theme().selectedBg : theme().cardBg);
         g.fillRoundedRectangle (r, size::radiusCard);
@@ -373,6 +375,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        IKAROS_PERF_PAINT ("MixerView::MasterStrip");
         auto r = getLocalBounds().toFloat();
         g.setColour (theme().cardBg);
         g.fillRoundedRectangle (r, size::radiusCard);

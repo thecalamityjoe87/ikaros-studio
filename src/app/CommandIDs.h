@@ -52,6 +52,11 @@ namespace CommandIDs
         countInOff,
         countInOneBar,
         countInTwoBars,
+        metronomeVolume20,   // the Metronome Volume submenu, 20% to 100% in steps of 20 (keep them in order)
+        metronomeVolume40,
+        metronomeVolume60,
+        metronomeVolume80,
+        metronomeVolume100,
         toggleMidiCycleTakes,
 
         toggleLibrary,

@@ -1,4 +1,5 @@
 #include "ui/widgets/Knob.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
 #include "ui/theme/Tokens.h"
@@ -65,6 +66,7 @@ void Knob::setArcFamily (Family f)
 
 void Knob::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("Knob");
     // A card, with a border in light mode (transparent in dark). Its shadow
     // falls outside the knob's bounds, so the parent draws it: see drawShadow.
     const auto card = getLocalBounds().toFloat();

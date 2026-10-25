@@ -26,7 +26,7 @@ namespace ikaros::gx::superfuzz
     static_assert (BALANCE == balance && EXPANDER == expander && TONE == tone && TRIM == trim,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* createInput()     { return sfp_p1::plugin(); }
-    PluginLV2* createClip()      { return sfp_clip::plugin(); }
-    PluginLV2* createOutput()    { return sfp_p2::plugin(); }
+    const DspType inputDsp { sfp_p1::plugin, copyStateOf<sfp_p1::Dsp> };
+    const DspType clipDsp { sfp_clip::plugin, copyStateOf<sfp_clip::Dsp> };
+    const DspType outputDsp { sfp_p2::plugin, copyStateOf<sfp_p2::Dsp> };
 }

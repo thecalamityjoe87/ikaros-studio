@@ -1,4 +1,5 @@
 #include "ui/bottompanel/PianoKeyboard.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
@@ -268,6 +269,7 @@ void PianoKeyboard::handleNoteOff (juce::MidiKeyboardState*, int, int note, floa
 
 void PianoKeyboard::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("PianoKeyboard");
     const auto tray = getLocalBounds().toFloat();
     g.setColour (theme().keyboardTray);
     g.fillRoundedRectangle (tray, size::radiusLarge);

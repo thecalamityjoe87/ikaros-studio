@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/SilenceSkip.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 #include <atomic>
@@ -67,6 +68,7 @@ private:
     std::array<juce::IIRFilter, 2> lowPass, highShelf;
     float filterTone = -1.0f;              // the tone the filters were last set up for
     juce::Reverb reverb;
+    SilenceSkip silence;   // skips the DSP while the instrument is silent
     float reverbRoom = -1.0f;              // the room the reverb was last set up for
     juce::SmoothedValue<float> driveGain { 1.0f };
     double rate = 44100.0;

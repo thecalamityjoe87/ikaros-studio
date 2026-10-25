@@ -96,6 +96,13 @@ juce::PopupMenu AppMenuModel::getMenuForIndex (int, const juce::String& name)
         add (CommandIDs::toggleLoop);
         add (CommandIDs::toggleMetronome);
 
+        juce::PopupMenu metronomeVolume;
+
+        for (auto id = (int) CommandIDs::metronomeVolume20; id <= (int) CommandIDs::metronomeVolume100; ++id)
+            metronomeVolume.addCommandItem (&commands, id);
+
+        m.addSubMenu ("Metronome Volume", metronomeVolume);
+
         juce::PopupMenu countIn;
         countIn.addCommandItem (&commands, CommandIDs::countInOff);
         countIn.addCommandItem (&commands, CommandIDs::countInOneBar);

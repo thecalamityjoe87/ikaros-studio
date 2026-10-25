@@ -32,4 +32,12 @@ enum class ThreadPoolStrategy
 /** Returns a function to create a ThreadPool for the given stategy. */
 LockFreeMultiThreadedNodePlayer::ThreadPoolCreator getPoolCreatorFunction (ThreadPoolStrategy);
 
+/** If set, called on each worker thread of a live player's pool (see
+    LockFreeMultiThreadedNodePlayer::setRendersLive) when it starts (true) and
+    just before it exits (false). Lets an app adjust its workers, e.g. ask for
+    real-time priority where setThreadPriority can't get it.
+*/
+using RenderThreadObserver = void (*) (bool started);
+inline std::atomic<RenderThreadObserver> renderThreadObserver { nullptr };
+
 }

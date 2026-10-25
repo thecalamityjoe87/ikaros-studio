@@ -1,4 +1,5 @@
 #include "ui/bottompanel/AudioEditor.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
 #include "ui/widgets/Icons.h"
@@ -820,6 +821,7 @@ void AudioEditor::showMenu()
 // Painting
 void AudioEditor::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("AudioEditor");
     // The waveform is part of the arrangement: dark in both themes.
     g.fillAll (theme().arrangement.laneBg);
 

@@ -374,7 +374,7 @@ private:
     void applyToBuffer (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
     void updateParams (juce::AudioBuffer<float>& buffer);
     void applyEffects (juce::AudioBuffer<float>& buffer);
-    float paramValue (AutomatableParameter::Ptr param);
+    float paramValue (const AutomatableParameter::Ptr& param);
 
     tempo::Sequence::Position currentPos { createPosition (edit.tempoSequence) };
     juce::Reverb reverb;

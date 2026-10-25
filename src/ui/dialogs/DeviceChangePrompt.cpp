@@ -19,8 +19,8 @@ void showDeviceChangePrompt (AudioEngine& engine, const AudioDevicePrompt& promp
     auto options = juce::MessageBoxOptions()
                        .withTitle (appeared ? "New audio device" : "Audio device disconnected")
                        .withMessage (message)
-                       .withButton ("Switch to " + prompt.useName)
-                       .withButton (appeared ? "Keep Current" : "Not Now")
+                       .withButton ("Switch to " + prompt.useName, 1)
+                       .withButton (appeared ? "Keep Current" : "Not Now", 0)
                        .withAssociatedComponent (associatedComponent);
 
     // 1 = Switch, 0 = Keep Current / Not Now (or Escape).
@@ -48,7 +48,7 @@ void showDeviceChangePrompt (AudioEngine& engine, const AudioDevicePrompt& promp
                                            .withTitle ("Couldn't switch")
                                            .withMessage ("\"" + prompt.useName + "\" couldn't be used: " + error
                                                          + "\n\nAnother program may be using it. You can pick a device in Preferences > Audio & MIDI.")
-                                           .withButton ("OK")
+                                           .withButton ("OK", 0)
                                            .withAssociatedComponent (safeAssociated.getComponent()));
 
                 onClosed();

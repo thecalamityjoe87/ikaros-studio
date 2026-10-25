@@ -44,10 +44,29 @@ std::int64_t currentThreadId();
 */
 bool makeThreadRealtime (std::int64_t threadId);
 
+/*  Tells the CPU-limit handler that a thread made real-time is gone (or
+    about to go), so it never touches the thread that gets its ID next.
+    Safe on any thread.
+*/
+void forgetRealtimeThread (std::int64_t threadId);
+
 /*  Whether a thread runs at real-time priority right now (it may have been
     put back since makeThreadRealtime, or never got it). Empty on macOS and
     Windows, where the OS looks after audio threads itself.
 */
 std::optional<bool> isThreadRealtime (std::int64_t threadId);
+
+/*  Keeps a thread on the CPU's fastest cores. Laptop CPUs often mix fast
+    "performance" cores with slower "efficiency" ones, and Linux puts a
+    real-time thread on whichever core is free, without regard to its speed:
+    on the development laptop the same session cost the audio thread 30% of
+    its time on a performance core, 50% on an efficiency core and 93% on a
+    low-power one (docs/perf-report.md, section 3.2).
+
+    "Fastest" = a top speed within 10% of the fastest core's. On a CPU whose
+    cores are all alike this changes nothing (and returns false). Linux only;
+    false elsewhere. Call it from the message thread, like makeThreadRealtime.
+*/
+bool keepOnFastestCores (std::int64_t threadId);
 
 } // namespace ikaros::platform

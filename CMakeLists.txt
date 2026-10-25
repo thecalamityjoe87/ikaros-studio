@@ -9,13 +9,33 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(IkarosStudio VERSION 0.0.1 LANGUAGES C CXX)
+# The version is 0.<milestone>.<patch>: bump IKAROS_MILESTONE when a new
+# milestone starts, IKAROS_PATCH for fix builds within one. IKAROS_STAGE is the
+# label shown beside the version (About, splash) until 1.0.
+set(IKAROS_MILESTONE 13)
+set(IKAROS_PATCH 0)
+set(IKAROS_STAGE "alpha")
 
-# The version people see (About, splash, saved sessions): the release number
-# plus the milestone being worked on, e.g. 0.0.1-milestone7. The bundle and
-# Windows resource versions stay plain PROJECT_VERSION, which must be numeric.
-set(IKAROS_MILESTONE 12)
-set(IKAROS_VERSION_STRING "${PROJECT_VERSION}-milestone${IKAROS_MILESTONE}")
+# The oldest macOS the app runs on. It has to be set before project(), which
+# otherwise creates it empty, and the compiler then builds for the macOS of
+# the SDK it comes with. Other systems ignore it. Xcode 27 doesn't build for
+# anything older than 12.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
+
+project(IkarosStudio VERSION 0.${IKAROS_MILESTONE}.${IKAROS_PATCH} LANGUAGES C CXX)
+
+# The packaging scripts (packaging/*) name their files with this.
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/version.txt" CONTENT "${PROJECT_VERSION}\n")
+
+# Sanitizer builds for the stress tests (docs/perf-report.md), each in its own
+# build folder: -DIKAROS_SANITIZE=address, thread, or realtime (Clang 20+
+# only; PerfMonitor then marks the audio callback as real-time). Set before
+# any target, so JUCE, Tracktion and the libraries are checked too.
+set(IKAROS_SANITIZE "" CACHE STRING "Sanitizer to build with: address, thread or realtime")
+if(IKAROS_SANITIZE)
+    add_compile_options(-fsanitize=${IKAROS_SANITIZE} -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=${IKAROS_SANITIZE})
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,13 +58,13 @@ set(CMAKE_JOB_POOL_COMPILE ikaros_compile)
 set(CMAKE_JOB_POOL_LINK ikaros_link)
 
 # Platform settings that must be decided *before* JUCE is added.
-if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-endif()
-
 if(MSVC)
     # Static runtime, same as Tracktion's own examples, so the .exe has no VC++ redist dependency.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # Read the sources as UTF-8 (comments have characters like "—" and "·"),
+    # not in whatever code page Windows happens to use.
+    add_compile_options(/utf-8)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -99,6 +119,25 @@ foreach(patch IN LISTS IKAROS_TRACKTION_PATCHES)
     endif()
 endforeach()
 
+# And sfizz's.
+file(GLOB IKAROS_SFIZZ_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/external/patches/sfizz-*.patch")
+
+foreach(patch IN LISTS IKAROS_SFIZZ_PATCHES)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz"
+                    RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT already_applied EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/external/sfizz"
+                        RESULT_VARIABLE applied)
+
+        if(NOT applied EQUAL 0)
+            message(FATAL_ERROR "Couldn't apply ${patch} to sfizz")
+        endif()
+    endif()
+endforeach()
+
 # JUCE first (provides juce_add_gui_app, juce_add_binary_data, ...),
 # then Tracktion's modules (registered as tracktion::tracktion_engine etc.).
 add_subdirectory("${TE_DIR}/modules/juce" "${CMAKE_BINARY_DIR}/juce" EXCLUDE_FROM_ALL)
@@ -125,16 +164,46 @@ set(SFIZZ_BENCHMARKS OFF CACHE BOOL "" FORCE)
 set(SFIZZ_DEVTOOLS OFF CACHE BOOL "" FORCE)
 set(ENABLE_LTO OFF CACHE BOOL "" FORCE)   # sfizz's own option; keeps its build quick
 
+# On macOS sfizz picks its SIMD compiler flags from the architecture's name,
+# and takes Apple Silicon's "arm64" for 32-bit ARM (-mfpu=neon, which Apple's
+# compiler rejects); "aarch64" gets none, which is right. Its Intel code needs
+# -mavx on some files, so it can't build both architectures in one go:
+# packaging/macos/build-dmg.sh builds each on its own and joins them.
+if(APPLE)
+    set(IKAROS_MAC_ARCH "${CMAKE_OSX_ARCHITECTURES}")
+
+    if(NOT IKAROS_MAC_ARCH)
+        set(IKAROS_MAC_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+
+    if(IKAROS_MAC_ARCH MATCHES ";")
+        message(FATAL_ERROR
+            "Build one architecture at a time (CMAKE_OSX_ARCHITECTURES=arm64 or x86_64); "
+            "packaging/macos/build-dmg.sh makes a universal app from the two.")
+    endif()
+
+    if(IKAROS_MAC_ARCH STREQUAL "arm64")
+        set(IKAROS_MAC_ARCH "aarch64")
+    endif()
+
+    set(PROJECT_SYSTEM_PROCESSOR "${IKAROS_MAC_ARCH}" CACHE STRING "" FORCE)
+
+    # WavPack's assembly doesn't build for Apple Silicon (or for Intel from
+    # an Apple Silicon Mac); it only speeds up reading .wv samples.
+    set(WAVPACK_ENABLE_ASM OFF CACHE BOOL "" FORCE)
+endif()
+
 # Two settings just for sfizz's code. The values a subdirectory sees are
 # fixed when it's added, so restoring them afterwards leaves our own targets
 # as they were:
 #  - C++17: sfizz doesn't build as C++20 (which the app uses).
 #  - <cstdint>: sfizz's copy of abseil uses uintptr_t in its debug-build
-#    asserts without including it, which newer GCC versions reject.
+#    asserts without including it, which newer GCC versions reject (and
+#    Clang with a newer libc++, which includes less by itself).
 set(IKAROS_SAVED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 set(CMAKE_CXX_STANDARD 17)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(NOT MSVC)
     string(APPEND CMAKE_CXX_FLAGS " -include cstdint")
 endif()
 
@@ -234,7 +303,10 @@ juce_add_binary_data(IkarosStudioBinaryData
         resources/fonts/Figtree-ExtraBold.ttf
         resources/fonts/JetBrainsMono-Medium.ttf
         resources/fonts/JetBrainsMono-Bold.ttf
-        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png)   # the About window
+        resources/icons/io.github.thecalamityjoe87.IkarosStudio.png    # the About window
+        resources/about/tracktion_engine_powered.png                   # its Built With page
+        resources/about/juce_icon.png
+        LICENSE)                                                       # the About page's View License
 
 # The Drummer's grooves (made from the Groove MIDI Dataset by
 # tools/build_grooves.py), compiled in like the fonts. A target of its own,
@@ -263,7 +335,8 @@ set(IKAROS_APP_SOURCES
     src/app/MainComponent.h         src/app/MainComponent.cpp
     src/app/AppMenuModel.h          src/app/AppMenuModel.cpp
     src/app/SurfaceHandler.h        src/app/SurfaceHandler.cpp
-    src/app/CommandIDs.h)
+    src/app/CommandIDs.h
+    src/app/PerfHarness.h           src/app/PerfHarness.cpp)
 
 # The only code that talks to Tracktion. Also built into the smoke test.
 set(IKAROS_ENGINE_SOURCES
@@ -330,7 +403,10 @@ set(IKAROS_ENGINE_SOURCES
     src/engine/Tuner.h              src/engine/Tuner.cpp
     src/engine/LiveWaveform.h       src/engine/LiveWaveform.cpp
     src/engine/AudioDeviceWatcher.h src/engine/AudioDeviceWatcher.cpp
-    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp)
+    src/engine/RealtimeAudioThread.h src/engine/RealtimeAudioThread.cpp
+    src/engine/PerfMonitor.h        src/engine/PerfMonitor.cpp
+    src/engine/AudioLoadMeter.h     src/engine/AudioLoadMeter.cpp
+    src/engine/SilenceSkip.h)
 
 # Tune's pitch correction is fat1's retuner (GPL 2+, see
 # external/fat1/README.ikaros), and Pitch mode's analysis is probabilistic
@@ -379,6 +455,8 @@ set(IKAROS_UI_SOURCES
     src/ui/widgets/Knob.h                   src/ui/widgets/Knob.cpp
     src/ui/widgets/AutomationHint.h         src/ui/widgets/AutomationHint.cpp
     src/ui/widgets/LevelMeter.h             src/ui/widgets/LevelMeter.cpp
+    src/ui/widgets/PaintProbe.h             src/ui/widgets/PaintProbe.cpp
+    src/ui/widgets/PerfOverlay.h            src/ui/widgets/PerfOverlay.cpp
     src/ui/widgets/ClipLight.h              src/ui/widgets/ClipLight.cpp
     src/ui/widgets/CachedShadow.h           src/ui/widgets/CachedShadow.cpp
     src/ui/widgets/MeterSlider.h            src/ui/widgets/MeterSlider.cpp
@@ -392,6 +470,7 @@ set(IKAROS_UI_SOURCES
     src/ui/dialogs/NewTrackDialog.h         src/ui/dialogs/NewTrackDialog.cpp
     src/ui/dialogs/AddPedalDialog.h         src/ui/dialogs/AddPedalDialog.cpp
     src/ui/dialogs/AboutDialog.h            src/ui/dialogs/AboutDialog.cpp
+    src/ui/dialogs/AboutTechnology.h        src/ui/dialogs/AboutTechnology.cpp
     src/ui/dialogs/StartupSplash.h          src/ui/dialogs/StartupSplash.cpp
     src/ui/dialogs/SessionChooser.h         src/ui/dialogs/SessionChooser.cpp
     src/ui/dialogs/SavingOverlay.h          src/ui/dialogs/SavingOverlay.cpp
@@ -418,6 +497,7 @@ set(IKAROS_UI_SOURCES
     src/ui/toolbar/Toolbar.h                src/ui/toolbar/Toolbar.cpp
     src/ui/toolbar/TransportBar.h           src/ui/toolbar/TransportBar.cpp
     src/ui/toolbar/LcdDisplay.h             src/ui/toolbar/LcdDisplay.cpp
+    src/ui/toolbar/MetronomeButton.h        src/ui/toolbar/MetronomeButton.cpp
     src/ui/library/LibrarySidebar.h         src/ui/library/LibrarySidebar.cpp
     src/ui/library/PreviewButton.h          src/ui/library/PreviewButton.cpp
     src/ui/library/ManageSoundsDialog.h       src/ui/library/ManageSoundsDialog.cpp
@@ -474,7 +554,8 @@ target_include_directories(IkarosStudio PRIVATE src)
 
 target_compile_definitions(IkarosStudio PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:IkarosStudio,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="${IKAROS_VERSION_STRING}"
+    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    IKAROS_STAGE="${IKAROS_STAGE}"
     JUCE_USE_CURL=1                 # for PackStore's downloads
     JUCE_WEB_BROWSER=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -483,7 +564,23 @@ target_compile_definitions(IkarosStudio PRIVATE
     ${IKAROS_PLUGIN_HOST_DEFINITIONS})
 
 # The version, as the engine records it in saved sessions.
-target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${IKAROS_VERSION_STRING}")
+target_compile_definitions(IkarosStudio PRIVATE IKAROS_VERSION="${PROJECT_VERSION}")
+
+# Performance tools (docs/perf-report.md): the monitor, overlay and stress
+# harness are built in but do nothing unless the app runs with IKAROS_PERF=1.
+# OFF compiles them out. (Only set when OFF: changing a definition rebuilds
+# everything, JUCE and Tracktion included.)
+option(IKAROS_PERF_TOOLS "Build the IKAROS_PERF=1 performance monitor and stress harness" ON)
+if(NOT IKAROS_PERF_TOOLS)
+    target_compile_definitions(IkarosStudio PRIVATE IKAROS_PERF_TOOLS=0)
+endif()
+
+# JUCE flashes every repainted area in a random colour, to see what redraws
+# too much. A full rebuild: use a separate build folder.
+option(IKAROS_REPAINT_DEBUGGING "Flash repainted areas (JUCE_ENABLE_REPAINT_DEBUGGING)" OFF)
+if(IKAROS_REPAINT_DEBUGGING)
+    target_compile_definitions(IkarosStudio PRIVATE JUCE_ENABLE_REPAINT_DEBUGGING=1)
+endif()
 
 # Where the "More Sounds" window gets its list of downloadable sound packs
 # (see src/engine/PackStore.h): a web address or a file path, in the app's own
@@ -585,7 +682,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
     install(DIRECTORY resources/sounds/
             DESTINATION ${CMAKE_INSTALL_DATADIR}/ikaros-studio/Sounds)
-    install(FILES CREDITS
+    install(FILES LICENSE CREDITS
             DESTINATION ${CMAKE_INSTALL_DOCDIR})
 endif()
 
@@ -612,7 +709,7 @@ if(IKAROS_BUILD_TESTS)
 
     # The test sound pack (made by tests/fixtures/generate_test_pack.py).
     target_compile_definitions(IkarosEngineSmokeTest PRIVATE
-        IKAROS_VERSION="${IKAROS_VERSION_STRING}"
+        IKAROS_VERSION="${PROJECT_VERSION}"
         IKAROS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
         IKAROS_TEST_STORE="${CMAKE_CURRENT_SOURCE_DIR}/tests/store"
         IKAROS_PACK_INDEX_URL="${CMAKE_CURRENT_SOURCE_DIR}/tests/store/index.json")

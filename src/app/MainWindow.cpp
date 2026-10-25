@@ -25,7 +25,10 @@ MainWindow::MainWindow (const juce::String& name, AudioEngine& engine)
     auto size = juce::Point<int> (getWidth(), getHeight());
 
     if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-        size = { juce::jmin (size.x, display->userArea.getWidth()), juce::jmin (size.y, display->userArea.getHeight()) };
+    {
+        const auto area = display->userBounds.toNearestInt();
+        size = { juce::jmin (size.x, area.getWidth()), juce::jmin (size.y, area.getHeight()) };
+    }
 
     centreWithSize (size.x, size.y);
     setVisible (true);

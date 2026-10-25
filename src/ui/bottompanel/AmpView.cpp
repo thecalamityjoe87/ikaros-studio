@@ -1,4 +1,5 @@
 #include "ui/bottompanel/AmpView.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/TrackController.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -581,6 +582,7 @@ void AmpView::drawBackground (juce::Graphics& g) const
 
 void AmpView::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("AmpView");
     // The covering, faceplate and grille come from the cached image,
     // redrawn when the voice, cab or screen scale has changed.
     const auto scale = g.getInternalContext().getPhysicalPixelScaleFactor();
@@ -633,6 +635,7 @@ void AmpView::paint (juce::Graphics& g)
 
 void AmpView::paintOverChildren (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("AmpView::paintOverChildren");
     const auto bounds = getLocalBounds().toFloat();
 
     // Bypassed: dimmed and greyed out, knobs and all.

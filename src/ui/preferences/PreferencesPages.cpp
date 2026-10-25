@@ -348,8 +348,8 @@ AdvancedPage::AdvancedPage (AudioEngine& e, juce::ApplicationCommandManager& com
                            .withTitle ("Reset all preferences?")
                            .withMessage ("Every preference goes back to how it was when you first started the app. "
                                          "Your sessions, sound packs and plug-ins aren't touched.")
-                           .withButton ("Reset")
-                           .withButton ("Cancel")
+                           .withButton ("Reset", 1)
+                           .withButton ("Cancel", 0)
                            .withAssociatedComponent (this);
 
         // The callback gets 1 for the first button. The page may be gone by

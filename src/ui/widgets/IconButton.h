@@ -68,6 +68,11 @@ public:
 protected:
     void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
 
+    /** Draws the icon of an icon-only button, centred in `area`. Override to
+        draw it differently (e.g. MetronomeButton's swinging arm). */
+    virtual void paintIcon (juce::Graphics&, juce::Rectangle<float> area, juce::Colour);
+    float getIconSize() const noexcept          { return iconSize; }
+
 private:
     std::optional<Icon> icon;
     std::optional<juce::Colour> iconColour;

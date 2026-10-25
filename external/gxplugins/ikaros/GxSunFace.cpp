@@ -24,5 +24,5 @@ namespace ikaros::gx::sunface
     static_assert (DRIVE == drive && INPUT_ == input && VOLUME == volume,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return SunFace::plugin(); }
+    const DspType dsp { SunFace::plugin, copyStateOf<SunFace::Dsp> };
 }

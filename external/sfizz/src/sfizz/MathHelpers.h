@@ -718,7 +718,10 @@ private:
  *
  */
 namespace Random {
-static fast_rand randomGenerator;
+// Ikaros: one per thread. A plain static (one per source file, at that) was
+// stepped by every thread that starts a note or makes a voice: the audio
+// thread and each SFZ loader building a new synth, at the same time.
+static thread_local fast_rand randomGenerator;
 } // namespace Random
 
 /**

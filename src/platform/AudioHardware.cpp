@@ -2,6 +2,7 @@
 
 #if JUCE_LINUX
  #include <alsa/asoundlib.h>
+ #include <array>
  #include <sched.h>
  #include <signal.h>
  #include <sys/resource.h>
@@ -78,19 +79,45 @@ namespace
     // RealtimeKit caps it lower anyway (20 by default).
     constexpr int preferredPriority = 70;
 
-    // The thread made real-time last, for the signal handler below.
-    std::atomic<pid_t> realtimeThread { 0 };
+    // The threads made real-time (the audio thread and Tracktion's render
+    // workers), for the signal handler below; 0 = a free slot. Plain atomics
+    // in a fixed array, as the handler can't take locks or allocate.
+    std::array<std::atomic<pid_t>, 16> realtimeThreads {};
+
+    void rememberRealtimeThread (pid_t tid)
+    {
+        for (auto& slot : realtimeThreads)
+            if (slot.load() == tid)
+                return;
+
+        for (auto& slot : realtimeThreads)
+            if (pid_t empty = 0; slot.compare_exchange_strong (empty, tid))
+                return;
+    }
 
     // The kernel sends SIGXCPU when a real-time thread has run for too long
     // without a break (the RLIMIT_RTTIME soft limit), and kills the app at
     // the hard limit. Putting the thread back to ordinary priority stops the
     // count. (Only system calls are safe in a signal handler; this is one.)
+    //
+    // All of them go back, not just the one that ran too long: the session is
+    // too heavy, and a real-time audio thread waiting on an ordinary worker
+    // would only spin. RealtimeAudioThread asks again once the load is light.
+    //
+    // SCHED_RESET_ON_FORK must stay set: RealtimeKit (and makeThreadRealtime
+    // below) set it, and only a privileged process may clear it. Asking for
+    // plain SCHED_OTHER fails with EPERM, the thread stays real-time, and the
+    // kernel kills the app 100 ms later at the hard limit. That was the crash
+    // when the CPU meter got near 90-100%.
     void onCpuLimit (int)
     {
-        if (const auto tid = realtimeThread.load())
+        for (auto& slot : realtimeThreads)
         {
-            sched_param ordinary {};
-            sched_setscheduler (tid, SCHED_OTHER, &ordinary);
+            if (const auto tid = slot.load())
+            {
+                sched_param ordinary {};
+                sched_setscheduler (tid, SCHED_OTHER | SCHED_RESET_ON_FORK, &ordinary);
+            }
         }
     }
 
@@ -182,7 +209,7 @@ bool makeThreadRealtime (std::int64_t threadId)
     if (tid <= 0)
         return false;
 
-    realtimeThread = tid;
+    rememberRealtimeThread (tid);
     limitRealtimeRuns (200000);   // 200 ms, RealtimeKit's usual limit
 
     // Allowed for users with a real-time limit (e.g. in the "audio" group).
@@ -207,6 +234,19 @@ bool makeThreadRealtime (std::int64_t threadId)
    #endif
 }
 
+void forgetRealtimeThread (std::int64_t threadId)
+{
+   #if JUCE_LINUX
+    // Thread IDs are reused (by any process), so a gone thread's mustn't stay
+    // where the signal handler would demote whatever thread gets it next.
+    for (auto& slot : realtimeThreads)
+        if (pid_t tid = (pid_t) threadId; tid > 0)
+            slot.compare_exchange_strong (tid, 0);
+   #else
+    juce::ignoreUnused (threadId);
+   #endif
+}
+
 std::optional<bool> isThreadRealtime (std::int64_t threadId)
 {
    #if JUCE_LINUX
@@ -219,6 +259,58 @@ std::optional<bool> isThreadRealtime (std::int64_t threadId)
    #else
     juce::ignoreUnused (threadId);
     return std::nullopt;
+   #endif
+}
+
+bool keepOnFastestCores (std::int64_t threadId)
+{
+   #if JUCE_LINUX
+    const auto tid = (pid_t) threadId;
+
+    if (tid <= 0)
+        return false;
+
+    // The cores this process may use (a cpu_set_t is a bit per core).
+    cpu_set_t allowed;
+    CPU_ZERO (&allowed);
+
+    if (sched_getaffinity (0, sizeof (allowed), &allowed) != 0)
+        return false;
+
+    // Each allowed core's top speed, from the kernel's cpufreq files.
+    std::vector<std::pair<int, int>> speeds;   // core, kHz
+    int fastest = 0;
+
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    {
+        if (! CPU_ISSET (cpu, &allowed))
+            continue;
+
+        const juce::File f ("/sys/devices/system/cpu/cpu" + juce::String (cpu) + "/cpufreq/cpuinfo_max_freq");
+        const int kHz = f.existsAsFile() ? f.loadFileAsString().trim().getIntValue() : 0;
+
+        if (kHz <= 0)
+            return false;   // speeds unknown (a VM, say): leave the scheduler to it
+
+        speeds.push_back ({ cpu, kHz });
+        fastest = juce::jmax (fastest, kHz);
+    }
+
+    cpu_set_t fast;
+    CPU_ZERO (&fast);
+
+    for (auto [cpu, kHz] : speeds)
+        if (kHz >= fastest * 9 / 10)
+            CPU_SET (cpu, &fast);
+
+    // All cores alike: nothing to choose.
+    if (CPU_COUNT (&fast) == (int) speeds.size())
+        return false;
+
+    return sched_setaffinity (tid, sizeof (fast), &fast) == 0;
+   #else
+    juce::ignoreUnused (threadId);
+    return false;
    #endif
 }
 

@@ -25,5 +25,5 @@ namespace ikaros::gx::guvnor
     static_assert (BASS == bass && GAIN == gain && LEVEL == level && MID == mid && TREBLE == treble,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* create()    { return guvnor::plugin(); }
+    const DspType dsp { guvnor::plugin, copyStateOf<guvnor::Dsp> };
 }

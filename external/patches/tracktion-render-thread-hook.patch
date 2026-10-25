@@ -1,0 +1,152 @@
+diff --git a/modules/tracktion_engine/playback/graph/tracktion_TracktionNodePlayer.h b/modules/tracktion_engine/playback/graph/tracktion_TracktionNodePlayer.h
+index e49b60d8069..26ed4397f4b 100644
+--- a/modules/tracktion_engine/playback/graph/tracktion_TracktionNodePlayer.h
++++ b/modules/tracktion_engine/playback/graph/tracktion_TracktionNodePlayer.h
+@@ -57,6 +57,12 @@ public:
+         nodePlayer.setNumThreads (numThreads);
+     }
+ 
++    /** See LockFreeMultiThreadedNodePlayer::setRendersLive. */
++    void setRendersLive (bool isLive)
++    {
++        nodePlayer.setRendersLive (isLive);
++    }
++
+     tracktion::graph::Node* getNode()
+     {
+         return nodePlayer.getNode();
+diff --git a/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp b/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp
+index a75ca7872fb..fa540c820c2 100644
+--- a/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp
++++ b/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp
+@@ -186,6 +186,7 @@ struct EditPlaybackContext::NodePlaybackContext
+                #endif
+             };
+ 
++        player.setRendersLive (true);   // before its workers start (see renderThreadObserver)
+         setNumThreads (numThreads);
+         player.enablePooledMemoryAllocations (EditPlaybackContextInternal::getPooledMemoryFlag());
+         player.enableNodeMemorySharing (EditPlaybackContextInternal::getNodeMemorySharingFlag());
+diff --git a/modules/tracktion_graph/tracktion_graph/tracktion_LockFreeMultiThreadedNodePlayer.h b/modules/tracktion_graph/tracktion_graph/tracktion_LockFreeMultiThreadedNodePlayer.h
+index d1a8168b06c..22f14867600 100644
+--- a/modules/tracktion_graph/tracktion_graph/tracktion_LockFreeMultiThreadedNodePlayer.h
++++ b/modules/tracktion_graph/tracktion_graph/tracktion_LockFreeMultiThreadedNodePlayer.h
+@@ -231,6 +231,15 @@ public:
+     */
+     void setNumThreads (size_t);
+ 
++    /** Marks this player as rendering live, for an audio device, rather than
++        offline: only a live player's workers are reported to renderThreadObserver.
++        Call it before setNumThreads.
++    */
++    void setRendersLive (bool isLive)           { rendersLive = isLive; }
++
++    /** True if setRendersLive (true) was called. */
++    bool isRenderingLive() const                { return rendersLive; }
++
+     /** Sets the Node to process. */
+     void setNode (std::unique_ptr<Node>);
+ 
+@@ -290,6 +299,7 @@ private:
+     juce::Range<int64_t> referenceSampleRange;
+     choc::buffer::FrameCount numSamplesToProcess = 0;
+     std::atomic<bool> threadsShouldExit { false }, useMemoryPool { false }, disableLatencyComp { false };
++    std::atomic<bool> rendersLive { false };
+ 
+     RealTimeSpinLock processMutex;
+     std::unique_ptr<ThreadPool> threadPool;
+diff --git a/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.cpp b/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.cpp
+index 489942b7960..f2f91240b1d 100644
+--- a/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.cpp
++++ b/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.cpp
+@@ -28,6 +28,28 @@ namespace
+         tracktion::core::pause();
+         tracktion::core::pause();
+     }
++
++    // Names a worker thread and, for a live player, tells the app's
++    // renderThreadObserver when it starts and ends.
++    struct RenderThreadScope
++    {
++        explicit RenderThreadScope (const LockFreeMultiThreadedNodePlayer& player)
++            : live (player.isRenderingLive())
++        {
++            juce::Thread::setCurrentThreadName (live ? "Render worker" : "Offline worker");
++
++            if (auto observer = renderThreadObserver.load(); observer && live)
++                observer (true);
++        }
++
++        ~RenderThreadScope()
++        {
++            if (auto observer = renderThreadObserver.load(); observer && live)
++                observer (false);
++        }
++
++        const bool live;
++    };
+ }
+ 
+ 
+@@ -151,6 +173,8 @@ private:
+ 
+     void runThread()
+     {
++        const RenderThreadScope renderThreadScope (player);
++
+         juce::WorkgroupToken token;
+         workgroup.join (token);
+ 
+@@ -255,6 +279,8 @@ private:
+ 
+     void runThread()
+     {
++        const RenderThreadScope renderThreadScope (player);
++
+         juce::WorkgroupToken token;
+         workgroup.join (token);
+ 
+@@ -415,6 +441,8 @@ private:
+ 
+     void runThread()
+     {
++        const RenderThreadScope renderThreadScope (player);
++
+         juce::WorkgroupToken token;
+         workgroup.join (token);
+ 
+@@ -522,6 +550,8 @@ private:
+ 
+     void runThread()
+     {
++        const RenderThreadScope renderThreadScope (player);
++
+         juce::WorkgroupToken token;
+         workgroup.join (token);
+ 
+@@ -654,6 +684,8 @@ private:
+ 
+     void runThread()
+     {
++        const RenderThreadScope renderThreadScope (player);
++
+         juce::WorkgroupToken token;
+         workgroup.join (token);
+         
+diff --git a/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.h b/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.h
+index f903472015c..7244d65b519 100644
+--- a/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.h
++++ b/modules/tracktion_graph/tracktion_graph/tracktion_NodePlayerThreadPools.h
+@@ -32,4 +32,12 @@ enum class ThreadPoolStrategy
+ /** Returns a function to create a ThreadPool for the given stategy. */
+ LockFreeMultiThreadedNodePlayer::ThreadPoolCreator getPoolCreatorFunction (ThreadPoolStrategy);
+ 
++/** If set, called on each worker thread of a live player's pool (see
++    LockFreeMultiThreadedNodePlayer::setRendersLive) when it starts (true) and
++    just before it exits (false). Lets an app adjust its workers, e.g. ask for
++    real-time priority where setThreadPriority can't get it.
++*/
++using RenderThreadObserver = void (*) (bool started);
++inline std::atomic<RenderThreadObserver> renderThreadObserver { nullptr };
++
+ }

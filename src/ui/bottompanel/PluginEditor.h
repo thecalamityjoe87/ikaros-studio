@@ -12,11 +12,12 @@ namespace ikaros
 //==============================================================================
 /**
     The settings for one effect, shown in the bottom panel's main area when you
-    click an effect in the Plug-ins inspector: a header (name, on/off, Done)
-    and one knob per parameter, wrapping to the available width.
+    click an effect in the Plug-ins inspector: a bordered box with on/off and
+    the name along its top and one knob per parameter under them, wrapping
+    to the available width, and Done beside the box.
 
     Built-in effects have no editor of their own, so this generic one works
-    for all of them. Tune is laid out as a panel like its design, with its
+    for all of them. Tune is laid out like its design, with its
     settings that aren't knobs (its key, the notes it can land on, Follow
     MIDI) and its readout round its knobs (see TuneControls). Third-party plug-ins open their own window instead
     (see PluginChainView::openEditor).
@@ -49,11 +50,17 @@ private:
     IconButton doneButton { "Done", std::nullopt, "Done" };
     juce::OwnedArray<Knob> knobs;
     std::unique_ptr<TuneControls> tuneControls;   // Tune only
+    juce::Rectangle<int> box, titleArea, contentArea;
 
-    static constexpr int padding = 18, headerHeight = 40, gap = 14;
+    static constexpr int padding = 18, gap = 14;
+    static constexpr int boxPadding = 16;         // inside the box's border
+    static constexpr int titleRowHeight = 28;     // on/off and the name (and Tune's Key and Lock to Key)
+    static constexpr int powerSize = 24, titleGap = 8, doneWidth = 76;
+    static constexpr const char* noSettingsText = "This effect has no settings.";
 
-    int columnsFor (int width) const;
-    int knobsHeight (int width) const;
+    int columnsFor (int innerWidth) const;
+    int getTitleWidth() const;
+    juce::Rectangle<int> getBoxBounds (int width) const;   // for the editor's width
     juce::String getTitleText() const;
     juce::Font getTitleFont() const;
     void refreshValues();

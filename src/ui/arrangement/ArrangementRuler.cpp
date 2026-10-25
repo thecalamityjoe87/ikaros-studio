@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementRuler.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/theme/Fonts.h"
 
@@ -33,6 +34,7 @@ void ArrangementView::Ruler::setLoop (bool on, double start, double end)
 
 void ArrangementView::Ruler::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::Ruler");
     auto r = getLocalBounds();
     g.fillAll (theme().rulerBg);
     g.setColour (theme().divider);

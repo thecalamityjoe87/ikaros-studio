@@ -1,1 +1,10 @@
+build/
+build-*/
+.flatpak-builder/
+.cache/
+compile_commands.json
 __pycache__/
+.vscode/
+.idea/
+*.swp
+.DS_Store

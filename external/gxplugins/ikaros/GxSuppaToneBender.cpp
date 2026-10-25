@@ -25,7 +25,7 @@ namespace ikaros::gx::tonebender
     static_assert (FUZZ == fuzz && TONE == tone && VOLUME == volume,
                    "GxDsp.h's port numbers are out of date");
 
-    PluginLV2* createInput()     { return vstb_p1::plugin(); }
-    PluginLV2* createClip()      { return vstb_clip::plugin(); }
-    PluginLV2* createOutput()    { return vstb_p2::plugin(); }
+    const DspType inputDsp { vstb_p1::plugin, copyStateOf<vstb_p1::Dsp> };
+    const DspType clipDsp { vstb_clip::plugin, copyStateOf<vstb_clip::Dsp> };
+    const DspType outputDsp { vstb_p2::plugin, copyStateOf<vstb_p2::Dsp> };
 }

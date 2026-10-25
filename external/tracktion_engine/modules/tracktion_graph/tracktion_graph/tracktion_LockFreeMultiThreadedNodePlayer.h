@@ -231,6 +231,15 @@ public:
     */
     void setNumThreads (size_t);
 
+    /** Marks this player as rendering live, for an audio device, rather than
+        offline: only a live player's workers are reported to renderThreadObserver.
+        Call it before setNumThreads.
+    */
+    void setRendersLive (bool isLive)           { rendersLive = isLive; }
+
+    /** True if setRendersLive (true) was called. */
+    bool isRenderingLive() const                { return rendersLive; }
+
     /** Sets the Node to process. */
     void setNode (std::unique_ptr<Node>);
 
@@ -290,6 +299,7 @@ private:
     juce::Range<int64_t> referenceSampleRange;
     choc::buffer::FrameCount numSamplesToProcess = 0;
     std::atomic<bool> threadsShouldExit { false }, useMemoryPool { false }, disableLatencyComp { false };
+    std::atomic<bool> rendersLive { false };
 
     RealTimeSpinLock processMutex;
     std::unique_ptr<ThreadPool> threadPool;

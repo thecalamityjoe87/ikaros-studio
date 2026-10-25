@@ -7,8 +7,8 @@ namespace ikaros
 
 //==============================================================================
 /**
-    The little light at the end of an input meter: red once the input has
-    clipped (been too loud), until it's clicked.
+    The little warning sign at the end of an input meter: red once the
+    input has clipped (been too loud), until it's clicked.
 */
 class ClipLight  : public juce::Component,
                    public juce::SettableTooltipClient

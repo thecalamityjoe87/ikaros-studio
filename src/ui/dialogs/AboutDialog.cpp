@@ -48,10 +48,15 @@ AboutDialog::AboutDialog (AudioEngine& e)
     text.setBorder ({ 12, 14, 12, 14 });
     addChildComponent (text);
 
+    builtWithView.setViewedComponent (&builtWith, false);
+    builtWithView.setScrollBarsShown (true, false);
+    builtWithView.setTitle ("Built With");
+    addChildComponent (builtWithView);
+
     // The chosen tab is a rounded pill inside the shared background drawn in paint().
     int index = 0;
 
-    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
+    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &builtWithTab, &acknowledgementsTab })
     {
         b->setColours (IconButton::segmentColours);
         b->setCornerRadius (segmentRadius);
@@ -61,6 +66,10 @@ AboutDialog::AboutDialog (AudioEngine& e)
         addAndMakeVisible (b);
         ++index;
     }
+
+    licenseButton.setColours (IconButton::borderedColours);
+    licenseButton.onClick = [this] { showPage (Page::license); };
+    addChildComponent (licenseButton);
 
     doneButton.setColours (IconButton::primaryColours);
     doneButton.onClick = [this] { close(); };
@@ -88,18 +97,24 @@ void AboutDialog::showPage (Page newPage)
 {
     page = newPage;
 
-    aboutTab.setToggleState (page == Page::about, juce::dontSendNotification);
+    aboutTab.setToggleState (page == Page::about || page == Page::license, juce::dontSendNotification);
     releaseNotesTab.setToggleState (page == Page::releaseNotes, juce::dontSendNotification);
+    builtWithTab.setToggleState (page == Page::builtWith, juce::dontSendNotification);
     creditsTab.setToggleState (page == Page::credits, juce::dontSendNotification);
     acknowledgementsTab.setToggleState (page == Page::acknowledgements, juce::dontSendNotification);
 
-    text.setVisible (page != Page::about);
-    text.setTitle (page == Page::releaseNotes ? "Release Notes" : page == Page::credits ? "Credits" : "Acknowledgements");
+    text.setVisible (page != Page::about && page != Page::builtWith);
+    builtWithView.setVisible (page == Page::builtWith);
+    builtWithView.setViewPosition (0, 0);
+    licenseButton.setVisible (page == Page::about);
+    text.setTitle (page == Page::releaseNotes ? "Release Notes" : page == Page::credits ? "Credits"
+                 : page == Page::license ? "License" : "Acknowledgements");
     text.clear();
 
     if (page == Page::credits)               fillCredits();
     else if (page == Page::releaseNotes)     fillReleaseNotes();
     else if (page == Page::acknowledgements) fillAcknowledgements();
+    else if (page == Page::license)          fillLicense();
 
     text.setCaretPosition (0);   // show the top
     repaint();
@@ -144,7 +159,7 @@ void AboutDialog::fillCredits()
 
 void AboutDialog::fillReleaseNotes()
 {
-    addHeading (text, juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha): first release");
+    addHeading (text, juce::JUCEApplication::getInstance()->getApplicationVersion() + " (" IKAROS_STAGE "): first release");
     addBody (text, "The first release of Ikaros Studio. It's alpha software: ready to try, but expect rough "
                    "edges, and keep a copy of any session you care about.\n");
 
@@ -206,6 +221,14 @@ void AboutDialog::fillAcknowledgements()
                    "The full license texts are in the CREDITS file that comes with Ikaros Studio.");
 }
 
+void AboutDialog::fillLicense()
+{
+    // Monospaced, as the text is laid out for: its indents and centred headings.
+    text.setFont (fonts::mono (textSize::sm));
+    text.setColour (juce::TextEditor::textColourId, theme().textSecondary);
+    text.insertTextAtCaret (juce::String::fromUTF8 (BinaryData::LICENSE, BinaryData::LICENSESize));
+}
+
 void AboutDialog::close()
 {
     // Remove ourselves on the next message-loop turn: we may be inside our
@@ -253,7 +276,7 @@ void AboutDialog::paint (juce::Graphics& g)
     g.setColour (theme().segmentWellBorder);
     g.drawRoundedRectangle (tabsArea.toFloat().reduced (0.5f), segmentOutlineRadius, 1.0f);
 
-    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &acknowledgementsTab })
+    for (auto* b : { &aboutTab, &creditsTab, &releaseNotesTab, &builtWithTab, &acknowledgementsTab })
         IconButton::drawSegmentShadow (g, *b);
 
     if (page != Page::about)
@@ -276,7 +299,7 @@ void AboutDialog::paint (juce::Graphics& g)
 
     g.setColour (theme().textSecondary);
     g.setFont (fonts::uiSemiBold (textSize::md));
-    g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (alpha)",
+    g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " (" IKAROS_STAGE ")",
                 r.removeFromTop (22), juce::Justification::centred);
     r.removeFromTop (14);
 
@@ -291,6 +314,13 @@ void AboutDialog::paint (juce::Graphics& g)
     g.setFont (fonts::ui (textSize::smPlus));
     g.drawFittedText ("This is the first alpha release: expect rough edges, and keep a copy of any session you care about.",
                       r.removeFromTop (40), juce::Justification::centredTop, 2, 1.0f);
+
+    // The GPL's notices: copyright, the license, no warranty. View License
+    // (beside Done) shows the full text.
+    g.setFont (fonts::ui (textSize::sm));
+    g.drawFittedText (juce::String::fromUTF8 ("\xc2\xa9 2026 Isaac Joseph. Ikaros Studio is free software under the "
+                                              "GNU General Public License v3 or later, and comes with no warranty."),
+                      contentArea.reduced (40, 0).removeFromBottom (34), juce::Justification::centredBottom, 2, 1.0f);
 }
 
 void AboutDialog::resized()
@@ -299,8 +329,8 @@ void AboutDialog::resized()
                                                     juce::jmin (panelHeight, getHeight() - 32));
     auto r = panel.reduced (28, 24);
 
-    const std::array<IconButton*, 4> tabs { &aboutTab, &releaseNotesTab, &creditsTab, &acknowledgementsTab };
-    std::array<int, 4> tabWidths {};
+    const std::array<IconButton*, 5> tabs { &aboutTab, &releaseNotesTab, &creditsTab, &builtWithTab, &acknowledgementsTab };
+    std::array<int, 5> tabWidths {};
     int tabsWidth = 2 * segmentInset;
 
     for (size_t i = 0; i < tabs.size(); ++i)
@@ -317,11 +347,18 @@ void AboutDialog::resized()
         tabs[i]->setBounds (t.removeFromLeft (tabWidths[i]));
 
     r.removeFromTop (16);
-    doneButton.setBounds (r.removeFromBottom (36).removeFromRight (96));
+    auto buttons = r.removeFromBottom (36);
+    doneButton.setBounds (buttons.removeFromRight (96));
+    licenseButton.setBounds (buttons.removeFromLeft (124));
     r.removeFromBottom (16);
 
     contentArea = r;
     text.setBounds (contentArea);
+
+    // Room on the right for the scrollbar, so it doesn't cover the cards.
+    builtWithView.setBounds (contentArea);
+    const auto listWidth = contentArea.getWidth() - builtWithView.getScrollBarThickness() - 8;
+    builtWith.setSize (listWidth, builtWith.getHeightForWidth (listWidth));
 }
 
 } // namespace ikaros

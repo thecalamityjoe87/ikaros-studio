@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementSections.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "engine/AudioEngine.h"
 #include "engine/TrackController.h"
@@ -134,6 +135,7 @@ ArrangementView::SectionStrip::Hit ArrangementView::SectionStrip::findHit (juce:
 //==============================================================================
 void ArrangementView::SectionStrip::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::SectionStrip");
     auto r = getLocalBounds();
     g.fillAll (theme().sectionsStripBg);
     g.setColour (theme().divider);

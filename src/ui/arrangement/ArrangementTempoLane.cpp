@@ -1,4 +1,5 @@
 #include "ui/arrangement/ArrangementTempoLane.h"
+#include "ui/widgets/PaintProbe.h"
 #include "ui/arrangement/ArrangementLayout.h"
 #include "ui/theme/Fonts.h"
 #include "ui/theme/IkarosLookAndFeel.h"
@@ -130,6 +131,7 @@ ArrangementView::TempoLane::Hit ArrangementView::TempoLane::findHit (juce::Point
 //==============================================================================
 void ArrangementView::TempoLane::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("ArrangementView::TempoLane");
     auto r = getLocalBounds();
     g.fillAll (theme().rulerBg);
     g.setColour (theme().divider);

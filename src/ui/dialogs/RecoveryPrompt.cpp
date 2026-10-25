@@ -41,8 +41,8 @@ namespace
         auto options = juce::MessageBoxOptions()
                            .withTitle ("Discard unsaved work?")
                            .withMessage ("The unsaved work in \"" + session.name + "\" will be deleted. This can't be undone.")
-                           .withButton ("Discard")
-                           .withButton ("Cancel")
+                           .withButton ("Discard", 1)
+                           .withButton ("Cancel", 0)
                            .withAssociatedComponent (parent);
 
         // 1 = Discard, 0 = Cancel (or Escape): back to the first question.
@@ -78,8 +78,8 @@ namespace
                            .withMessage ("Ikaros Studio quit unexpectedly while \"" + session.name + "\" was open. "
                                          "Its work was saved automatically " + describeTime (session.savedAt) + ".\n\n"
                                          "Recover it, or discard the unsaved work?")
-                           .withButton ("Recover")
-                           .withButton ("Discard")
+                           .withButton ("Recover", 1)
+                           .withButton ("Discard", 0)
                            .withAssociatedComponent (parent);
 
         // 1 = Recover, 0 = Discard (or Escape, so Discard asks again first).
@@ -104,7 +104,7 @@ namespace
             auto failed = juce::MessageBoxOptions()
                               .withTitle ("Couldn't recover \"" + remaining.front().name + "\"")
                               .withMessage ("Its autosaved copy couldn't be read.")
-                              .withButton ("OK")
+                              .withButton ("OK", 0)
                               .withAssociatedComponent (parent);
 
             remaining.erase (remaining.begin());

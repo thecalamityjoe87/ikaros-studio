@@ -1,4 +1,5 @@
 #include "ui/library/LoopBrowser.h"
+#include "ui/widgets/PaintProbe.h"
 #include "engine/AudioPreview.h"
 #include "engine/FreesoundStore.h"
 #include "engine/SoundLibrary.h"
@@ -789,8 +790,8 @@ void LoopBrowser::confirmRemove (const Item& item)
     auto options = juce::MessageBoxOptions()
                        .withTitle ("Remove \"" + item.name + "\"?")
                        .withMessage ("The loop is deleted from this computer. You can add it from Freesound again.")
-                       .withButton ("Remove")
-                       .withButton ("Cancel")
+                       .withButton ("Remove", 1)
+                       .withButton ("Cancel", 0)
                        .withAssociatedComponent (this);
 
     // The answer arrives later (no modal loops), so check we still exist.
@@ -808,7 +809,7 @@ void LoopBrowser::confirmRemove (const Item& item)
             AlertDialog::show (juce::MessageBoxOptions()
                                .withTitle ("Couldn't remove the loop")
                                .withMessage ("Check that its file isn't open elsewhere, then try again.")
-                               .withButton ("OK")
+                               .withButton ("OK", 0)
                                .withAssociatedComponent (safeThis.getComponent()));
     });
 }
@@ -816,6 +817,7 @@ void LoopBrowser::confirmRemove (const Item& item)
 //==============================================================================
 void LoopBrowser::paintOverChildren (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LoopBrowser::paintOverChildren");
     // Magnifier inside the search field (its left indent leaves room).
     icons::draw (g, Icon::search, searchField.getBounds().removeFromLeft (34).toFloat().translated (2.0f, 0.0f),
                  searchField.isEnabled() ? theme().textSecondary : theme().borderStrong, 15.0f, 1.8f);
@@ -823,6 +825,7 @@ void LoopBrowser::paintOverChildren (juce::Graphics& g)
 
 void LoopBrowser::paint (juce::Graphics& g)
 {
+    IKAROS_PERF_PAINT ("LoopBrowser");
     g.fillAll (theme().librarySidebarBg);
     g.setColour (theme().divider);
     g.fillRect (getLocalBounds().removeFromRight (1));
