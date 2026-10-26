@@ -36,8 +36,8 @@ bool startWindowManagerDrag (juce::DocumentWindow&);
     traffic lights, full screen, tiling and minimising are the system's own,
     but it's made transparent with our content drawn under it, so the buttons
     sit at the left of the MenuBar strip. Needs a window with a native title
-    bar. JUCE resets the window style when leaving full screen, so call this
-    again whenever the window may have changed; it does nothing if it's set. */
+    bar; call it once the native window exists (and again if it's recreated).
+    It puts the title bar back by itself after the window leaves full screen. */
 void useInlineTitleBar (juce::DocumentWindow&);
 
 /** macOS: how much of the strip's left edge the traffic lights need, or 0

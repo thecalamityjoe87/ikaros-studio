@@ -148,12 +148,6 @@ void MainWindow::resized()
 {
     juce::DocumentWindow::resized();
     rememberRestoredBounds();
-
-   #if JUCE_MAC
-    // Leaving full screen resets the window style (and so resizes the
-    // content); put the inline title bar back.
-    platform::useInlineTitleBar (*this);
-   #endif
 }
 
 void MainWindow::rememberRestoredBounds()

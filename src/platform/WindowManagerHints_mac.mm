@@ -6,12 +6,15 @@
 #if JUCE_MAC
 
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 
 namespace ikaros::platform
 {
 
 namespace
 {
+    char watchingFullScreenKey;   // marks windows that already restore the title bar after full screen
+
     NSWindow* getNSWindow (const juce::Component& window)
     {
         if (auto* peer = window.getPeer())
@@ -19,23 +22,49 @@ namespace
 
         return nil;
     }
+
+    void applyInlineTitleBar (NSWindow* nsWindow)
+    {
+        if (([nsWindow styleMask] & NSWindowStyleMaskTitled) == 0
+             || ([nsWindow styleMask] & NSWindowStyleMaskFullSizeContentView) != 0)
+            return;
+
+        // Our content runs up under the title bar, which is see-through and has no
+        // text, so only the traffic lights show, over the left of the MenuBar strip.
+        [nsWindow setStyleMask: [nsWindow styleMask] | NSWindowStyleMaskFullSizeContentView];
+        [nsWindow setTitlebarAppearsTransparent: YES];
+        [nsWindow setTitleVisibility: NSWindowTitleHidden];
+    }
 }
 
 void useInlineTitleBar (juce::DocumentWindow& window)
 {
     auto* nsWindow = getNSWindow (window);
 
-    if (nsWindow == nil || ([nsWindow styleMask] & NSWindowStyleMaskTitled) == 0)
+    if (nsWindow == nil)
         return;
 
-    if (([nsWindow styleMask] & NSWindowStyleMaskFullSizeContentView) != 0)
-        return;
+    applyInlineTitleBar (nsWindow);
 
-    // Our content runs up under the title bar, which is see-through and has no
-    // text, so only the traffic lights show, over the left of the MenuBar strip.
-    [nsWindow setStyleMask: [nsWindow styleMask] | NSWindowStyleMaskFullSizeContentView];
-    [nsWindow setTitlebarAppearsTransparent: YES];
-    [nsWindow setTitleVisibility: NSWindowTitleHidden];
+    // Leaving full screen, JUCE resets the window's style in its own
+    // windowDidExitFullScreen, which drops the inline title bar: the traffic
+    // lights end up in a title bar of their own above the app. Put it back
+    // once JUCE is done (hence the dispatch_async: the order observers are
+    // told in isn't defined). Setting it again from MainWindow::resized()
+    // didn't bring it back.
+    if (objc_getAssociatedObject (nsWindow, &watchingFullScreenKey) == nil)
+    {
+        objc_setAssociatedObject (nsWindow, &watchingFullScreenKey, @YES, OBJC_ASSOCIATION_RETAIN);
+
+        [[NSNotificationCenter defaultCenter] addObserverForName: NSWindowDidExitFullScreenNotification
+                                                          object: nsWindow
+                                                           queue: nil
+                                                      usingBlock: ^(NSNotification* note)
+        {
+            auto* exited = (NSWindow*) [note object];
+            dispatch_async (dispatch_get_main_queue(), ^{ applyInlineTitleBar (exited); });
+        }];
+    }
 }
 
 int getInlineTitleBarButtonsWidth (const juce::DocumentWindow& window)
