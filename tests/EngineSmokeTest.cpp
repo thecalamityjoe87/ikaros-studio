@@ -2104,6 +2104,18 @@ static void runPreferencesSection (const juce::File& dir)
             check (prompt && prompt->inputName == front && prompt->outputName == front,
                    "of a card's modes, the one with both inputs and outputs is offered");
 
+            auto keyboard = before;
+            keyboard.inputs.add ("Minilab3; USB Stream Output");
+            keyboard.outputs.add ("Minilab3; USB Stream Output");
+            check (! findDeviceChange (before, keyboard), "a MIDI-only card (ALSA lists a USB stream for it) isn't offered as audio");
+
+            auto usbAndStream = usb;
+            usbAndStream.inputs.add ("Scarlett 2i2 USB; USB Stream Output");
+            usbAndStream.outputs.add ("Scarlett 2i2 USB; USB Stream Output");
+            prompt = findDeviceChange (before, usbAndStream);
+            check (prompt && prompt->inputName == scarlett && prompt->outputName == scarlett,
+                   "an audio card's USB stream entry is never the one offered");
+
             auto dac = before;
             dac.outputs.add (headphones);
             prompt = findDeviceChange (before, dac);

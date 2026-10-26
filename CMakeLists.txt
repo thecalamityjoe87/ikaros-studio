@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.22)
 # milestone starts, IKAROS_PATCH for fix builds within one. IKAROS_STAGE is the
 # label shown beside the version (About, splash) until 1.0.
 set(IKAROS_MILESTONE 14)
-set(IKAROS_PATCH 0)
+set(IKAROS_PATCH 1)
 set(IKAROS_STAGE "alpha")
 
 # The oldest macOS the app runs on. It has to be set before project(), which

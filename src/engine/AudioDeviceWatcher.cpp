@@ -33,8 +33,22 @@ static int modeRank (const juce::String& name)
     return name.containsIgnoreCase ("hardware device") ? 2 : 1;
 }
 
-std::optional<AudioDevicePrompt> findDeviceChange (const AudioDeviceState& before, const AudioDeviceState& now)
+// ALSA's usbstream plugin takes only a card, so it's listed for every sound card, MIDI-only ones
+// (a keyboard controller) too, as "<card>; USB Stream Output" with both inputs and outputs. It only
+// drives Tascam's US-122L and US-144: on anything else opening it fails.
+static AudioDeviceState withoutUsbStreams (AudioDeviceState state)
 {
+    for (auto* list : { &state.inputs, &state.outputs })
+        list->strings.removeIf ([] (const juce::String& name) { return name.endsWith ("USB Stream Output"); });
+
+    return state;
+}
+
+std::optional<AudioDevicePrompt> findDeviceChange (const AudioDeviceState& listedBefore, const AudioDeviceState& listedNow)
+{
+    const auto before = withoutUsbStreams (listedBefore);
+    const auto now = withoutUsbStreams (listedNow);
+
     auto wentAway = [] (const juce::StringArray& was, const juce::StringArray& is, const juce::String& inUse)
     {
         return inUse.isNotEmpty() && was.contains (inUse) && ! is.contains (inUse);
